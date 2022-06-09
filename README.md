@@ -1,15 +1,26 @@
 # torchsnapshot
 
+**This library is currently in Alpha and currently does not have a stable release. The API may change and may not be backward compatible. If you have suggestions for improvements, please open a GitHub issue. We'd love to hear your feedback.**
+
 A light-weight library for adding fault tolerance to large-scale PyTorch distributed training workloads.
 
 ## Install
 
-Requires Python >= 3.7.
+Requires Python >= 3.7 and PyTorch >= 1.11
 
 From pip:
 
 ```bash
 pip install torchsnapshot
+```
+
+From source:
+
+```bash
+git clone https://github.com/facebookresearch/torchsnapshot
+cd torchsnapshot
+pip install -r requirements.txt
+python setup.py install
 ```
 
 ## Concepts
