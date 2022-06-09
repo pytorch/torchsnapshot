@@ -32,7 +32,7 @@ if __name__ == "__main__":
         description="A library for persisting PyTorch program state",
         long_description=readme,
         long_description_content_type="text/markdown",
-        url="https://github.com/facebookresearch/torchtlc",
+        url="https://github.com/facebookresearch/torchsnapshot",
         license="BSD-3",
         keywords=["pytorch", "snapshot", "checkpoint"],
         python_requires=">=3.7",
