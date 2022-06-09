@@ -22,7 +22,7 @@ from torchrec.distributed.embeddingbag import EmbeddingBagCollectionSharder
 from torchrec.distributed.planner import EmbeddingShardingPlanner, Topology
 from torchrec.distributed.planner.types import ParameterConstraints
 from torchrec.distributed.types import ShardingType
-from torchrec.models.dlrm import DLRMTrain
+from torchrec.models.dlrm import DLRM, DLRMTrain
 from torchrec.optim.keyed import KeyedOptimizerWrapper
 
 EPOCH_SIZE = 10
@@ -106,7 +106,7 @@ def train(work_dir: str, max_epochs: int, snapshot_path: Optional[str] = None):
 
     torch.manual_seed(42)
 
-    model = DLRMTrain(
+    dlrm_model = DLRM(
         embedding_bag_collection=torchrec.EmbeddingBagCollection(
             device="meta",
             tables=TABLES,
@@ -115,6 +115,7 @@ def train(work_dir: str, max_epochs: int, snapshot_path: Optional[str] = None):
         dense_arch_layer_sizes=[64, EMBEDDING_DIM],
         over_arch_layer_sizes=[64, NUM_CLASSES],
     )
+    model = DLRMTrain(dlrm_model)
 
     dmp = torchrec.distributed.DistributedModelParallel(
         module=model,
