@@ -42,6 +42,10 @@ class StoragePlugin(abc.ABC):
         pass
 
     @abc.abstractmethod
+    async def delete(self, path: str) -> None:
+        pass
+
+    @abc.abstractmethod
     def close(self) -> None:
         pass
 

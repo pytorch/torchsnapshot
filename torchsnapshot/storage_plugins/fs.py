@@ -11,6 +11,7 @@ import pathlib
 from typing import Set
 
 import aiofiles
+import aiofiles.os
 from torchsnapshot.io_types import IOReq, StoragePlugin
 
 
@@ -35,6 +36,9 @@ class FSStoragePlugin(StoragePlugin):
 
         async with aiofiles.open(path, "rb") as f:
             io_req.buf = io.BytesIO(await f.read())
+
+    async def delete(self, path: str) -> None:
+        await aiofiles.os.remove(path)
 
     def close(self) -> None:
         pass

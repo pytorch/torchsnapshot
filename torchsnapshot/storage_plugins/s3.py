@@ -44,5 +44,10 @@ class S3StoragePlugin(StoragePlugin):
             async with response["Body"] as stream:
                 io_req.buf = io.BytesIO(await stream.read())
 
+    async def delete(self, path: str) -> None:
+        async with self.session.create_client("s3") as client:
+            key = os.path.join(self.root, path)
+            await client.delete_object(Bucket=self.bucket, Key=key)
+
     def close(self) -> None:
         pass

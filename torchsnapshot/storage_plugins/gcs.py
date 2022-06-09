@@ -57,5 +57,11 @@ class GCSStoragePlugin(StoragePlugin):
         )
         io_req.buf.seek(0)
 
+    async def delete(self, path: str) -> None:
+        loop = asyncio.get_running_loop()
+        key = os.path.join(self.root, path)
+        blob = self.bucket.blob(key)
+        await loop.run_in_executor(self.executor, blob.delete)
+
     def close(self) -> None:
         self.executor.shutdown()
