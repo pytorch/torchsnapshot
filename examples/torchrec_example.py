@@ -8,7 +8,7 @@
 import argparse
 import os
 import uuid
-from typing import Optional
+from typing import cast, Generator, List, Optional
 
 import torch
 import torch.distributed as dist
@@ -18,10 +18,11 @@ import torchsnapshot
 
 from fbgemm_gpu.split_embedding_configs import EmbOptimType
 from torchrec.datasets.utils import Batch
+from torchrec.distributed import ModuleSharder
 from torchrec.distributed.embeddingbag import EmbeddingBagCollectionSharder
 from torchrec.distributed.planner import EmbeddingShardingPlanner, Topology
 from torchrec.distributed.planner.types import ParameterConstraints
-from torchrec.distributed.types import ShardingType
+from torchrec.distributed.types import ShardingPlan, ShardingType
 from torchrec.models.dlrm import DLRM, DLRMTrain
 from torchrec.optim.keyed import KeyedOptimizerWrapper
 
@@ -50,7 +51,7 @@ TABLES = [
     ),
 ]
 
-SHARDERS = [
+SHARDERS: List[ModuleSharder] = [
     EmbeddingBagCollectionSharder(
         fused_params={
             "optimizer": EmbOptimType.EXACT_ROWWISE_ADAGRAD,
@@ -61,14 +62,14 @@ SHARDERS = [
 ]
 
 
-def get_data_loader(max_bag_size: int = 20):
+def get_data_loader(max_bag_size: int = 20) -> Generator[Batch, None, None]:
     for _ in range(EPOCH_SIZE):
         values = []
         lengths = []
         for _ in range(len(TABLES)):
             for _ in range(BATCH_SIZE):
                 length = torch.randint(max_bag_size, (1,))
-                values.append(torch.randint(EMBEDDING_DIM, (int(length),)))
+                values.append(torch.randint(EMBEDDING_DIM, (int(length.item()),)))
                 lengths.append(length)
         yield Batch(
             dense_features=torch.rand((BATCH_SIZE, DENSE_IN_FEATURES)),
@@ -81,7 +82,9 @@ def get_data_loader(max_bag_size: int = 20):
         )
 
 
-def get_rowwise_sharding_plan(module: torch.nn.Module, device: torch.device):
+def get_rowwise_sharding_plan(
+    module: torch.nn.Module, device: torch.device
+) -> ShardingPlan:
     planner = EmbeddingShardingPlanner(
         topology=Topology(world_size=dist.get_world_size(), compute_device=device.type),
         constraints={
@@ -98,7 +101,7 @@ def get_rowwise_sharding_plan(module: torch.nn.Module, device: torch.device):
     )
 
 
-def train(work_dir: str, max_epochs: int, snapshot_path: Optional[str] = None):
+def train(work_dir: str, max_epochs: int, snapshot_path: Optional[str] = None) -> None:
     dist.init_process_group(backend="nccl")
     local_rank = int(os.environ["LOCAL_RANK"])
     device = torch.device(f"cuda:{local_rank}")
@@ -108,7 +111,7 @@ def train(work_dir: str, max_epochs: int, snapshot_path: Optional[str] = None):
 
     dlrm_model = DLRM(
         embedding_bag_collection=torchrec.EmbeddingBagCollection(
-            device="meta",
+            device=torch.device("meta"),
             tables=TABLES,
         ),
         dense_in_features=DENSE_IN_FEATURES,
@@ -132,7 +135,12 @@ def train(work_dir: str, max_epochs: int, snapshot_path: Optional[str] = None):
     progress = torchsnapshot.StateDict(current_epoch=0)
 
     # torchsnapshot: define app state
-    app_state = {"dmp": dmp, "optim": dmp.fused_optimizer, "progress": progress}
+    app_state = {
+        # dmp overloads the Stateful methods inconsistently
+        "dmp": cast(torchsnapshot.stateful.Stateful, dmp),
+        "optim": dmp.fused_optimizer,
+        "progress": progress,
+    }
 
     # torchsnapshot: restore from snapshot
     if snapshot_path is not None:
@@ -166,7 +174,6 @@ def train(work_dir: str, max_epochs: int, snapshot_path: Optional[str] = None):
         )
         print(f"Snapshot path: {snapshot.path}")
         print(f"Final loss: {final_loss}")
-
     snapshot.restore(app_state)
 
 
@@ -176,7 +183,7 @@ if __name__ == "__main__":
     parser.add_argument("--num-processes", type=int, default=2)
     parser.add_argument("--max-epochs", type=int, default=2)
     parser.add_argument("--snapshot-path")
-    args = parser.parse_args()
+    args: argparse.Namespace = parser.parse_args()
     lc = pet.LaunchConfig(
         min_nodes=1,
         max_nodes=1,
