@@ -18,7 +18,7 @@ def current_path(file_name: str) -> str:
 def read_requirements(file_name: str) -> List[str]:
     with open(current_path(file_name), encoding="utf8") as f:
         return f.read().strip().split()
-        
+
 
 if __name__ == "__main__":
     with open(current_path("README.md"), encoding="utf8") as f:
@@ -48,5 +48,5 @@ if __name__ == "__main__":
             "Programming Language :: Python :: 3.7",
             "Topic :: Scientific/Engineering :: Artificial Intelligence",
         ],
-        extras_require={"dev": read_requirements("dev-requirements.txt")}
+        extras_require={"dev": read_requirements("dev-requirements.txt")},
     )
