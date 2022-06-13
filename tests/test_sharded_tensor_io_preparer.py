@@ -11,6 +11,7 @@ import torch
 
 import torch.distributed as dist
 import torch.distributed.launcher as pet
+import torchsnapshot.manifest as manifest
 from torch.distributed._shard.metadata import ShardMetadata
 
 from torch.distributed._shard.sharded_tensor import init_from_local_shards, Shard
@@ -53,14 +54,32 @@ class ShardedTensorIOPreparerTest(unittest.TestCase):
         )
 
         tc = unittest.TestCase()
+
+        # The path is determined by torch.distributed which is experiemental
+        # and subject to change
+        tc.assertEqual(
+            entry,
+            manifest.ShardedTensorEntry(
+                shards=[
+                    manifest.Shard(
+                        offsets=[begin, 0],
+                        sizes=[chunk_sz, dim_1],
+                        location=f"/foo_{begin}_0",
+                    )
+                ]
+            ),
+        )
+
         # For this sharded tensor, each rank writes 1 shard
         tc.assertEqual(len(obj_write_req.io_reqs), 1)
+
         # The path is determined by torch.distributed which is experiemental
         # and subject to change
         tc.assertEqual(obj_write_req.io_reqs[0].path, f"/foo_{begin}_0")
 
         obj_write_req.io_reqs[0].buf.seek(0)
         loaded = torch.load(obj_write_req.io_reqs[0].buf)
+
         # Make sure only the data described by the view gets persisted
         tc.assertEqual(loaded.nelement(), loaded.storage().size())
         tc.assertTrue(torch.allclose(loaded, shard_view))

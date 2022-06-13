@@ -35,19 +35,14 @@ class ShardedTensorIOPreparer:
     def prepare_write(
         storage_path: str, obj: ShardedTensor
     ) -> Tuple[ShardedTensorEntry, ObjWriteReq]:
-        tensor_write_reqs, metadata = prepare_sharded_tensor_write(obj, storage_path)
-
+        tensor_write_reqs, _ = prepare_sharded_tensor_write(obj, storage_path)
         shards = []
         io_reqs = []
-        for md, twr in zip(metadata.storage_metadata, tensor_write_reqs):
-            if md.shard_metadata is None:
-                raise AssertionError(
-                    "prepare_sharded_tensor_write should return shard metadata."
-                )
+        for shard, twr in zip(obj.local_shards(), tensor_write_reqs):
             shards.append(
                 Shard(
-                    offsets=md.shard_metadata.shard_offsets,
-                    sizes=md.shard_metadata.shard_sizes,
+                    offsets=shard.metadata.shard_offsets,
+                    sizes=shard.metadata.shard_sizes,
                     location=twr.storage_key,
                 )
             )
