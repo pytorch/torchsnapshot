@@ -5,7 +5,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-from importlib.metadata import entry_points
+from importlib_metadata import entry_points
 
 from .io_types import StoragePlugin
 from .storage_plugins.fs import FSStoragePlugin
