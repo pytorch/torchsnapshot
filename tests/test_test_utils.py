@@ -8,7 +8,19 @@
 import unittest
 
 import torch
-from torchsnapshot.test_utils import assert_state_dict_eq, check_state_dict_eq
+import torch.distributed as dist
+import torch.distributed.launcher as pet
+from torch.distributed._shard.metadata import ShardMetadata
+from torch.distributed._shard.sharded_tensor import (
+    init_from_local_shards,
+    Shard,
+    ShardedTensor,
+)
+from torchsnapshot.test_utils import (
+    assert_state_dict_eq,
+    check_state_dict_eq,
+    get_pet_launch_config,
+)
 
 
 class TestUtilsTest(unittest.TestCase):
@@ -46,3 +58,51 @@ class TestUtilsTest(unittest.TestCase):
         self.assertFalse(check_state_dict_eq(a, c))
         self.assertFalse(check_state_dict_eq(a, d))
         self.assertFalse(check_state_dict_eq(a, e))
+
+    @staticmethod
+    def _create_sharded_tensor() -> ShardedTensor:
+        dim_0: int = 128
+        dim_1: int = 16
+
+        global_tensor = torch.rand((dim_0, dim_1))
+
+        rank = dist.get_rank()
+        world_sz = dist.get_world_size()
+        chunk_sz = int(dim_0 / world_sz)
+        begin = rank * chunk_sz
+
+        shard_view = torch.narrow(global_tensor, 0, begin, chunk_sz)
+        shard = Shard(
+            tensor=shard_view,
+            metadata=ShardMetadata(
+                shard_offsets=[begin, 0],
+                shard_sizes=[chunk_sz, dim_1],
+                placement=f"rank:{rank}/cpu",
+            ),
+        )
+        return init_from_local_shards([shard], (dim_0, dim_1))
+
+    @classmethod
+    def _worker(cls) -> None:
+        dist.init_process_group(backend="gloo")
+
+        torch.manual_seed(42)
+        foo = {"": cls._create_sharded_tensor()}
+        torch.manual_seed(42)
+        bar = {"": cls._create_sharded_tensor()}
+        torch.manual_seed(777)
+        baz = {"": cls._create_sharded_tensor()}
+
+        tc = unittest.TestCase()
+        assert_state_dict_eq(tc, foo, foo)
+        assert_state_dict_eq(tc, foo, bar)
+        with tc.assertRaises(AssertionError):
+            assert_state_dict_eq(tc, foo, baz)
+
+        tc.assertTrue(check_state_dict_eq(foo, foo))
+        tc.assertTrue(check_state_dict_eq(foo, bar))
+        tc.assertFalse(check_state_dict_eq(foo, baz))
+
+    def test_state_dict_eq_with_sharded_tensor(self) -> None:
+        lc = get_pet_launch_config(nproc=4)
+        pet.elastic_launch(lc, entrypoint=self._worker)()
