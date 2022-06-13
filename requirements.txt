@@ -1,2 +1,4 @@
 aiofiles
+importlib-metadata
+typing-extensions
 PyYAML
