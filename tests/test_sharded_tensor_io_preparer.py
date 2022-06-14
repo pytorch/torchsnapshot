@@ -5,6 +5,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+import asyncio
 import unittest
 
 import torch
@@ -49,8 +50,8 @@ class ShardedTensorIOPreparerTest(unittest.TestCase):
         )
         sharded_tensor = init_from_local_shards([shard], (dim_0, dim_1))
 
-        entry, obj_write_req = ShardedTensorIOPreparer.prepare_write(
-            "/foo", sharded_tensor
+        entry, obj_write_req = asyncio.run(
+            ShardedTensorIOPreparer.prepare_write("/foo", sharded_tensor)
         )
 
         tc = unittest.TestCase()
@@ -64,7 +65,13 @@ class ShardedTensorIOPreparerTest(unittest.TestCase):
                     manifest.Shard(
                         offsets=[begin, 0],
                         sizes=[chunk_sz, dim_1],
-                        location=f"/foo_{begin}_0",
+                        tensor=manifest.TensorEntry(
+                            location=f"/foo_{begin}_0",
+                            serializer="torch_save",
+                            dtype="torch.float32",
+                            shape=[chunk_sz, dim_1],
+                            replicated=False,
+                        ),
                     )
                 ]
             ),
