@@ -31,6 +31,7 @@ from .pg_wrapper import PGWrapper
 from .rng_state import RNGState
 from .stateful import AppState, Stateful
 from .storage_plugin import url_to_storage_plugin
+from .version import __version__ as torchsnapshot_version
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -429,7 +430,7 @@ path "{logical_path}" which was not available to rank {rank}.
     ) -> None:
         # TODO: use semantic versioning for backward compatibility
         snapshot_metadata = SnapshotMetadata(
-            version="0.0.1", world_size=world_size, manifest=manifest
+            version=torchsnapshot_version, world_size=world_size, manifest=manifest
         )
         io_req = IOReq(
             path=SNAPSHOT_METADATA_FNAME,

@@ -11,11 +11,10 @@ from .rng_state import RNGState
 from .snapshot import Snapshot
 from .state_dict import StateDict
 from .stateful import Stateful
-
-
-__version__ = "0.0.2"
+from .version import __version__
 
 __all__ = [
+    "__version__",
     "Snapshot",
     "Stateful",
     "StateDict",
