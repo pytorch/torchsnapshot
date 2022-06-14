@@ -41,7 +41,10 @@ def url_to_storage_plugin(url_path: str) -> StoragePlugin:
 
     # Registered storage plugins
     registered_plugins = {
-        ep.name: ep for ep in entry_points().get("storage_plugins", [])
+        ep.name: ep
+        # pyre-fixme[16]: Item `EntryPoints` of `Union[EntryPoints,
+        #  SelectableGroups]` has no attribute `get`.
+        for ep in entry_points().get("storage_plugins", [])
     }
     if protocol in registered_plugins:
         entry = registered_plugins[protocol]
