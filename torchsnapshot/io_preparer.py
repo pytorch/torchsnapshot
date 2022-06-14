@@ -18,7 +18,7 @@ from torch.distributed._shard.sharded_tensor import (
 )
 
 from .io_types import IOReq, ObjReadReq, ObjWriteReq
-from .manifest import Entry, ObjectEntry, Shard, ShardedTensorEntry
+from .manifest import Entry, ObjectEntry, Shard, ShardedTensorEntry, TensorEntry
 from .torch_dist_checkpoint.metadata import (
     ExtendedTensorMetadata,
     StorageMetadata,
@@ -32,32 +32,25 @@ from .torch_dist_checkpoint.resharding import (
 
 class ShardedTensorIOPreparer:
     @staticmethod
-    def prepare_write(
+    async def prepare_write(
         storage_path: str, obj: ShardedTensor
     ) -> Tuple[ShardedTensorEntry, ObjWriteReq]:
         tensor_write_reqs, _ = prepare_sharded_tensor_write(obj, storage_path)
         shards = []
         io_reqs = []
         for shard, twr in zip(obj.local_shards(), tensor_write_reqs):
+            entry, obj_write_req = await TensorIOPreparer.prepare_write(
+                storage_path=twr.storage_key, tensor=twr.tensor
+            )
+            io_reqs += obj_write_req.io_reqs
+
             shards.append(
                 Shard(
                     offsets=shard.metadata.shard_offsets,
                     sizes=shard.metadata.shard_sizes,
-                    location=twr.storage_key,
+                    tensor=entry,
                 )
             )
-            io_reqs.append(IOReq(path=twr.storage_key))
-            # Avoid saving the entire storage when saving a view
-            if twr.tensor.is_cuda:
-                # TODO: use non-blocking DtoH copy
-                torch.save(twr.tensor.detach().cpu(), io_reqs[-1].buf)
-            elif twr.tensor.nelement() != twr.tensor.storage().size():
-                # TODO: avoid the additional data copy when saving the view
-                # only without saving the entire storage
-                # TODO: non-blocking HtoD copy
-                torch.save(twr.tensor.detach().clone(), io_reqs[-1].buf)
-            else:
-                torch.save(twr.tensor, io_reqs[-1].buf)
         return ShardedTensorEntry(shards=shards), ObjWriteReq(io_reqs)
 
     @classmethod
@@ -84,21 +77,23 @@ class ShardedTensorIOPreparer:
                         shard_sizes=shard.sizes,
                         placement="cpu",  # Unused for load
                     ),
-                    storage_key=shard.location,
+                    storage_key=shard.tensor.location,
                     length=0,  # Unused for load
                     offset=0,  # Unused for load
                 )
             )
-
         tensor_read_reqs = prepare_sharded_tensor_read(
             metadata=metadata, sharded_tensor_out=obj_out
         )
-        io_reqs = [
-            IOReq(
-                path=os.path.join(trr.storage_key),
-            )
-            for trr in tensor_read_reqs
-        ]
+        locations_to_load = {twr.storage_key for twr in tensor_read_reqs}
+
+        io_reqs = []
+        for shard in entry.shards:
+            if shard.tensor.location not in locations_to_load:
+                continue
+            obj_read_req = TensorIOPreparer.prepare_read(shard.tensor)
+            io_reqs += obj_read_req.io_reqs
+
         return ObjReadReq(
             io_reqs=io_reqs,
             on_read_complete=functools.partial(
@@ -113,9 +108,9 @@ class ShardedTensorIOPreparer:
         io_reqs: List[IOReq],
     ) -> ShardedTensor:
         views = {}
-        for trr, io_req in zip(tensor_read_reqs, io_reqs):
-            views[trr.storage_key] = torch.load(io_req.buf)
-            # Reclaim buffer memory
+        # TODO: share the tensor deserialization with the tensor I/O preparer.
+        for io_req in io_reqs:
+            views[io_req.path] = torch.load(io_req.buf)
             io_req.buf.close()
 
         for req in tensor_read_reqs:
@@ -131,6 +126,74 @@ class ShardedTensorIOPreparer:
         return obj
 
 
+class TensorIOPreparer:
+    @staticmethod
+    async def prepare_write(
+        storage_path: str, tensor: torch.Tensor
+    ) -> Tuple[TensorEntry, ObjWriteReq]:
+        if tensor.is_cuda:
+            # Saving a GPU tensor involves 3 stages with different critical resources:
+            # 1. DtoH copy (PCIe)
+            # 2. Serialization (CPU)
+            # 3. I/O (storage)
+            # Pipelining these stages across different tensors allows us to achieve
+            # better utilization of these critical resources which leads to speedup.
+            cpu_tensor = tensor.detach().to("cpu", non_blocking=True)
+            copy_done = torch.cuda.Event()
+            copy_done.record()
+
+            # Use asyncio.sleep(0) to force a coroutine context
+            # switch when the DtoH copy is not yet ready.
+            await asyncio.sleep(0)
+            while not copy_done.query():
+                await asyncio.sleep(0)
+        # pyre-ignore
+        elif tensor.nelement() != tensor.storage().size():
+            # Avoid saving the entire storage when saving a view
+            cpu_tensor = tensor.detach().clone()
+        else:
+            cpu_tensor = tensor
+
+        io_req = IOReq(path=storage_path)
+        torch.save(cpu_tensor, io_req.buf)
+        io_req.buf.seek(0)
+        return (
+            TensorEntry(
+                location=storage_path,
+                serializer="torch_save",
+                dtype=str(tensor.dtype),
+                shape=list(tensor.shape),
+                replicated=False,
+            ),
+            ObjWriteReq(io_reqs=[io_req]),
+        )
+
+    @classmethod
+    def prepare_read(
+        cls,
+        entry: TensorEntry,
+        obj_out: Optional[torch.Tensor] = None,
+    ) -> ObjReadReq[torch.Tensor]:
+        io_req = IOReq(path=entry.location)
+        return ObjReadReq(
+            io_reqs=[io_req],
+            on_read_complete=functools.partial(cls._on_read_complete, io_req, obj_out),
+        )
+
+    @staticmethod
+    def _on_read_complete(
+        io_req: IOReq, tensor_out: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        obj = torch.load(io_req.buf)
+        # Reclaim buffer memory
+        io_req.buf.close()
+        if tensor_out is not None:
+            # Is there a way to directly load to page-locked memory?
+            # TODO: use non-blocking copy and yield control
+            tensor_out.copy_(obj)
+        return obj
+
+
 class ObjectIOPreparer:
     @staticmethod
     # pyre-ignore[2]: obj can have arbitrary type
@@ -139,8 +202,9 @@ class ObjectIOPreparer:
         torch.save(obj, io_req.buf)
         return (
             ObjectEntry(
-                type=type(obj).__module__ + "." + type(obj).__name__,
                 location=storage_path,
+                serializer="torch_save",
+                obj_type=type(obj).__module__ + "." + type(obj).__name__,
                 replicated=False,
             ),
             ObjWriteReq(io_reqs=[io_req]),
@@ -182,33 +246,6 @@ def get_storage_path(obj: Any, logical_path: str, rank: int, replicated: bool) -
         return os.path.join(str(rank), logical_path)
 
 
-async def prepare_gpu_tensor_write(
-    storage_path: str, tensor: torch.Tensor
-) -> Tuple[ObjectEntry, ObjWriteReq]:
-    # Saving a GPU tensor involves 3 stages with different critical resources:
-    # 1. DtoH copy (PCIe)
-    # 2. Serialization (CPU)
-    # 3. I/O (storage)
-    # Pipelining these stages across different tensors allows us to achieve
-    # better utilization of these critical resources which leads to speedup.
-    cpu_tensor = tensor.to("cpu", non_blocking=True)
-    copy_done = torch.cuda.Event()
-    copy_done.record()
-
-    # Use asyncio.sleep(0) to force a coroutine context
-    # switch when the DtoH copy is not yet ready.
-    await asyncio.sleep(0)
-    while not copy_done.query():
-        await asyncio.sleep(0)
-
-    io_req = IOReq(path=storage_path)
-    torch.save(cpu_tensor, io_req.buf)
-    return (
-        ObjectEntry(type="Tensor", location=storage_path, replicated=False),
-        ObjWriteReq(io_reqs=[io_req]),
-    )
-
-
 async def prepare_write(
     # pyre-ignore[2]: obj can have arbitrary type
     obj: Any,
@@ -231,9 +268,9 @@ async def prepare_write(
     """
     storage_path = get_storage_path(obj, logical_path, rank, replicated)
     if isinstance(obj, ShardedTensor):
-        return ShardedTensorIOPreparer.prepare_write(storage_path, obj)
-    elif isinstance(obj, torch.Tensor) and obj.is_cuda:
-        entry, obj_write_req = await prepare_gpu_tensor_write(storage_path, obj)
+        return await ShardedTensorIOPreparer.prepare_write(storage_path, obj)
+    elif isinstance(obj, torch.Tensor):
+        entry, obj_write_req = await TensorIOPreparer.prepare_write(storage_path, obj)
     else:
         entry, obj_write_req = ObjectIOPreparer.prepare_write(storage_path, obj)
 
@@ -260,6 +297,8 @@ def prepare_read(entry: Entry, obj_out: Optional[Any] = None) -> ObjReadReq[Any]
                 "Reading a ShardedTensor without a runtime object is not yet supported."
             )
         return ShardedTensorIOPreparer.prepare_read(entry, obj_out)
+    elif isinstance(entry, TensorEntry):
+        return TensorIOPreparer.prepare_read(entry, obj_out)
     elif isinstance(entry, ObjectEntry):
         return ObjectIOPreparer.prepare_read(entry)
     else:

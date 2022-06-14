@@ -13,20 +13,46 @@ import yaml
 
 @dataclass
 class Entry:
+    """
+    An entry describes a persisted object/collection.
+
+    In yaml, entries are tagged unions consisted of primitive yaml types.
+    For backward compatibility purposes, only the yaml representation is
+    considered. The Python dataclasses are only for type checking.
+    """
+
     type: str
 
 
 @dataclass
-class ObjectEntry(Entry):
+class TensorEntry(Entry):
     location: str
+    serializer: str
+    dtype: str
+    shape: List[int]
     replicated: bool
+
+    def __init__(
+        self,
+        location: str,
+        serializer: str,
+        dtype: str,
+        shape: List[int],
+        replicated: bool,
+    ) -> None:
+        super().__init__(type="Tensor")
+        self.location = location
+        self.serializer = serializer
+        self.dtype = dtype
+        self.shape = shape
+        self.replicated = replicated
 
 
 @dataclass
 class Shard:
     offsets: List[int]
     sizes: List[int]
-    location: str
+    tensor: TensorEntry
 
 
 @dataclass
@@ -36,6 +62,23 @@ class ShardedTensorEntry(Entry):
     def __init__(self, shards: List[Shard]) -> None:
         super().__init__(type="ShardedTensor")
         self.shards = shards
+
+
+@dataclass
+class ObjectEntry(Entry):
+    location: str
+    serializer: str
+    obj_type: str
+    replicated: bool
+
+    def __init__(
+        self, location: str, serializer: str, obj_type: str, replicated: bool
+    ) -> None:
+        super().__init__(type="object")
+        self.location = location
+        self.serializer = serializer
+        self.obj_type = obj_type
+        self.replicated = replicated
 
 
 @dataclass
@@ -87,11 +130,26 @@ class SnapshotMetadata:
                 manifest[path] = DictEntry(**entry)
             elif type_name == "OrderedDict":
                 manifest[path] = OrderedDictEntry(**entry)
+            elif type_name == "Tensor":
+                manifest[path] = TensorEntry(**entry)
             elif type_name == "ShardedTensor":
-                shards = [Shard(**shard) for shard in entry["shards"]]
+                shards = [
+                    Shard(
+                        offsets=shard["offsets"],
+                        sizes=shard["sizes"],
+                        tensor=TensorEntry(
+                            location=shard["tensor"]["location"],
+                            serializer=shard["tensor"]["serializer"],
+                            dtype=shard["tensor"]["dtype"],
+                            shape=shard["tensor"]["shape"],
+                            replicated=shard["tensor"]["replicated"],
+                        ),
+                    )
+                    for shard in entry["shards"]
+                ]
                 manifest[path] = ShardedTensorEntry(shards=shards)
-            else:
-                manifest[path] = ObjectEntry(type=type_name, **entry)
+            elif type_name == "object":
+                manifest[path] = ObjectEntry(**entry)
         d["manifest"] = manifest
         return cls(**d)
 
@@ -136,7 +194,7 @@ def get_available_entries(manifest: Manifest, rank: int) -> Manifest:
             local_manifest[local_path] = ShardedTensorEntry(
                 shards=[shard for entry in entries for shard in entry.shards]
             )
-        elif isinstance(entries[0], ObjectEntry):
+        elif isinstance(entries[0], (TensorEntry, ObjectEntry)):
             if rank in group:
                 local_manifest[local_path] = group[rank]
             # The current rank did not save the entry. Only make the entry
@@ -156,4 +214,4 @@ def get_available_entries(manifest: Manifest, rank: int) -> Manifest:
 
 
 def is_replicated(entry: Entry) -> bool:
-    return isinstance(entry, ObjectEntry) and entry.replicated
+    return isinstance(entry, (TensorEntry, ObjectEntry)) and entry.replicated

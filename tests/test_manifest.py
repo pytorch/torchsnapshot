@@ -13,24 +13,74 @@ from torchsnapshot.manifest import (
     ObjectEntry,
     Shard,
     ShardedTensorEntry,
+    SnapshotMetadata,
+    TensorEntry,
 )
 
 _MANIFEST = {
     "0/foo": DictEntry(keys=["bar", "baz", "qux"]),
-    "0/foo/bar": ObjectEntry(type="Bar", location="0/foo/bar", replicated=False),
+    "0/foo/bar": ObjectEntry(
+        location="0/foo/bar", serializer="torch_save", obj_type="Bar", replicated=False
+    ),
     "0/foo/baz": ObjectEntry(
-        type="Baz", location="replicated/foo/baz", replicated=True
+        location="replicated/foo/baz",
+        serializer="torch_save",
+        obj_type="Baz",
+        replicated=True,
     ),
     "0/foo/qux": ShardedTensorEntry(
-        shards=[Shard(offsets=[0, 0], sizes=[4, 4], location="sharded/foo/qux.0")]
+        shards=[
+            Shard(
+                offsets=[0, 0],
+                sizes=[4, 4],
+                tensor=TensorEntry(
+                    location="sharded/foo/qux.0",
+                    serializer="torch_save",
+                    dtype="float32",
+                    shape=[2, 8],
+                    replicated=False,
+                ),
+            )
+        ]
+    ),
+    "0/foo/quux": TensorEntry(
+        location="replicated/foo/quux",
+        serializer="torch_save",
+        dtype="float32",
+        shape=[128, 128],
+        replicated=False,
     ),
     "1/foo": DictEntry(keys=["bar", "baz", "qux"]),
-    "1/foo/bar": ObjectEntry(type="Bar", location="1/foo/bar", replicated=False),
+    "1/foo/bar": ObjectEntry(
+        location="1/foo/bar", serializer="torch_save", obj_type="Bar", replicated=False
+    ),
     "1/foo/baz": ObjectEntry(
-        type="Baz", location="replicated/foo/baz", replicated=True
+        location="replicated/foo/baz",
+        serializer="torch_save",
+        obj_type="Baz",
+        replicated=True,
     ),
     "1/foo/qux": ShardedTensorEntry(
-        shards=[Shard(offsets=[4, 0], sizes=[4, 4], location="sharded/foo/qux.1")]
+        shards=[
+            Shard(
+                offsets=[4, 0],
+                sizes=[4, 4],
+                tensor=TensorEntry(
+                    location="sharded/foo/qux.1",
+                    serializer="torch_save",
+                    dtype="float32",
+                    shape=[2, 8],
+                    replicated=False,
+                ),
+            )
+        ]
+    ),
+    "1/foo/quux": TensorEntry(
+        location="replicated/foo/quux",
+        serializer="torch_save",
+        dtype="float32",
+        shape=[128, 128],
+        replicated=False,
     ),
 }
 
@@ -39,18 +89,63 @@ class ManifestTest(unittest.TestCase):
     def setUp(self) -> None:
         self.maxDiff = None
 
+    def test_yaml(self) -> None:
+        metadata = SnapshotMetadata(
+            version="0.0.0",
+            world_size=2,
+            manifest=_MANIFEST,
+        )
+        yaml_str = metadata.to_yaml()
+        loaded_metadata = SnapshotMetadata.from_yaml(yaml_str=yaml_str)
+        self.assertDictEqual(metadata.manifest, loaded_metadata.manifest)
+
     def test_load_with_same_world_size(self) -> None:
         available_entries = get_available_entries(_MANIFEST, 0)
         expected_available_entries = {
-            "foo/bar": ObjectEntry(type="Bar", location="0/foo/bar", replicated=False),
+            "foo/bar": ObjectEntry(
+                location="0/foo/bar",
+                serializer="torch_save",
+                obj_type="Bar",
+                replicated=False,
+            ),
             "foo/baz": ObjectEntry(
-                type="Baz", location="replicated/foo/baz", replicated=True
+                location="replicated/foo/baz",
+                serializer="torch_save",
+                obj_type="Baz",
+                replicated=True,
             ),
             "foo/qux": ShardedTensorEntry(
                 shards=[
-                    Shard(offsets=[0, 0], sizes=[4, 4], location="sharded/foo/qux.0"),
-                    Shard(offsets=[4, 0], sizes=[4, 4], location="sharded/foo/qux.1"),
+                    Shard(
+                        offsets=[0, 0],
+                        sizes=[4, 4],
+                        tensor=TensorEntry(
+                            location="sharded/foo/qux.0",
+                            serializer="torch_save",
+                            dtype="float32",
+                            shape=[2, 8],
+                            replicated=False,
+                        ),
+                    ),
+                    Shard(
+                        offsets=[4, 0],
+                        sizes=[4, 4],
+                        tensor=TensorEntry(
+                            location="sharded/foo/qux.1",
+                            serializer="torch_save",
+                            dtype="float32",
+                            shape=[2, 8],
+                            replicated=False,
+                        ),
+                    ),
                 ]
+            ),
+            "foo/quux": TensorEntry(
+                location="replicated/foo/quux",
+                serializer="torch_save",
+                dtype="float32",
+                shape=[128, 128],
+                replicated=False,
             ),
         }
         self.assertDictEqual(available_entries, expected_available_entries)
@@ -59,12 +154,35 @@ class ManifestTest(unittest.TestCase):
         available_entries = get_available_entries(_MANIFEST, 42)
         expected_available_entries = {
             "foo/baz": ObjectEntry(
-                type="Baz", location="replicated/foo/baz", replicated=True
+                location="replicated/foo/baz",
+                serializer="torch_save",
+                obj_type="Baz",
+                replicated=True,
             ),
             "foo/qux": ShardedTensorEntry(
                 shards=[
-                    Shard(offsets=[0, 0], sizes=[4, 4], location="sharded/foo/qux.0"),
-                    Shard(offsets=[4, 0], sizes=[4, 4], location="sharded/foo/qux.1"),
+                    Shard(
+                        offsets=[0, 0],
+                        sizes=[4, 4],
+                        tensor=TensorEntry(
+                            location="sharded/foo/qux.0",
+                            serializer="torch_save",
+                            dtype="float32",
+                            shape=[2, 8],
+                            replicated=False,
+                        ),
+                    ),
+                    Shard(
+                        offsets=[4, 0],
+                        sizes=[4, 4],
+                        tensor=TensorEntry(
+                            location="sharded/foo/qux.1",
+                            serializer="torch_save",
+                            dtype="float32",
+                            shape=[2, 8],
+                            replicated=False,
+                        ),
+                    ),
                 ]
             ),
         }
