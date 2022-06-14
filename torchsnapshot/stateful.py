@@ -6,7 +6,9 @@
 # LICENSE file in the root directory of this source tree.
 
 from typing import Any, Dict
+
 from typing_extensions import Protocol, runtime_checkable
+
 
 @runtime_checkable
 class Stateful(Protocol):
