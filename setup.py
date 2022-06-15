@@ -4,7 +4,11 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+import argparse
 import os
+import sys
+
+from datetime import date
 from typing import List
 
 from setuptools import find_packages, setup
@@ -20,13 +24,38 @@ def read_requirements(file_name: str) -> List[str]:
         return f.read().strip().split()
 
 
+def get_nightly_version() -> str:
+    return date.today().strftime("%Y.%m.%d")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="torchsnapshot setup")
+    parser.add_argument(
+        "--nightly",
+        dest="nightly",
+        action="store_true",
+        help="enable settings for nightly package build",
+    )
+    parser.set_defaults(nightly=False)
+    return parser.parse_known_args()
+
+
 if __name__ == "__main__":
     with open(current_path("README.md"), encoding="utf8") as f:
         readme: str = f.read()
 
+    custom_args, setup_args = parse_args()
+    package_name = (
+        "torchsnapshot" if not custom_args.nightly else "torchsnapshot-nightly"
+    )
+    version = __version__ if not custom_args.nightly else get_nightly_version()
+    print(f"using package_name={package_name}, version={version}")
+
+    sys.argv = [sys.argv[0]] + setup_args
+
     setup(
-        name="torchsnapshot",
-        version=__version__,
+        name=package_name,
+        version=version,
         author="torchsnapshot team",
         author_email="yifu@fb.com",
         description="A library for persisting PyTorch program state",
