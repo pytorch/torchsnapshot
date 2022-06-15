@@ -12,8 +12,11 @@ We actively welcome your pull requests.
 2. If you've added code that should be tested, add tests.
 3. If you've changed APIs, update the documentation.
 4. Ensure the test suite passes.
-5. Make sure your code lints.
-6. If you haven't already, complete the Contributor License Agreement ("CLA").
+5. Make sure your code lints:
+    - using *pre-commit* (only need to do this once)
+      - install pre-commit: `pip install pre-commit`
+      - add it as a git hook: `pre-commit install` 
+7. If you haven't already, complete the Contributor License Agreement ("CLA").
 
 ## Contributor License Agreement ("CLA")
 In order to accept your pull request, we need you to submit a CLA. You only need
