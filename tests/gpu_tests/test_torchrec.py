@@ -14,8 +14,13 @@ import torch
 import torch.distributed as dist
 import torch.distributed.launcher as pet
 
-import torchrec
 import torchsnapshot
+
+try:
+    import torchrec
+except Exception:
+    raise unittest.SkipTest("torchrec not found")
+
 from fbgemm_gpu.split_embedding_configs import EmbOptimType
 from torchrec.distributed import ModuleSharder
 from torchrec.distributed.embeddingbag import EmbeddingBagCollectionSharder
@@ -146,7 +151,7 @@ class TorchrecTest(unittest.TestCase):
         snapshot.restore(app_state={"dmp": dmp_1})
         assert_state_dict_eq(tc, dmp_0.state_dict(), dmp_1.state_dict())
 
-    @unittest.skipIf(not torch.cuda.is_available(), "This test requires GPU to run.")
+    @unittest.skipUnless(torch.cuda.is_available(), "This test requires GPU to run.")
     def test_torchrec(self) -> None:
         lc = get_pet_launch_config(nproc=4)
         with tempfile.TemporaryDirectory() as path:

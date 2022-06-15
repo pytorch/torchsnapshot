@@ -17,7 +17,7 @@ def current_path(file_name: str) -> str:
 
 def read_requirements(file_name: str) -> List[str]:
     with open(current_path(file_name), encoding="utf8") as f:
-        return f.read().strip().split()
+        return [r for r in f.read().strip().split() if not r.startswith("-")]
 
 
 if __name__ == "__main__":
