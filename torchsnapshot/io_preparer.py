@@ -147,7 +147,6 @@ class TensorIOPreparer:
             await asyncio.sleep(0)
             while not copy_done.query():
                 await asyncio.sleep(0)
-        # pyre-ignore
         elif tensor.nelement() != tensor.storage().size():
             # Avoid saving the entire storage when saving a view
             cpu_tensor = tensor.detach().clone()
