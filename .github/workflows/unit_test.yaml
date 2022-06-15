@@ -36,4 +36,4 @@ jobs:
           conda activate test
           pytest --cov=. --cov-report xml tests -vv
       - name: Upload Coverage to Codecov
-        uses: codecov/codecov-action@v2 
+        uses: codecov/codecov-action@v2

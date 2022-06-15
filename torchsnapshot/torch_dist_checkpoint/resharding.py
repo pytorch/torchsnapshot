@@ -12,6 +12,7 @@ from torch.distributed._shard.sharding_spec import ShardMetadata
 from torch.distributed._shard.sharding_spec._internals import (
     _check_shard_metadata_pair_overlap,
 )
+
 from torchsnapshot.torch_dist_checkpoint.metadata import (
     ExtendedTensorMetadata,
     StorageMetadata,
