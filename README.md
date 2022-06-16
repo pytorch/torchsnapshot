@@ -20,7 +20,7 @@ Requires Python >= 3.7 and PyTorch >= 1.11
 From pip:
 
 ```bash
-pip install torchsnapshot
+pip install --pre torchsnapshot-nightly
 ```
 
 From source:

@@ -6,6 +6,9 @@ on:
     - cron:  '15 11 * * *'
   # or manually trigger it
   workflow_dispatch:
+    inputs:
+      append_to_version:
+        description: "Optional value to append to version string"
 
 
 jobs:
@@ -70,5 +73,5 @@ jobs:
           set -eux
           conda activate test
           pip install twine
-          python setup.py --nightly sdist bdist_wheel
+          python setup.py --nightly --append-to-version=${{ github.event.inputs.append_to_version }} sdist bdist_wheel
           twine upload --username "$PYPI_USER" --password "$PYPI_TOKEN" dist/* --verbose
