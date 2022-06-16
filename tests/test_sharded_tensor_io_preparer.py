@@ -7,6 +7,7 @@
 
 import asyncio
 import copy
+import io
 import unittest
 from typing import List, Tuple
 
@@ -42,6 +43,7 @@ class ShardedTensorIOPreparerTest(unittest.TestCase):
         begin = rank * chunk_sz
 
         shard_view = torch.narrow(global_tensor, 0, begin, chunk_sz)
+        shard_copy = copy.deepcopy(shard_view)
         shard = Shard(
             tensor=shard_view,
             metadata=ShardMetadata(
@@ -52,8 +54,8 @@ class ShardedTensorIOPreparerTest(unittest.TestCase):
         )
         sharded_tensor = init_from_local_shards([shard], (dim_0, dim_1))
 
-        entry, obj_write_req = asyncio.run(
-            ShardedTensorIOPreparer.prepare_write("/foo", sharded_tensor)
+        entry, write_reqs = ShardedTensorIOPreparer.prepare_write(
+            "/foo", sharded_tensor
         )
 
         tc = unittest.TestCase()
@@ -80,18 +82,30 @@ class ShardedTensorIOPreparerTest(unittest.TestCase):
         )
 
         # For this sharded tensor, each rank writes 1 shard
-        tc.assertEqual(len(obj_write_req.io_reqs), 1)
+        tc.assertEqual(len(write_reqs), 1)
 
         # The path is determined by torch.distributed which is experiemental
         # and subject to change
-        tc.assertEqual(obj_write_req.io_reqs[0].path, f"/foo_{begin}_0")
+        tc.assertEqual(write_reqs[0].path, f"/foo_{begin}_0")
 
-        obj_write_req.io_reqs[0].buf.seek(0)
-        loaded = torch.load(obj_write_req.io_reqs[0].buf)
+        buf = asyncio.run(write_reqs[0].buffer_stager.stage_buffer())
 
         # Make sure only the data described by the view gets persisted
+        loaded = torch.load(io.BytesIO(buf))
         tc.assertEqual(loaded.nelement(), loaded.storage().size())
-        tc.assertTrue(torch.allclose(loaded, shard_view))
+
+        # Randomize the original sharded tensor before restoring
+        torch.nn.init.normal_(shard_view, mean=0, std=1.0)
+        tc.assertFalse(torch.allclose(shard_view, shard_copy))
+
+        read_reqs = ShardedTensorIOPreparer.prepare_read(entry, sharded_tensor)
+
+        # For this sharded tensor, each rank writes 1 shard
+        tc.assertEqual(len(read_reqs), 1)
+        asyncio.run(read_reqs[0].buffer_consumer.consume_buffer(buf))
+
+        # Verify that the original sharded tensor gets restored
+        tc.assertTrue(torch.allclose(shard_view, shard_copy))
 
     def test_sharded_tensor_io_preparer(self) -> None:
         lc = get_pet_launch_config(nproc=4)

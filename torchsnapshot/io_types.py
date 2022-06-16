@@ -6,30 +6,51 @@
 # LICENSE file in the root directory of this source tree.
 
 import abc
-import asyncio
 import io
+from concurrent.futures import Executor
 from dataclasses import dataclass, field
-from typing import Callable, Generic, List, TypeVar
+from typing import Optional
 
 
-T = TypeVar("T")
+BufferType = bytes  # TODO: add memoryview
+
+
+class BufferStager:
+    @abc.abstractmethod
+    async def stage_buffer(self, executor: Optional[Executor] = None) -> BufferType:
+        pass
+
+    @abc.abstractmethod
+    def get_staging_cost_bytes(self) -> int:
+        pass
+
+
+@dataclass
+class WriteReq:
+    path: str
+    buffer_stager: BufferStager
+
+
+class BufferConsumer:
+    @abc.abstractmethod
+    async def consume_buffer(self, buf: BufferType) -> None:
+        pass
+
+    @abc.abstractmethod
+    def get_consuming_cost_bytes(self) -> int:
+        pass
+
+
+@dataclass
+class ReadReq:
+    path: str
+    buffer_consumer: BufferConsumer
 
 
 @dataclass
 class IOReq:
     path: str
     buf: io.BytesIO = field(default_factory=io.BytesIO)
-
-
-@dataclass
-class ObjWriteReq:
-    io_reqs: List[IOReq]
-
-
-@dataclass
-class ObjReadReq(Generic[T]):
-    io_reqs: List[IOReq]
-    on_read_complete: Callable[[], T]
 
 
 class StoragePlugin(abc.ABC):
@@ -48,13 +69,3 @@ class StoragePlugin(abc.ABC):
     @abc.abstractmethod
     def close(self) -> None:
         pass
-
-    async def write_obj(self, obj_write_req: ObjWriteReq) -> None:
-        for io_req in obj_write_req.io_reqs:
-            await self.write(io_req)
-            # Reclaim buffer memory
-            io_req.buf.close()
-
-    async def read_obj(self, obj_read_req: ObjReadReq[T]) -> T:
-        await asyncio.gather(*[self.read(io_req) for io_req in obj_read_req.io_reqs])
-        return obj_read_req.on_read_complete()
