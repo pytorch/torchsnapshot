@@ -7,9 +7,12 @@
 
 import argparse
 import uuid
+from typing import Optional
 
 import torch
 import torchsnapshot
+from torchsnapshot.snapshot import Snapshot
+from torchsnapshot.stateful import AppState
 
 NUM_EPOCHS = 4
 EPOCH_SIZE = 16
@@ -25,7 +28,6 @@ class Model(torch.nn.Module):
             torch.nn.Linear(64, 32),
             torch.nn.ReLU(),
             torch.nn.Linear(32, 1),
-            torch.nn.Sigmoid(),
         )
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
@@ -35,23 +37,23 @@ class Model(torch.nn.Module):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--work-dir", default="/tmp")
-    args = parser.parse_args()
+    args: argparse.Namespace = parser.parse_args()
 
     torch.random.manual_seed(42)
 
     model = Model()
     optim = torch.optim.Adagrad(model.parameters(), lr=0.01)
-    loss_fn = torch.nn.BCELoss()
+    loss_fn = torch.nn.BCEWithLogitsLoss()
     progress = torchsnapshot.StateDict(current_epoch=0)
 
     # torchsnapshot: define app state
-    app_state = {
+    app_state: AppState = {
         "rng_state": torchsnapshot.RNGState(),
         "model": model,
         "optim": optim,
         "progress": progress,
     }
-    snapshot = None
+    snapshot: Optional[Snapshot] = None
 
     while progress["current_epoch"] < NUM_EPOCHS:
         # torchsnapshot: restore app state
