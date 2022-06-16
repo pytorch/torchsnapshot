@@ -29,6 +29,7 @@ from torchrec.distributed.planner.types import ParameterConstraints
 from torchrec.distributed.types import ShardingPlan, ShardingType
 
 from torchrec.models.dlrm import DLRM, DLRMTrain
+from torchsnapshot.io_preparer import ShardedTensorIOPreparer
 from torchsnapshot.test_utils import (
     assert_state_dict_eq,
     check_state_dict_eq,
@@ -127,13 +128,15 @@ class TorchrecTest(unittest.TestCase):
         )
 
     @classmethod
-    def _worker(cls, path: str) -> None:
+    def _worker(cls, path: str, max_shard_sz_bytes: int) -> None:
         os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
         dist.init_process_group(backend="nccl")
         local_rank = int(os.environ["LOCAL_RANK"])
         device = torch.device(f"cuda:{local_rank}")
         torch.cuda.set_device(device)
+
+        ShardedTensorIOPreparer.DEFAULT_MAX_SHARD_SIZE_BYTES = max_shard_sz_bytes
 
         # It's important seed different rank differently
         torch.manual_seed(42 + dist.get_rank())
@@ -154,5 +157,9 @@ class TorchrecTest(unittest.TestCase):
     @unittest.skipUnless(torch.cuda.is_available(), "This test requires GPU to run.")
     def test_torchrec(self) -> None:
         lc = get_pet_launch_config(nproc=4)
-        with tempfile.TemporaryDirectory() as path:
-            pet.elastic_launch(lc, entrypoint=self._worker)(path)
+        for max_shard_sz_bytes in [16 * 1024 * 1024, 16 * 1024 * 1024 - 1]:
+            with self.subTest(max_shard_sz_bytes=max_shard_sz_bytes):
+                with tempfile.TemporaryDirectory() as path:
+                    pet.elastic_launch(lc, entrypoint=self._worker)(
+                        path, max_shard_sz_bytes
+                    )

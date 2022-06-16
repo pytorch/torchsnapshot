@@ -6,7 +6,9 @@
 # LICENSE file in the root directory of this source tree.
 
 import asyncio
+import copy
 import unittest
+from typing import List, Tuple
 
 import torch
 
@@ -94,3 +96,121 @@ class ShardedTensorIOPreparerTest(unittest.TestCase):
     def test_sharded_tensor_io_preparer(self) -> None:
         lc = get_pet_launch_config(nproc=4)
         pet.elastic_launch(lc, entrypoint=self._worker)()
+
+    def _verify_subdivided_shards(
+        self,
+        subdivided: List[Tuple[torch.Tensor, List[int], List[int]]],
+        dim: int,
+        expected_num_sub_shards: int,
+        expected_combined: torch.Tensor,
+        expected_offsets: List[int],
+        expected_sizes: List[int],
+    ) -> None:
+        """
+        Combine the tensor, offsets, sizes of a subdivision result and verify
+        the correctness along the way.
+        """
+        _, offsets, sizes = copy.deepcopy(subdivided[0])
+        for _, sub_offsets, sub_sizes in subdivided[1:]:
+            self.assertEqual(len(offsets), len(sub_offsets))
+            self.assertEqual(len(sizes), len(sub_sizes))
+            for i in range(len(offsets)):
+                if i != dim:
+                    self.assertEqual(sub_offsets[i], offsets[i])
+                    self.assertEqual(sub_sizes[i], sizes[i])
+            self.assertEqual(sub_offsets[dim], offsets[dim] + sizes[dim])
+            sizes[dim] += sub_sizes[dim]
+
+        sub_views = [sub_view for sub_view, _, _ in subdivided]
+        combined = torch.concat(sub_views, dim)
+        self.assertEqual(len(subdivided), expected_num_sub_shards)
+        self.assertTrue(torch.allclose(combined, expected_combined))
+        self.assertEqual(offsets, expected_offsets)
+        self.assertEqual(sizes, expected_sizes)
+
+    def test_subdivide_shard(self) -> None:
+        tensor = torch.randn(256, 256)
+        # max_shard_sz_bytes is smaller than the size of a slice
+        subdivided = ShardedTensorIOPreparer.subdivide_shard(
+            shard=tensor,
+            offsets=[512, 0],
+            sizes=[256, 256],
+            dim=0,
+            max_shard_sz_bytes=77,
+        )
+        self._verify_subdivided_shards(
+            subdivided=subdivided,
+            dim=0,
+            expected_num_sub_shards=256,
+            expected_combined=tensor,
+            expected_offsets=[512, 0],
+            expected_sizes=[256, 256],
+        )
+
+        # max_shard_sz_bytes is between 1x and 2x the size of a slice
+        subdivided = ShardedTensorIOPreparer.subdivide_shard(
+            shard=tensor,
+            offsets=[512, 0],
+            sizes=[256, 256],
+            dim=0,
+            max_shard_sz_bytes=1999,
+        )
+        self._verify_subdivided_shards(
+            subdivided=subdivided,
+            dim=0,
+            expected_num_sub_shards=256,
+            expected_combined=tensor,
+            expected_offsets=[512, 0],
+            expected_sizes=[256, 256],
+        )
+
+        # max_shard_sz_bytes is greater than 2x of the size of a slice
+        subdivided = ShardedTensorIOPreparer.subdivide_shard(
+            shard=tensor,
+            offsets=[512, 0],
+            sizes=[256, 256],
+            dim=0,
+            max_shard_sz_bytes=4001,
+        )
+        self._verify_subdivided_shards(
+            subdivided=subdivided,
+            dim=0,
+            expected_num_sub_shards=86,
+            expected_combined=tensor,
+            expected_offsets=[512, 0],
+            expected_sizes=[256, 256],
+        )
+
+        # max_shard_sz_bytes is greater than 2x of the size of a slice
+        subdivided = ShardedTensorIOPreparer.subdivide_shard(
+            shard=tensor,
+            offsets=[0, 512],
+            sizes=[256, 256],
+            dim=1,
+            max_shard_sz_bytes=4001,
+        )
+        self._verify_subdivided_shards(
+            subdivided=subdivided,
+            dim=1,
+            expected_num_sub_shards=86,
+            expected_combined=tensor,
+            expected_offsets=[0, 512],
+            expected_sizes=[256, 256],
+        )
+
+        # max_shard_sz_bytes is greater than the shard size
+        subdivided = ShardedTensorIOPreparer.subdivide_shard(
+            shard=tensor,
+            offsets=[512, 0],
+            sizes=[256, 256],
+            dim=0,
+            max_shard_sz_bytes=300000,
+        )
+        self._verify_subdivided_shards(
+            subdivided=subdivided,
+            dim=0,
+            expected_num_sub_shards=1,
+            expected_combined=tensor,
+            expected_offsets=[512, 0],
+            expected_sizes=[256, 256],
+        )

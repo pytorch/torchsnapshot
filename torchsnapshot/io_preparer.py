@@ -6,8 +6,11 @@
 # LICENSE file in the root directory of this source tree.
 
 import asyncio
+import copy
 import functools
+import math
 import os
+from functools import reduce
 from typing import Any, List, Optional, Tuple
 
 import torch
@@ -16,6 +19,7 @@ from torch.distributed._shard.sharded_tensor import (
     ShardedTensorMetadata,
     ShardMetadata,
 )
+from torch.distributed._shard.sharding_spec import ChunkShardingSpec
 
 from .io_types import IOReq, ObjReadReq, ObjWriteReq
 from .manifest import Entry, ObjectEntry, Shard, ShardedTensorEntry, TensorEntry
@@ -24,33 +28,87 @@ from .torch_dist_checkpoint.metadata import (
     StorageMetadata,
     TensorReadRequest,
 )
-from .torch_dist_checkpoint.resharding import (
-    prepare_sharded_tensor_read,
-    prepare_sharded_tensor_write,
-)
+from .torch_dist_checkpoint.resharding import prepare_sharded_tensor_read
 
 
 class ShardedTensorIOPreparer:
+    DEFAULT_MAX_SHARD_SIZE_BYTES: int = 1 * 1024 * 1024 * 1024
+
     @staticmethod
+    def subdivide_shard(
+        shard: torch.Tensor,
+        offsets: List[int],
+        sizes: List[int],
+        dim: int,
+        max_shard_sz_bytes: int,
+    ) -> List[Tuple[torch.Tensor, List[int], List[int]]]:
+        """
+        Subdivide the shard along the sharding dim.
+        """
+        if max_shard_sz_bytes <= 0:
+            raise ValueError(
+                f"max_shard_sz_bytes must be a positive integer (got {max_shard_sz_bytes})."
+            )
+        slice_sz = (
+            reduce(lambda x, y: x * y, sizes) // sizes[dim] * shard.element_size()
+        )
+        chunk_length = max(math.floor(max_shard_sz_bytes / slice_sz), 1)
+        n_chunks = math.ceil(sizes[dim] / chunk_length)
+
+        subdivided = []
+        for i in range(n_chunks):
+            start = i * chunk_length
+            length = min((i + 1) * chunk_length, sizes[dim]) - i * chunk_length
+
+            sub_offsets = copy.deepcopy(offsets)
+            sub_offsets[dim] += start
+            sub_sizes = copy.deepcopy(sizes)
+            sub_sizes[dim] = length
+            sub_view = torch.narrow(shard, dim, start, length)
+            subdivided.append((sub_view, sub_offsets, sub_sizes))
+        return subdivided
+
+    @classmethod
     async def prepare_write(
-        storage_path: str, obj: ShardedTensor
+        cls,
+        storage_path: str,
+        obj: ShardedTensor,
     ) -> Tuple[ShardedTensorEntry, ObjWriteReq]:
-        tensor_write_reqs, _ = prepare_sharded_tensor_write(obj, storage_path)
         shards = []
         io_reqs = []
-        for shard, twr in zip(obj.local_shards(), tensor_write_reqs):
-            entry, obj_write_req = await TensorIOPreparer.prepare_write(
-                storage_path=twr.storage_key, tensor=twr.tensor
-            )
-            io_reqs += obj_write_req.io_reqs
-
-            shards.append(
-                Shard(
+        for shard in obj.local_shards():
+            sharding_spec = obj.sharding_spec()
+            if isinstance(sharding_spec, ChunkShardingSpec):
+                subdivided = cls.subdivide_shard(
+                    shard=shard.tensor,
                     offsets=shard.metadata.shard_offsets,
                     sizes=shard.metadata.shard_sizes,
-                    tensor=entry,
+                    dim=sharding_spec.dim,
+                    max_shard_sz_bytes=cls.DEFAULT_MAX_SHARD_SIZE_BYTES,
                 )
-            )
+            else:
+                subdivided = [
+                    (
+                        shard.tensor,
+                        shard.metadata.shard_offsets,
+                        shard.metadata.shard_sizes,
+                    )
+                ]
+
+            for tensor, offsets, sizes in subdivided:
+                suffix = "_".join(str(i) for i in offsets)
+                entry, obj_write_req = await TensorIOPreparer.prepare_write(
+                    storage_path=f"{storage_path}_{suffix}", tensor=tensor
+                )
+                io_reqs += obj_write_req.io_reqs
+
+                shards.append(
+                    Shard(
+                        offsets=offsets,
+                        sizes=sizes,
+                        tensor=entry,
+                    )
+                )
         return ShardedTensorEntry(shards=shards), ObjWriteReq(io_reqs)
 
     @classmethod
