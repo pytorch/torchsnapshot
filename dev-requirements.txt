@@ -2,3 +2,5 @@ numpy
 pre-commit
 pytest
 pytest-cov
+--find-links=https://download.pytorch.org/whl/nightly/torchrec_nightly/index.html
+torchrec_nightly
