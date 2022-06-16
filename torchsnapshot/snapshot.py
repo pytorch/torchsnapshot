@@ -7,19 +7,20 @@
 
 import asyncio
 import fnmatch
+import functools
 import io
 import itertools
 import logging
 import os
 from collections import defaultdict
-from typing import Any, Awaitable, cast, Dict, List, Optional, Tuple, TypeVar
+from typing import Any, cast, Dict, List, Optional, Tuple, TypeVar
 
 import torch.distributed as dist
 from torch.distributed._shard.sharded_tensor import ShardedTensor
 
 from .flatten import flatten, inflate
-from .io_preparer import prepare_read, prepare_write
-from .io_types import IOReq, StoragePlugin
+from .io_preparer import ObjectBufferConsumer, prepare_read, prepare_write
+from .io_types import IOReq, ReadReq, StoragePlugin, WriteReq
 from .manifest import (
     Entry,
     get_available_entries,
@@ -29,6 +30,11 @@ from .manifest import (
 )
 from .pg_wrapper import PGWrapper
 from .rng_state import RNGState
+from .scheduler import (
+    execute_read_reqs,
+    execute_write_reqs,
+    get_process_memory_budget_bytes,
+)
 from .stateful import AppState, Stateful
 from .storage_plugin import url_to_storage_plugin
 from .version import __version__ as torchsnapshot_version
@@ -245,6 +251,7 @@ class Snapshot:
                 stateful=app_state.get(key),
                 available_entries=available_entries,
                 storage=storage,
+                pg=pg_wrapper,
             )
             pg_wrapper.barrier()
 
@@ -257,6 +264,7 @@ class Snapshot:
                 stateful=stateful,
                 available_entries=available_entries,
                 storage=storage,
+                pg=pg_wrapper,
             )
         storage.close()
 
@@ -278,43 +286,22 @@ class Snapshot:
         # This is a collective call
         replicated_paths = cls._scatter_replicated_entries(flattened, replicated, pg)
 
-        awaitables = []
+        entries: List[Entry] = []
+        write_reqs: List[WriteReq] = []
         for logical_path, obj in flattened.items():
-            awaitables.append(
-                cls._save_obj(
-                    obj=obj,
-                    logical_path=logical_path,
-                    rank=pg.get_rank(),
-                    replicated=logical_path in replicated_paths,
-                    storage=storage,
-                )
+            entry, item_write_reqs = prepare_write(
+                obj=obj,
+                logical_path=logical_path,
+                rank=pg.get_rank(),
+                replicated=logical_path in replicated_paths,
             )
-        # Parallelize writes while keep the main thread busy performing serialization
-        entries = asyncio.run(cls._asyncio_gather(awaitables))
+            entries.append(entry)
+            write_reqs += item_write_reqs
+
+        memory_budget_bytes = get_process_memory_budget_bytes(pg)
+        asyncio.run(execute_write_reqs(write_reqs, storage, memory_budget_bytes))
         manifest.update(dict(zip(flattened.keys(), entries)))
         return manifest
-
-    @staticmethod
-    async def _asyncio_gather(awaitables: List[Awaitable[T]]) -> List[T]:
-        return list(await asyncio.gather(*awaitables))
-
-    @staticmethod
-    async def _save_obj(
-        # pyre-ignore[2]: obj can have arbitrary type
-        obj: Any,
-        logical_path: str,
-        rank: int,
-        replicated: bool,
-        storage: StoragePlugin,
-    ) -> Entry:
-        entry, obj_write_req = await prepare_write(
-            obj=obj,
-            logical_path=logical_path,
-            rank=rank,
-            replicated=replicated,
-        )
-        await storage.write_obj(obj_write_req)
-        return entry
 
     @staticmethod
     def _scatter_replicated_entries(
@@ -372,6 +359,7 @@ class Snapshot:
         stateful: Optional[Stateful],
         available_entries: Manifest,
         storage: StoragePlugin,
+        pg: PGWrapper,
     ) -> None:
         if stateful is None:
             return
@@ -388,7 +376,7 @@ class Snapshot:
         mnfst, flattened = flatten(state_dict, prefix=stateful_key)
         del state_dict
 
-        awaitables = []
+        read_reqs: List[ReadReq] = []
         for logical_path, obj in flattened.items():
             if logical_path not in available_entries:
                 raise RuntimeError(
@@ -410,16 +398,24 @@ path "{logical_path}" which was not available to rank {rank}.
     - Coerce the missing entry into replicated on restore"""
                 )
 
-            obj_read_req = prepare_read(
+            rrs = prepare_read(
                 entry=available_entries[logical_path],
                 obj_out=obj,
             )
-            awaitables.append(storage.read_obj(obj_read_req))
+            for rr in rrs:
+                buffer_consumer = rr.buffer_consumer
+                if isinstance(buffer_consumer, ObjectBufferConsumer):
+                    # ObjectBufferConsumer deals with objects that can not be
+                    # in-place restored. We need to replace the original object
+                    # in the flattened dictionary with the object materialized
+                    # by the buffer consumer.
+                    buffer_consumer.set_consume_callback(
+                        functools.partial(dict.__setitem__, flattened, logical_path)
+                    )
+            read_reqs += rrs
 
-        # Parallelize reads while keep the main thread busy performing deserialization
-        values = asyncio.run(cls._asyncio_gather(awaitables))
-        for key, val in zip(flattened.keys(), values):
-            flattened[key] = val
+        memory_budget_bytes = get_process_memory_budget_bytes(pg)
+        asyncio.run(execute_read_reqs(read_reqs, storage, memory_budget_bytes))
 
         state_dict = inflate(mnfst, flattened, prefix=stateful_key)
         stateful.load_state_dict(state_dict)

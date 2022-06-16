@@ -1,4 +1,5 @@
 aiofiles
 importlib-metadata
+psutil
 typing-extensions
 PyYAML

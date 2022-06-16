@@ -5,6 +5,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+import logging
 import os
 import tempfile
 import unittest
@@ -129,6 +130,10 @@ class TorchrecTest(unittest.TestCase):
 
     @classmethod
     def _worker(cls, path: str, max_shard_sz_bytes: int) -> None:
+        logger = logging.getLogger("torchsnapshot.scheduler")
+        logger.setLevel(logging.DEBUG)
+
+        # Uncomment this for ease of debugging
         os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
         dist.init_process_group(backend="nccl")
