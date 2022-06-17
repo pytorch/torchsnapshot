@@ -1,0 +1,11 @@
+[run]
+omit =
+    *tests/*
+    *examples/*
+    *benchmarks/*
+
+[report]
+omit =
+    *tests/*
+    *examples/*
+    *benchmarks/*
