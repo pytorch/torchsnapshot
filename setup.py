@@ -35,8 +35,13 @@ def parse_args() -> argparse.Namespace:
         dest="nightly",
         action="store_true",
         help="enable settings for nightly package build",
+        default=False,
     )
-    parser.set_defaults(nightly=False)
+    parser.add_argument(
+        "--append-to-version",
+        dest="append_version",
+        help="append string to end of version number (e.g. a1)",
+    )
     return parser.parse_known_args()
 
 
@@ -49,6 +54,9 @@ if __name__ == "__main__":
         "torchsnapshot" if not custom_args.nightly else "torchsnapshot-nightly"
     )
     version = __version__ if not custom_args.nightly else get_nightly_version()
+    if custom_args.append_version:
+        version = f"{version}{custom_args.append_version}"
+
     print(f"using package_name={package_name}, version={version}")
 
     sys.argv = [sys.argv[0]] + setup_args
