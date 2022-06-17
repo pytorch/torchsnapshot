@@ -6,9 +6,7 @@ body:
     attributes:
       label: 📚 The doc issue
       description: >
-        A clear and concise description of what content in https://pytorch.org/data is an issue. If this has to do with
-        the general https://pytorch.org website, please file an issue at
-        https://github.com/pytorch/pytorch.github.io/issues/new/choose instead.
+        A clear and concise description of what content in torchsnapshot is an issue.
     validations:
       required: true
   - type: textarea
