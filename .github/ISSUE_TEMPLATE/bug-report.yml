@@ -6,7 +6,7 @@ body:
     attributes:
       value: >
         #### Before submitting a bug, please make sure the issue hasn't been already addressed by searching through [the
-        existing and past issues](https://github.com/pytorch/data/issues?q=is%3Aissue+sort%3Acreated-desc+).
+        existing and past issues](https://github.com/facebookresearch/torchsnapshot/issues?q=is%3Aissue+sort%3Acreated-desc+).
   - type: textarea
     attributes:
       label: 🐛 Describe the bug
@@ -17,7 +17,6 @@ body:
 
         ```python
         # All necessary imports at the beginning
-        import torch
         import torchsnapshot
 
         # A succinct reproducing example trimmed down to the essential parts

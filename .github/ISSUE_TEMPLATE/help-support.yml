@@ -6,7 +6,7 @@ body:
     attributes:
       label: 📚 Question
       description: >
-        Description of your question or what you need support in.
+        Description of your question or what you need support with.
     validations:
       required: true
   - type: markdown
