@@ -298,8 +298,15 @@ class Snapshot:
             entries.append(entry)
             write_reqs += item_write_reqs
 
-        memory_budget_bytes = get_process_memory_budget_bytes(pg)
-        asyncio.run(execute_write_reqs(write_reqs, storage, memory_budget_bytes))
+        memory_budget_bytes = get_process_memory_budget_bytes(pg=pg)
+        asyncio.run(
+            execute_write_reqs(
+                write_reqs=write_reqs,
+                storage=storage,
+                memory_budget_bytes=memory_budget_bytes,
+                rank=pg.get_rank(),
+            )
+        )
         manifest.update(dict(zip(flattened.keys(), entries)))
         return manifest
 
@@ -414,8 +421,15 @@ path "{logical_path}" which was not available to rank {rank}.
                     )
             read_reqs += rrs
 
-        memory_budget_bytes = get_process_memory_budget_bytes(pg)
-        asyncio.run(execute_read_reqs(read_reqs, storage, memory_budget_bytes))
+        memory_budget_bytes = get_process_memory_budget_bytes(pg=pg)
+        asyncio.run(
+            execute_read_reqs(
+                read_reqs=read_reqs,
+                storage=storage,
+                memory_budget_bytes=memory_budget_bytes,
+                rank=pg.get_rank(),
+            )
+        )
 
         state_dict = inflate(mnfst, flattened, prefix=stateful_key)
         stateful.load_state_dict(state_dict)

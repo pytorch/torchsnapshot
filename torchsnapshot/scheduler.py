@@ -5,6 +5,7 @@ import io
 import logging
 import os
 import socket
+import time
 from collections import defaultdict
 from concurrent.futures import Executor, ThreadPoolExecutor
 
@@ -86,13 +87,19 @@ class _WritePipeline:
 
 
 async def execute_write_reqs(
-    write_reqs: List[WriteReq], storage: StoragePlugin, memory_budget_bytes: int
+    write_reqs: List[WriteReq],
+    storage: StoragePlugin,
+    memory_budget_bytes: int,
+    rank: int,
 ) -> None:
     write_pipelines = [_WritePipeline(write_req, storage) for write_req in write_reqs]
     pending_ids = set(range(len(write_pipelines)))
     staging_tasks = set()
     io_tasks = set()
     executor = ThreadPoolExecutor(max_workers=_MAX_PER_RANK_STAGING_CONCURRENCY)
+
+    bytes_written = 0
+    begin_ts = time.monotonic()
 
     while len(pending_ids) != 0 or len(staging_tasks) != 0 or len(io_tasks) != 0:
         # Dispatch as many staging tasks as the memory budget allows
@@ -110,6 +117,7 @@ async def execute_write_reqs(
         pending_ids -= dispatched_ids
 
         logger.debug(
+            f"Rank {rank}\t"
             f"pending: {len(pending_ids)}\t"
             f"staing_tasks: {len(staging_tasks)}\t"
             f"io_tasks: {len(io_tasks)}\t"
@@ -138,6 +146,10 @@ async def execute_write_reqs(
                 io_tasks.remove(d)
                 write_pipeline: _WritePipeline = d.result()
                 memory_budget_bytes += cast(int, write_pipeline.buf_sz_bytes)
+                bytes_written += cast(int, write_pipeline.buf_sz_bytes)
+
+    mbps = (bytes_written / 1e6) / (time.monotonic() - begin_ts)
+    logger.info(f"Rank {rank} finished saving. Throughput: {mbps:.2f}MB/s")
 
     executor.shutdown()
 
@@ -170,12 +182,18 @@ class _ReadPipeline:
 
 
 async def execute_read_reqs(
-    read_reqs: List[ReadReq], storage: StoragePlugin, memory_budget_bytes: int
+    read_reqs: List[ReadReq],
+    storage: StoragePlugin,
+    memory_budget_bytes: int,
+    rank: int,
 ) -> None:
     read_pipelines = [_ReadPipeline(read_req, storage) for read_req in read_reqs]
     pending_ids = set(range(len(read_pipelines)))
     io_tasks = set()
     consuming_tasks = set()
+
+    bytes_read = 0
+    begin_ts = time.monotonic()
 
     while len(pending_ids) != 0 or len(io_tasks) != 0 or len(consuming_tasks) != 0:
         dispatched_ids = set()
@@ -195,6 +213,7 @@ async def execute_read_reqs(
         pending_ids -= dispatched_ids
 
         logger.debug(
+            f"Rank {rank}\t"
             f"pending: {len(pending_ids)}\t"
             f"io_tasks: {len(io_tasks)}\t"
             f"consuming_tasks: {len(consuming_tasks)}\t"
@@ -214,3 +233,7 @@ async def execute_read_reqs(
                 consuming_tasks.remove(d)
                 read_pipeline: _ReadPipeline = d.result()
                 memory_budget_bytes -= read_pipeline.consuming_cost_bytes
+                bytes_read += cast(int, read_pipeline.buf_sz_bytes)
+
+    mbps = (bytes_read / 1e6) / (time.monotonic() - begin_ts)
+    logger.info(f"Rank {rank} finished loading. Throughput: {mbps:.2f}MB/s")
