@@ -35,7 +35,7 @@ from .torch_dist_checkpoint.resharding import prepare_sharded_tensor_read
 
 
 class ShardedTensorIOPreparer:
-    DEFAULT_MAX_SHARD_SIZE_BYTES: int = 1 * 1024 * 1024 * 1024
+    DEFAULT_MAX_SHARD_SIZE_BYTES: int = 512 * 1024 * 1024
 
     @staticmethod
     def subdivide_shard(
