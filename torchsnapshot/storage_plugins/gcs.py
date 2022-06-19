@@ -51,9 +51,10 @@ class GCSStoragePlugin(StoragePlugin):
 
     async def read(self, io_req: IOReq) -> None:
         loop = asyncio.get_running_loop()
-        key = os.path.join("gs://", self.bucket_name, self.root, io_req.path)
+        key = os.path.join(self.root, io_req.path)
+        blob = self.bucket.blob(key, chunk_size=100 * 1024 * 1024)
         await loop.run_in_executor(
-            self.executor, partial(self.client.download_blob_to_file, key, io_req.buf)
+            self.executor, partial(blob.download_to_file, io_req.buf, raw_download=True)
         )
         io_req.buf.seek(0)
 
