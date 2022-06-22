@@ -115,7 +115,6 @@ class Snapshot:
     def __init__(
         self,
         path: str,
-        # pyre-fixme[11]: Annotation `ProcessGroup` is not defined as a type.
         pg: Optional[dist.ProcessGroup] = None,
     ) -> None:
         """

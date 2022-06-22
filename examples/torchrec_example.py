@@ -97,6 +97,8 @@ def get_rowwise_sharding_plan(
     return planner.collective_plan(
         module,
         SHARDERS,
+        # pyre-fixme[6]: For 3rd param expected `ProcessGroup` but got
+        #  `Optional[ProcessGroup]`.
         dist.group.WORLD,
     )
 
