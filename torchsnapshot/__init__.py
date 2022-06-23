@@ -5,7 +5,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-"A lightweight library for persisting PyTorch program state"
+"A lightweight library for adding fault tolerance to large-scale PyTorch distributed training workloads"
 
 from .rng_state import RNGState
 from .snapshot import Snapshot
