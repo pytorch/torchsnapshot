@@ -66,7 +66,7 @@ if __name__ == "__main__":
         version=version,
         author="torchsnapshot team",
         author_email="yifu@fb.com",
-        description="A library for persisting PyTorch program state",
+        description="A lightweight library for adding fault tolerance to large-scale PyTorch distributed training workloads.",
         long_description=readme,
         long_description_content_type="text/markdown",
         url="https://github.com/facebookresearch/torchsnapshot",
@@ -74,7 +74,7 @@ if __name__ == "__main__":
         keywords=["pytorch", "snapshot", "checkpoint"],
         python_requires=">=3.7",
         install_requires=read_requirements("requirements.txt"),
-        packages=find_packages(exclude=("examples", "benchmarks")),
+        packages=find_packages(),
         zip_safe=True,
         classifiers=[
             "Development Status :: 2 - Pre-Alpha",
