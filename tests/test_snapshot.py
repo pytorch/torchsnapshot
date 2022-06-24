@@ -22,6 +22,7 @@ class SnapshotTest(unittest.TestCase):
         foo = torchsnapshot.StateDict(a=torch.rand(40, 40), b=torch.rand(40, 40), c=42)
         bar = torchsnapshot.StateDict(a=torch.rand(40, 40), b=torch.rand(40, 40), c=43)
         self.assertFalse(check_state_dict_eq(foo.state_dict(), bar.state_dict()))
+        self.assertTrue(type(foo.state_dict()) == dict)
 
         with tempfile.TemporaryDirectory() as path:
             snapshot = torchsnapshot.Snapshot.take(path, {"foo": foo})

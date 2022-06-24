@@ -5,12 +5,12 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+from collections import UserDict
 from typing import Any, Dict
 
 
-# pyre-fixme[24]: Generic type `dict` expects 2 type parameters, use `typing.Dict`
-#  to avoid runtime subscripting errors.
-class StateDict(dict):
+# pyre-fixme[24]: Python <3.9 doesn't support typing on UserDict
+class StateDict(UserDict):
     """
     A dict that implements the Stateful protocol. It is handy for capturing
     stateful objects that do not already implement the Stateful protocol or
@@ -35,7 +35,7 @@ class StateDict(dict):
     """
 
     def state_dict(self) -> Dict[str, Any]:
-        return self
+        return self.data
 
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
-        self.update(state_dict)
+        self.data.update(state_dict)
