@@ -37,6 +37,7 @@ class Model(torch.nn.Module):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--work-dir", default="/tmp")
+    parser.add_argument("--restore-path", default=None)
     args: argparse.Namespace = parser.parse_args()
 
     torch.random.manual_seed(42)
@@ -55,11 +56,13 @@ if __name__ == "__main__":
     }
     snapshot: Optional[Snapshot] = None
 
-    while progress["current_epoch"] < NUM_EPOCHS:
-        # torchsnapshot: restore app state
-        if snapshot is not None:
-            snapshot.restore(app_state)
+    # torchsnapshot: restore app state
+    if args.restore_path:
+        snapshot = Snapshot(args.restore_path)
+        print(f"Restoring snapshot from path: {snapshot.path}")
+        snapshot.restore(app_state)
 
+    while progress["current_epoch"] < NUM_EPOCHS:
         for _ in range(EPOCH_SIZE):
             X = torch.rand((BATCH_SIZE, 128))
             label = torch.rand((BATCH_SIZE, 1))
