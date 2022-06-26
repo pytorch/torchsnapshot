@@ -13,7 +13,6 @@ import uuid
 
 import torch
 import torchsnapshot
-from torchsnapshot.storage_plugins.gcs import GCSStoragePlugin
 
 logger = logging.getLogger(__name__)
 
@@ -41,18 +40,23 @@ class GCSStoragePluginTest(unittest.TestCase):
     def test_write_read_delete(self) -> None:
         path = f"{_TEST_BUCKET}/{uuid.uuid4()}"
         logger.info(path)
+
+        from torchsnapshot.storage_plugins.gcs import GCSStoragePlugin
+
         plugin = GCSStoragePlugin(root=path)
 
         tensor = torch.rand((_TENSOR_SZ,))
         path = os.path.join(path, "tensor")
         write_req = torchsnapshot.io_types.IOReq(path=path)
         torch.save(tensor, write_req.buf)
-        asyncio.run(plugin.write(io_req=write_req))
+
+        loop = asyncio.new_event_loop()
+        loop.run_until_complete(plugin.write(io_req=write_req))
 
         read_req = torchsnapshot.io_types.IOReq(path=path)
-        asyncio.run(plugin.read(io_req=read_req))
+        loop.run_until_complete(plugin.read(io_req=read_req))
         loaded = torch.load(read_req.buf)
         self.assertTrue(torch.allclose(tensor, loaded))
 
-        asyncio.run(plugin.delete(path=path))
+        loop.run_until_complete(plugin.delete(path=path))
         plugin.close()

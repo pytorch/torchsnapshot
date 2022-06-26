@@ -41,5 +41,5 @@ class FSStoragePlugin(StoragePlugin):
     async def delete(self, path: str) -> None:
         await aiofiles.os.remove(path)
 
-    def close(self) -> None:
+    async def close(self) -> None:
         pass

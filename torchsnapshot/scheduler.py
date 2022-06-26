@@ -8,13 +8,11 @@ import socket
 import time
 from collections import defaultdict
 from concurrent.futures import Executor, ThreadPoolExecutor
-
 from typing import cast, List, Optional
 
 import psutil
 
 from .io_types import BufferType, IOReq, ReadReq, StoragePlugin, WriteReq
-
 from .pg_wrapper import PGWrapper
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -154,6 +152,25 @@ async def execute_write_reqs(
     executor.shutdown()
 
 
+def sync_execute_write_reqs(
+    write_reqs: List[WriteReq],
+    storage: StoragePlugin,
+    memory_budget_bytes: int,
+    rank: int,
+    event_loop: Optional[asyncio.AbstractEventLoop] = None,
+) -> None:
+    if event_loop is None:
+        event_loop = asyncio.new_event_loop()
+    event_loop.run_until_complete(
+        execute_write_reqs(
+            write_reqs=write_reqs,
+            storage=storage,
+            memory_budget_bytes=memory_budget_bytes,
+            rank=rank,
+        )
+    )
+
+
 class _ReadPipeline:
     def __init__(self, read_req: ReadReq, storage: StoragePlugin) -> None:
         self.read_req = read_req
@@ -237,3 +254,22 @@ async def execute_read_reqs(
 
     mbps = (bytes_read / 1e6) / (time.monotonic() - begin_ts)
     logger.info(f"Rank {rank} finished loading. Throughput: {mbps:.2f}MB/s")
+
+
+def sync_execute_read_reqs(
+    read_reqs: List[ReadReq],
+    storage: StoragePlugin,
+    memory_budget_bytes: int,
+    rank: int,
+    event_loop: Optional[asyncio.AbstractEventLoop] = None,
+) -> None:
+    if event_loop is None:
+        event_loop = asyncio.new_event_loop()
+    event_loop.run_until_complete(
+        execute_read_reqs(
+            read_reqs=read_reqs,
+            storage=storage,
+            memory_budget_bytes=memory_budget_bytes,
+            rank=rank,
+        )
+    )

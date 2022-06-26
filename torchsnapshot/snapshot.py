@@ -31,12 +31,12 @@ from .manifest import (
 from .pg_wrapper import PGWrapper
 from .rng_state import RNGState
 from .scheduler import (
-    execute_read_reqs,
-    execute_write_reqs,
     get_process_memory_budget_bytes,
+    sync_execute_read_reqs,
+    sync_execute_write_reqs,
 )
 from .stateful import AppState, Stateful
-from .storage_plugin import url_to_storage_plugin
+from .storage_plugin import url_to_storage_plugin_in_event_loop
 from .version import __version__ as torchsnapshot_version
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -155,9 +155,12 @@ class Snapshot:
         Returns:
             The newly taken snapshot.
         """
+        event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(pg)
         path = cls._collate_path(path, pg)
-        storage = url_to_storage_plugin(url_path=path)
+        storage = url_to_storage_plugin_in_event_loop(
+            url_path=path, event_loop=event_loop
+        )
         replicated = replicated or []
         # TODO: verify replicated across ranks
         # TODO: infer replicated pattern for known stateful types (e.g.
@@ -186,6 +189,7 @@ class Snapshot:
                 storage=storage,
                 replicated=replicated,
                 pg=pg_wrapper,
+                event_loop=event_loop,
             )
             manifest.update(mnfst)
 
@@ -203,13 +207,19 @@ class Snapshot:
                 storage=storage,
                 replicated=replicated,
                 pg=pg_wrapper,
+                event_loop=event_loop,
             )
             manifest.update(mnfst)
             pg_wrapper.barrier()
 
         manifest = cls._gather_manifest(manifest=manifest, pg=pg_wrapper)
         if rank == 0:
-            cls._write_snapshot_metadata(pg_wrapper.get_world_size(), manifest, storage)
+            cls._write_snapshot_metadata(
+                world_size=pg_wrapper.get_world_size(),
+                manifest=manifest,
+                storage=storage,
+                event_loop=event_loop,
+            )
         pg_wrapper.barrier()
 
         # Undo any potential side effects to the RNG state.
@@ -219,7 +229,7 @@ class Snapshot:
                 cast(Dict[str, Any], rng_state_dict)  # pyre-ignore[33]
             )
 
-        storage.close()
+        storage.sync_close(event_loop=event_loop)
         return cls(path=path, pg=pg)
 
     def restore(self, app_state: AppState) -> None:
@@ -229,15 +239,20 @@ class Snapshot:
         Args:
             app_state: The program state to restore from the snapshot.
         """
+        event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(self.pg)
         rank = pg_wrapper.get_rank()
-        storage = url_to_storage_plugin(url_path=self.path)
+        storage = url_to_storage_plugin_in_event_loop(
+            url_path=self.path, event_loop=event_loop
+        )
 
         app_state = app_state.copy()
         rng_state_item = self._pop_rng_state(app_state=app_state)
 
         # TODO: cache this for newly created snapshot
-        snapshot_metadata = self._read_snapshot_metadata(storage=storage)
+        snapshot_metadata = self._read_snapshot_metadata(
+            storage=storage, event_loop=event_loop
+        )
         manifest = snapshot_metadata.manifest
         available_entries = get_available_entries(manifest, rank)
 
@@ -251,6 +266,7 @@ class Snapshot:
                 available_entries=available_entries,
                 storage=storage,
                 pg=pg_wrapper,
+                event_loop=event_loop,
             )
             pg_wrapper.barrier()
 
@@ -264,8 +280,9 @@ class Snapshot:
                 available_entries=available_entries,
                 storage=storage,
                 pg=pg_wrapper,
+                event_loop=event_loop,
             )
-        storage.close()
+        storage.sync_close(event_loop=event_loop)
 
     @classmethod
     def _save_stateful(
@@ -275,6 +292,7 @@ class Snapshot:
         storage: StoragePlugin,
         replicated: List[str],
         pg: PGWrapper,
+        event_loop: asyncio.AbstractEventLoop,
     ) -> Manifest:
         if stateful is not None:
             state_dict = stateful.state_dict()
@@ -298,13 +316,12 @@ class Snapshot:
             write_reqs += item_write_reqs
 
         memory_budget_bytes = get_process_memory_budget_bytes(pg=pg)
-        asyncio.run(
-            execute_write_reqs(
-                write_reqs=write_reqs,
-                storage=storage,
-                memory_budget_bytes=memory_budget_bytes,
-                rank=pg.get_rank(),
-            )
+        sync_execute_write_reqs(
+            write_reqs=write_reqs,
+            storage=storage,
+            memory_budget_bytes=memory_budget_bytes,
+            rank=pg.get_rank(),
+            event_loop=event_loop,
         )
         manifest.update(dict(zip(flattened.keys(), entries)))
         return manifest
@@ -366,6 +383,7 @@ class Snapshot:
         available_entries: Manifest,
         storage: StoragePlugin,
         pg: PGWrapper,
+        event_loop: asyncio.AbstractEventLoop,
     ) -> None:
         if stateful is None:
             return
@@ -421,13 +439,12 @@ path "{logical_path}" which was not available to rank {rank}.
             read_reqs += rrs
 
         memory_budget_bytes = get_process_memory_budget_bytes(pg=pg)
-        asyncio.run(
-            execute_read_reqs(
-                read_reqs=read_reqs,
-                storage=storage,
-                memory_budget_bytes=memory_budget_bytes,
-                rank=pg.get_rank(),
-            )
+        sync_execute_read_reqs(
+            read_reqs=read_reqs,
+            storage=storage,
+            memory_budget_bytes=memory_budget_bytes,
+            rank=pg.get_rank(),
+            event_loop=event_loop,
         )
 
         state_dict = inflate(mnfst, flattened, prefix=stateful_key)
@@ -435,7 +452,10 @@ path "{logical_path}" which was not available to rank {rank}.
 
     @staticmethod
     def _write_snapshot_metadata(
-        world_size: int, manifest: Manifest, storage: StoragePlugin
+        world_size: int,
+        manifest: Manifest,
+        storage: StoragePlugin,
+        event_loop: asyncio.AbstractEventLoop,
     ) -> None:
         # TODO: use semantic versioning for backward compatibility
         snapshot_metadata = SnapshotMetadata(
@@ -445,20 +465,14 @@ path "{logical_path}" which was not available to rank {rank}.
             path=SNAPSHOT_METADATA_FNAME,
             buf=io.BytesIO(snapshot_metadata.to_yaml().encode("utf-8")),
         )
-        asyncio.run(
-            storage.write(
-                io_req=io_req,
-            )
-        )
+        storage.sync_write(io_req=io_req, event_loop=event_loop)
 
     @staticmethod
-    def _read_snapshot_metadata(storage: StoragePlugin) -> SnapshotMetadata:
+    def _read_snapshot_metadata(
+        storage: StoragePlugin, event_loop: asyncio.AbstractEventLoop
+    ) -> SnapshotMetadata:
         io_req = IOReq(path=SNAPSHOT_METADATA_FNAME)
-        asyncio.run(
-            storage.read(
-                io_req=io_req,
-            )
-        )
+        storage.sync_read(io_req=io_req, event_loop=event_loop)
         yaml_str = io_req.buf.getvalue().decode("utf-8")
         return SnapshotMetadata.from_yaml(yaml_str)
 
