@@ -5,11 +5,12 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+import asyncio
+
 from importlib_metadata import entry_points
 
 from .io_types import StoragePlugin
 from .storage_plugins.fs import FSStoragePlugin
-from .storage_plugins.gcs import GCSStoragePlugin
 from .storage_plugins.s3 import S3StoragePlugin
 
 
@@ -37,6 +38,8 @@ def url_to_storage_plugin(url_path: str) -> StoragePlugin:
     elif protocol == "s3":
         return S3StoragePlugin(root=path)
     elif protocol == "gs":
+        from torchsnapshot.storage_plugins.gcs import GCSStoragePlugin
+
         return GCSStoragePlugin(root=path)
 
     # Registered storage plugins
@@ -58,3 +61,12 @@ def url_to_storage_plugin(url_path: str) -> StoragePlugin:
         return plugin
     else:
         raise RuntimeError(f"Unsupported protocol: {protocol}.")
+
+
+def url_to_storage_plugin_in_event_loop(
+    url_path: str, event_loop: asyncio.AbstractEventLoop
+) -> StoragePlugin:
+    async def _url_to_storage_plugin(url_path: str) -> StoragePlugin:
+        return url_to_storage_plugin(url_path=url_path)
+
+    return event_loop.run_until_complete(_url_to_storage_plugin(url_path=url_path))

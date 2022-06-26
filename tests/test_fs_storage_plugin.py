@@ -30,14 +30,16 @@ class FSStoragePluginTest(unittest.TestCase):
             tensor_path = os.path.join(path, "tensor")
             write_req = torchsnapshot.io_types.IOReq(path=tensor_path)
             torch.save(tensor, write_req.buf)
-            asyncio.run(plugin.write(io_req=write_req))
+
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(plugin.write(io_req=write_req))
             self.assertTrue(os.path.exists(tensor_path))
 
             read_req = torchsnapshot.io_types.IOReq(path=tensor_path)
-            asyncio.run(plugin.read(io_req=read_req))
+            loop.run_until_complete(plugin.read(io_req=read_req))
             loaded = torch.load(read_req.buf)
             self.assertTrue(torch.allclose(tensor, loaded))
 
-            asyncio.run(plugin.delete(path=tensor_path))
+            loop.run_until_complete(plugin.delete(path=tensor_path))
             self.assertFalse(os.path.exists(tensor_path))
             plugin.close()

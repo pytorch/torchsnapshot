@@ -88,7 +88,8 @@ class ShardedTensorIOPreparerTest(unittest.TestCase):
         # and subject to change
         tc.assertEqual(write_reqs[0].path, f"/foo_{begin}_0")
 
-        buf = asyncio.run(write_reqs[0].buffer_stager.stage_buffer())
+        loop = asyncio.new_event_loop()
+        buf = loop.run_until_complete(write_reqs[0].buffer_stager.stage_buffer())
 
         # Make sure only the data described by the view gets persisted
         loaded = torch.load(io.BytesIO(buf))
@@ -102,7 +103,7 @@ class ShardedTensorIOPreparerTest(unittest.TestCase):
 
         # For this sharded tensor, each rank writes 1 shard
         tc.assertEqual(len(read_reqs), 1)
-        asyncio.run(read_reqs[0].buffer_consumer.consume_buffer(buf))
+        loop.run_until_complete(read_reqs[0].buffer_consumer.consume_buffer(buf))
 
         # Verify that the original sharded tensor gets restored
         tc.assertTrue(torch.allclose(shard_view, shard_copy))

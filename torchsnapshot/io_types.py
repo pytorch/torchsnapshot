@@ -6,11 +6,11 @@
 # LICENSE file in the root directory of this source tree.
 
 import abc
+import asyncio
 import io
 from concurrent.futures import Executor
 from dataclasses import dataclass, field
 from typing import Optional
-
 
 BufferType = bytes  # TODO: add memoryview
 
@@ -67,5 +67,26 @@ class StoragePlugin(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def close(self) -> None:
+    async def close(self) -> None:
         pass
+
+    def sync_write(
+        self, io_req: IOReq, event_loop: Optional[asyncio.AbstractEventLoop] = None
+    ) -> None:
+        if event_loop is None:
+            event_loop = asyncio.new_event_loop()
+        event_loop.run_until_complete(self.write(io_req=io_req))
+
+    def sync_read(
+        self, io_req: IOReq, event_loop: Optional[asyncio.AbstractEventLoop] = None
+    ) -> None:
+        if event_loop is None:
+            event_loop = asyncio.new_event_loop()
+        event_loop.run_until_complete(self.read(io_req=io_req))
+
+    def sync_close(
+        self, event_loop: Optional[asyncio.AbstractEventLoop] = None
+    ) -> None:
+        if event_loop is None:
+            event_loop = asyncio.new_event_loop()
+        event_loop.run_until_complete(self.close())

@@ -49,5 +49,5 @@ class S3StoragePlugin(StoragePlugin):
             key = os.path.join(self.root, path)
             await client.delete_object(Bucket=self.bucket, Key=key)
 
-    def close(self) -> None:
+    async def close(self) -> None:
         pass

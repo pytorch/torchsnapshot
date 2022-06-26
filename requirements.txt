@@ -1,4 +1,5 @@
 aiofiles
+aiohttp
 importlib-metadata
 psutil
 typing-extensions
