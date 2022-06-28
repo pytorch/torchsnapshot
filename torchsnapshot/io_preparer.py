@@ -24,7 +24,6 @@ from torch.distributed._shard.sharded_tensor import (
 from torch.distributed._shard.sharding_spec import ChunkShardingSpec
 
 from .io_types import BufferConsumer, BufferStager, BufferType, ReadReq, WriteReq
-
 from .manifest import Entry, ObjectEntry, Shard, ShardedTensorEntry, TensorEntry
 from .torch_dist_checkpoint.metadata import (
     ExtendedTensorMetadata,
@@ -163,11 +162,18 @@ class ShardedTensorIOPreparer:
         return read_reqs
 
 
+@torch.jit.script
+def tensor_copy(dst: torch.Tensor, src: torch.Tensor) -> None:
+    dst.copy_(src)
+
+
 class ShardedTensorBufferConsumer(BufferConsumer):
     def __init__(self, tensor_read_reqs: List[TensorReadRequest]) -> None:
         self.tensor_read_reqs = tensor_read_reqs
 
-    async def consume_buffer(self, buf: BufferType) -> None:
+    async def consume_buffer(
+        self, buf: BufferType, executor: Optional[Executor] = None
+    ) -> None:
         view_to_copy = torch.load(io.BytesIO(buf))
         for req in self.tensor_read_reqs:
             for dim, (start, length) in enumerate(zip(req.offsets, req.lengths)):
@@ -177,7 +183,12 @@ class ShardedTensorBufferConsumer(BufferConsumer):
                 view_to_copy.size() == req.tensor.size()
             ), f"The {req.storage_key} src/dst size does not match."
 
-            req.tensor.copy_(view_to_copy)
+            if executor is not None:
+                await asyncio.get_running_loop().run_in_executor(
+                    executor, tensor_copy, req.tensor, view_to_copy
+                )
+            else:
+                req.tensor.copy_(view_to_copy)
 
     def get_consuming_cost_bytes(self) -> int:
         estimate: int = 0
@@ -227,11 +238,18 @@ class TensorBufferConsumer(BufferConsumer):
     def __init__(self, tensor: torch.Tensor) -> None:
         self.tensor = tensor
 
-    async def consume_buffer(self, buf: BufferType) -> None:
+    async def consume_buffer(
+        self, buf: BufferType, executor: Optional[Executor] = None
+    ) -> None:
         # Is there a way to directly load to page-locked memory?
-        # TODO: use non-blocking copy and yield control
-        tensor = torch.load(io.BytesIO(buf))
-        self.tensor.copy_(tensor)
+        # TODO: consider DMA
+        loaded = torch.load(io.BytesIO(buf))
+        if executor is not None:
+            await asyncio.get_running_loop().run_in_executor(
+                executor, tensor_copy, self.tensor, loaded
+            )
+        else:
+            self.tensor.copy_(loaded)
 
     def get_consuming_cost_bytes(self) -> int:
         # The memory footprint of torch.load is 2x the tensor size
@@ -292,7 +310,9 @@ class ObjectBufferConsumer(BufferConsumer, Generic[T]):
         self.consuming_cost_bytes: int = sys.getsizeof(obj_out)
         self.callback: Optional[Callable[[T], None]] = None
 
-    async def consume_buffer(self, buf: BufferType) -> None:
+    async def consume_buffer(
+        self, buf: BufferType, executor: Optional[Executor] = None
+    ) -> None:
         obj: T = torch.load(io.BytesIO(buf))
         if self.callback is not None:
             self.callback(obj)
