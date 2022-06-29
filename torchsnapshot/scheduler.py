@@ -8,7 +8,7 @@ import socket
 import time
 from collections import defaultdict
 from concurrent.futures import Executor, ThreadPoolExecutor
-from typing import cast, List, Optional
+from typing import cast, List, Optional, Set
 
 import psutil
 
@@ -90,61 +90,112 @@ async def execute_write_reqs(
     memory_budget_bytes: int,
     rank: int,
 ) -> None:
-    write_pipelines = [_WritePipeline(write_req, storage) for write_req in write_reqs]
-    pending_ids = set(range(len(write_pipelines)))
+    # This function fulfills the write requests by moving them through the
+    # following stages with the specified memory budget:
+    #
+    # ready_for_staging - The is the initial state.
+    # staging - Performing DtoH copy and serialization.
+    # ready_for_io - A buffer is ready for the I/O stage.
+    # io - Writing the buffer to the storage.
+    # done (implicit) - The write request has been fulfilled.
+    #
+    # TODO: for async checkpointing, as soon as all write requests move past
+    # the staging stage, this function can return and continue writing to
+    # storage in the background.
+    ready_for_staging = {_WritePipeline(write_req, storage) for write_req in write_reqs}
     staging_tasks = set()
+    ready_for_io = set()
     io_tasks = set()
     executor = ThreadPoolExecutor(max_workers=_MAX_PER_RANK_CPU_CONCURRENCY)
 
     bytes_written = 0
     begin_ts = time.monotonic()
 
-    while len(pending_ids) != 0 or len(staging_tasks) != 0 or len(io_tasks) != 0:
-        # Dispatch as many staging tasks as the memory budget allows
-        dispatched_ids = set()
-        for i in pending_ids:
-            write_pipeline = write_pipelines[i]
-            staging_cost_bytes = write_pipeline.staging_cost_bytes
-            if len(staging_tasks) == 0 or staging_cost_bytes < memory_budget_bytes:
-                memory_budget_bytes -= staging_cost_bytes
-                staging_task = asyncio.create_task(
-                    write_pipeline.stage_buffer(executor)
-                )
+    def dispatch_staging(
+        ready_for_staging: Set[_WritePipeline],
+        staging_tasks: Set[asyncio.Task],
+        memory_budget_bytes: int,
+        executor: Executor,
+    ) -> int:
+        """
+        Dispatch as many staging tasks as the memory budget allows.
+        """
+        for p in set(ready_for_staging):
+            if len(staging_tasks) == 0 or p.staging_cost_bytes < memory_budget_bytes:
+                memory_budget_bytes -= p.staging_cost_bytes
+                staging_task = asyncio.create_task(p.stage_buffer(executor))
                 staging_tasks.add(staging_task)
-                dispatched_ids.add(i)
-        pending_ids -= dispatched_ids
+                ready_for_staging.remove(p)
+        return memory_budget_bytes
 
-        logger.debug(
-            f"Rank {rank}\t"
-            f"pending: {len(pending_ids)}\t"
-            f"staing_tasks: {len(staging_tasks)}\t"
-            f"io_tasks: {len(io_tasks)}\t"
-            f"memory_budget_bytes: {memory_budget_bytes}"
-        )
+    def dispatch_io(
+        ready_for_io: Set[_WritePipeline], io_tasks: Set[asyncio.Task]
+    ) -> None:
+        """
+        Dispatch as many I/O tasks as the I/O concurrency allows.
+        """
+        for p in set(ready_for_io):
+            if len(io_tasks) >= _MAX_PER_RANK_IO_CONCURRENCY:
+                break
+            io_task = asyncio.create_task(p.write_buffer())
+            io_tasks.add(io_task)
+            ready_for_io.remove(p)
 
-        # At this point, we can not dispatch more staging tasks
+    memory_budget_bytes = dispatch_staging(
+        ready_for_staging=ready_for_staging,
+        staging_tasks=staging_tasks,
+        memory_budget_bytes=memory_budget_bytes,
+        executor=executor,
+    )
+
+    while (
+        len(ready_for_staging) + len(staging_tasks) + len(ready_for_io) + len(io_tasks)
+        != 0
+    ):
         done, _ = await asyncio.wait(
             staging_tasks | io_tasks, return_when=asyncio.FIRST_COMPLETED
         )
         for d in done:
             if d in staging_tasks:
-                if len(io_tasks) >= _MAX_PER_RANK_IO_CONCURRENCY:
-                    await asyncio.wait(io_tasks, return_when=asyncio.FIRST_COMPLETED)
-                    continue
                 staging_tasks.remove(d)
                 write_pipeline: _WritePipeline = d.result()
+                ready_for_io.add(write_pipeline)
                 # Update memory budget: the staging cost can be different from
                 # the buffer size. For example, when serializing a tensor with
                 # torch.save, the staging cost is 2x the buffer size.
                 memory_budget_bytes += write_pipeline.staging_cost_bytes
                 memory_budget_bytes -= cast(int, write_pipeline.buf_sz_bytes)
-                io_task = asyncio.create_task(write_pipeline.write_buffer())
-                io_tasks.add(io_task)
-            if d in io_tasks:
+
+                if len(ready_for_staging) == 0 and len(staging_tasks) == 0:
+                    logger.debug(
+                        f"Rank {rank} finished staging in "
+                        f"{time.monotonic() - begin_ts:.2f} seconds"
+                    )
+            elif d in io_tasks:
                 io_tasks.remove(d)
                 write_pipeline: _WritePipeline = d.result()
                 memory_budget_bytes += cast(int, write_pipeline.buf_sz_bytes)
                 bytes_written += cast(int, write_pipeline.buf_sz_bytes)
+            else:
+                raise AssertionError(
+                    "The completed task must be in either staging_tasks or io_tasks."
+                )
+            dispatch_io(ready_for_io=ready_for_io, io_tasks=io_tasks)
+            memory_budget_bytes = dispatch_staging(
+                ready_for_staging=ready_for_staging,
+                staging_tasks=staging_tasks,
+                memory_budget_bytes=memory_budget_bytes,
+                executor=executor,
+            )
+
+        logger.debug(
+            f"Rank {rank}\t"
+            f"ready_for_staging: {len(ready_for_staging)}\t"
+            f"staging_tasks: {len(staging_tasks)}\t"
+            f"ready_for_io: {len(ready_for_io)}\t"
+            f"io_tasks: {len(io_tasks)}\t"
+            f"memory_budget_bytes: {memory_budget_bytes}"
+        )
 
     mbps = (bytes_written / 1e6) / (time.monotonic() - begin_ts)
     logger.info(f"Rank {rank} finished saving. Throughput: {mbps:.2f}MB/s")
