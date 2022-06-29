@@ -44,17 +44,16 @@ class S3StoragePluginTest(unittest.TestCase):
         plugin = S3StoragePlugin(root=path)
 
         tensor = torch.rand((_TENSOR_SZ,))
-        path = os.path.join(path, "tensor")
-        write_req = torchsnapshot.io_types.IOReq(path=path)
+        write_req = torchsnapshot.io_types.IOReq(path="tensor")
         torch.save(tensor, write_req.buf)
 
         loop = asyncio.new_event_loop()
         loop.run_until_complete(plugin.write(io_req=write_req))
 
-        read_req = torchsnapshot.io_types.IOReq(path=path)
+        read_req = torchsnapshot.io_types.IOReq(path="tensor")
         loop.run_until_complete(plugin.read(io_req=read_req))
         loaded = torch.load(read_req.buf)
         self.assertTrue(torch.allclose(tensor, loaded))
 
-        loop.run_until_complete(plugin.delete(path=path))
+        loop.run_until_complete(plugin.delete(path="tensor"))
         plugin.close()

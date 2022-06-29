@@ -39,6 +39,7 @@ class FSStoragePlugin(StoragePlugin):
             io_req.buf = io.BytesIO(await f.read())
 
     async def delete(self, path: str) -> None:
+        path = os.path.join(self.root, path)
         await aiofiles.os.remove(path)
 
     async def close(self) -> None:
