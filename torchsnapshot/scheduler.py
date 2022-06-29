@@ -20,7 +20,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 _MAX_PER_RANK_MEMORY_BUDGET_BYTES: int = 32 * 1024 * 1024 * 1024
 _AVAILABLE_MEMORY_MULTIPLIER: float = 0.8
-_MAX_PER_RANK_STAGING_CONCURRENCY: int = 16
+_MAX_PER_RANK_CPU_CONCURRENCY: int = 4
 _MAX_PER_RANK_IO_CONCURRENCY: int = 16
 
 
@@ -94,7 +94,7 @@ async def execute_write_reqs(
     pending_ids = set(range(len(write_pipelines)))
     staging_tasks = set()
     io_tasks = set()
-    executor = ThreadPoolExecutor(max_workers=_MAX_PER_RANK_STAGING_CONCURRENCY)
+    executor = ThreadPoolExecutor(max_workers=_MAX_PER_RANK_CPU_CONCURRENCY)
 
     bytes_written = 0
     begin_ts = time.monotonic()
@@ -188,10 +188,10 @@ class _ReadPipeline:
         self.buf_sz_bytes = len(self.buf)
         return self
 
-    async def consume_buffer(self) -> "_ReadPipeline":
+    async def consume_buffer(self, executor: Optional[Executor]) -> "_ReadPipeline":
         if self.buf is None:
             raise AssertionError("self.buf can not be None.")
-        await self.read_req.buffer_consumer.consume_buffer(self.buf)
+        await self.read_req.buffer_consumer.consume_buffer(self.buf, executor)
 
         # Reclaim buffer memory
         self.buf = None
@@ -208,6 +208,7 @@ async def execute_read_reqs(
     pending_ids = set(range(len(read_pipelines)))
     io_tasks = set()
     consuming_tasks = set()
+    executor = ThreadPoolExecutor(max_workers=_MAX_PER_RANK_CPU_CONCURRENCY)
 
     bytes_read = 0
     begin_ts = time.monotonic()
@@ -244,7 +245,9 @@ async def execute_read_reqs(
             if d in io_tasks:
                 io_tasks.remove(d)
                 read_pipeline: _ReadPipeline = d.result()
-                consuming_task = asyncio.create_task(read_pipeline.consume_buffer())
+                consuming_task = asyncio.create_task(
+                    read_pipeline.consume_buffer(executor)
+                )
                 consuming_tasks.add(consuming_task)
             if d in consuming_tasks:
                 consuming_tasks.remove(d)
@@ -254,6 +257,8 @@ async def execute_read_reqs(
 
     mbps = (bytes_read / 1e6) / (time.monotonic() - begin_ts)
     logger.info(f"Rank {rank} finished loading. Throughput: {mbps:.2f}MB/s")
+
+    executor.shutdown()
 
 
 def sync_execute_read_reqs(

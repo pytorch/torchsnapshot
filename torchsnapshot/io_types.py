@@ -33,7 +33,9 @@ class WriteReq:
 
 class BufferConsumer:
     @abc.abstractmethod
-    async def consume_buffer(self, buf: BufferType) -> None:
+    async def consume_buffer(
+        self, buf: BufferType, executor: Optional[Executor] = None
+    ) -> None:
         pass
 
     @abc.abstractmethod
