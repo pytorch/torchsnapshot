@@ -10,9 +10,10 @@ import asyncio
 import io
 from concurrent.futures import Executor
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Union
 
-BufferType = bytes  # TODO: add memoryview
+
+BufferType = Union[bytes, memoryview]
 
 
 class BufferStager:
@@ -34,7 +35,7 @@ class WriteReq:
 class BufferConsumer:
     @abc.abstractmethod
     async def consume_buffer(
-        self, buf: BufferType, executor: Optional[Executor] = None
+        self, buf: bytes, executor: Optional[Executor] = None
     ) -> None:
         pass
 

@@ -5,6 +5,8 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+# pyre-ignore-all-errors[2]: allow `Any` in type annotations
+
 import asyncio
 import copy
 import io
@@ -13,6 +15,7 @@ import os
 import sys
 from concurrent.futures import Executor
 from functools import reduce
+from operator import mul
 from typing import Any, Callable, Generic, List, Optional, Tuple, TypeVar
 
 import torch
@@ -25,6 +28,17 @@ from torch.distributed._shard.sharding_spec import ChunkShardingSpec
 
 from .io_types import BufferConsumer, BufferStager, BufferType, ReadReq, WriteReq
 from .manifest import Entry, ObjectEntry, Shard, ShardedTensorEntry, TensorEntry
+from .serialization import (
+    BUFFER_PROTOCOL_SUPPORTED_DTYPES,
+    dtype_to_element_size,
+    dtype_to_string,
+    Serializer,
+    string_to_dtype,
+    tensor_as_memoryview,
+    tensor_from_memoryview,
+    torch_load_from_bytes,
+    torch_save_as_bytes,
+)
 from .torch_dist_checkpoint.metadata import (
     ExtendedTensorMetadata,
     StorageMetadata,
@@ -156,6 +170,7 @@ class ShardedTensorIOPreparer:
                             for trr in tensor_read_reqs
                             if trr.storage_key == shard.tensor.location
                         ],
+                        entry=shard.tensor,
                     ),
                 )
             )
@@ -168,13 +183,20 @@ def tensor_copy(dst: torch.Tensor, src: torch.Tensor) -> None:
 
 
 class ShardedTensorBufferConsumer(BufferConsumer):
-    def __init__(self, tensor_read_reqs: List[TensorReadRequest]) -> None:
+    def __init__(
+        self,
+        tensor_read_reqs: List[TensorReadRequest],
+        entry: TensorEntry,
+    ) -> None:
         self.tensor_read_reqs = tensor_read_reqs
+        self.entry = entry
 
     async def consume_buffer(
-        self, buf: BufferType, executor: Optional[Executor] = None
+        self, buf: bytes, executor: Optional[Executor] = None
     ) -> None:
-        view_to_copy = torch.load(io.BytesIO(buf))
+        view_to_copy = TensorBufferConsumer.deserialize_tensor(
+            buf=buf, entry=self.entry
+        )
         for req in self.tensor_read_reqs:
             for dim, (start, length) in enumerate(zip(req.offsets, req.lengths)):
                 view_to_copy = torch.narrow(view_to_copy, dim, start, length)
@@ -191,11 +213,14 @@ class ShardedTensorBufferConsumer(BufferConsumer):
                 req.tensor.copy_(view_to_copy)
 
     def get_consuming_cost_bytes(self) -> int:
-        estimate: int = 0
-        for req in self.tensor_read_reqs:
-            # The memory footprint of torch.load is 2x the tensor size
-            estimate += req.tensor.nelement() * req.tensor.element_size() * 2
-        return estimate
+        tensor_sz_bytes = TensorIOPreparer.get_tensor_size_from_entry(self.entry)
+        if self.entry.serializer == Serializer.TORCH_SAVE.value:
+            # The peak memory footprint of torch.load is 2x the tensor size
+            return tensor_sz_bytes * 2
+        elif self.entry.serializer == Serializer.BUFFER_PROTOCOL.value:
+            return tensor_sz_bytes
+        else:
+            raise ValueError(f"Unrecognized serializer: {self.entry.serializer}.")
 
 
 @torch.jit.script
@@ -204,8 +229,9 @@ def tensor_to_cpu(tensor: torch.Tensor) -> torch.Tensor:
 
 
 class TensorBufferStager(BufferStager):
-    def __init__(self, tensor: torch.Tensor) -> None:
+    def __init__(self, tensor: torch.Tensor, entry: TensorEntry) -> None:
         self.tensor = tensor
+        self.entry = entry
 
     async def stage_buffer(self, executor: Optional[Executor] = None) -> BufferType:
         if self.tensor.is_cuda:
@@ -225,25 +251,49 @@ class TensorBufferStager(BufferStager):
         else:
             cpu_tensor = self.tensor.detach()
 
-        buf = io.BytesIO()
-        torch.save(cpu_tensor, buf)
-        return buf.getvalue()
+        if self.entry.serializer == Serializer.TORCH_SAVE.value:
+            return torch_save_as_bytes(cpu_tensor)
+        elif self.entry.serializer == Serializer.BUFFER_PROTOCOL.value:
+            return tensor_as_memoryview(cpu_tensor)
+        else:
+            raise ValueError(f"Unrecognized serializer: {self.entry.serializer}.")
 
     def get_staging_cost_bytes(self) -> int:
-        # The memory footprint of torch.save is 2x the tensor size
-        return self.tensor.nelement() * self.tensor.element_size() * 2
+        tensor_sz_bytes = TensorIOPreparer.get_tensor_size_from_entry(self.entry)
+        if self.entry.serializer == Serializer.TORCH_SAVE.value:
+            # The peak memory footprint of torch.load is 2x the tensor size
+            return tensor_sz_bytes * 2
+        elif self.entry.serializer == Serializer.BUFFER_PROTOCOL.value:
+            return tensor_sz_bytes
+        else:
+            raise ValueError(f"Unrecognized serializer: {self.entry.serializer}.")
 
 
 class TensorBufferConsumer(BufferConsumer):
-    def __init__(self, tensor: torch.Tensor) -> None:
+    def __init__(
+        self,
+        tensor: torch.Tensor,
+        entry: TensorEntry,
+    ) -> None:
         self.tensor = tensor
+        self.entry = entry
+
+    @staticmethod
+    def deserialize_tensor(buf: bytes, entry: TensorEntry) -> torch.Tensor:
+        if entry.serializer == Serializer.TORCH_SAVE.value:
+            return torch_load_from_bytes(buf)
+        elif entry.serializer == Serializer.BUFFER_PROTOCOL.value:
+            dtype = string_to_dtype(entry.dtype)
+            return tensor_from_memoryview(
+                memoryview(buf), dtype=dtype, shape=entry.shape
+            )
+        else:
+            raise ValueError(f"Unrecognized serializer: {entry.serializer}.")
 
     async def consume_buffer(
-        self, buf: BufferType, executor: Optional[Executor] = None
+        self, buf: bytes, executor: Optional[Executor] = None
     ) -> None:
-        # Is there a way to directly load to page-locked memory?
-        # TODO: consider DMA
-        loaded = torch.load(io.BytesIO(buf))
+        loaded = self.deserialize_tensor(buf=buf, entry=self.entry)
         if executor is not None:
             await asyncio.get_running_loop().run_in_executor(
                 executor, tensor_copy, self.tensor, loaded
@@ -252,8 +302,14 @@ class TensorBufferConsumer(BufferConsumer):
             self.tensor.copy_(loaded)
 
     def get_consuming_cost_bytes(self) -> int:
-        # The memory footprint of torch.load is 2x the tensor size
-        return self.tensor.nelement() * self.tensor.element_size() * 2
+        tensor_sz_bytes = TensorIOPreparer.get_tensor_size_from_entry(self.entry)
+        if self.entry.serializer == Serializer.TORCH_SAVE.value:
+            # The peak memory footprint of torch.load is 2x the tensor size
+            return tensor_sz_bytes * 2
+        elif self.entry.serializer == Serializer.BUFFER_PROTOCOL.value:
+            return tensor_sz_bytes
+        else:
+            raise ValueError(f"Unrecognized serializer: {self.entry.serializer}.")
 
 
 class TensorIOPreparer:
@@ -261,17 +317,20 @@ class TensorIOPreparer:
     def prepare_write(
         storage_path: str, tensor: torch.Tensor
     ) -> Tuple[TensorEntry, List[WriteReq]]:
-        buffer_stager = TensorBufferStager(tensor=tensor)
-        return (
-            TensorEntry(
-                location=storage_path,
-                serializer="torch_save",
-                dtype=str(tensor.dtype),
-                shape=list(tensor.shape),
-                replicated=False,
-            ),
-            [WriteReq(path=storage_path, buffer_stager=buffer_stager)],
+        if tensor.dtype in BUFFER_PROTOCOL_SUPPORTED_DTYPES:
+            serializer = Serializer.BUFFER_PROTOCOL.value
+        else:
+            serializer = Serializer.TORCH_SAVE.value
+
+        entry = TensorEntry(
+            location=storage_path,
+            serializer=serializer,
+            dtype=dtype_to_string(tensor.dtype),
+            shape=list(tensor.shape),
+            replicated=False,
         )
+        buffer_stager = TensorBufferStager(tensor=tensor, entry=entry)
+        return entry, [WriteReq(path=storage_path, buffer_stager=buffer_stager)]
 
     @classmethod
     def prepare_read(
@@ -283,12 +342,21 @@ class TensorIOPreparer:
             raise RuntimeError(
                 "Reading a Tensor without a runtime object is not yet supported."
             )
-        buffer_consumer = TensorBufferConsumer(tensor_out)
+        buffer_consumer = TensorBufferConsumer(
+            tensor=tensor_out,
+            entry=entry,
+        )
         return [ReadReq(path=entry.location, buffer_consumer=buffer_consumer)]
+
+    @staticmethod
+    def get_tensor_size_from_entry(entry: TensorEntry) -> int:
+        dtype = string_to_dtype(entry.dtype)
+        element_size = dtype_to_element_size(dtype)
+        n_element = reduce(mul, entry.shape, 1)
+        return element_size * n_element
 
 
 class ObjectBufferStager(BufferStager):
-    # pyre-ignore[2]: Parameter `obj` must have a type other than `Any`.
     def __init__(self, obj: Any) -> None:
         self.obj = obj
 
@@ -311,7 +379,7 @@ class ObjectBufferConsumer(BufferConsumer, Generic[T]):
         self.callback: Optional[Callable[[T], None]] = None
 
     async def consume_buffer(
-        self, buf: BufferType, executor: Optional[Executor] = None
+        self, buf: bytes, executor: Optional[Executor] = None
     ) -> None:
         obj: T = torch.load(io.BytesIO(buf))
         if self.callback is not None:
@@ -334,7 +402,7 @@ class ObjectIOPreparer(Generic[T]):
         return (
             ObjectEntry(
                 location=storage_path,
-                serializer="torch_save",
+                serializer=Serializer.TORCH_SAVE.value,
                 obj_type=type(obj).__module__ + "." + type(obj).__name__,
                 replicated=False,
             ),
@@ -352,7 +420,6 @@ class ObjectIOPreparer(Generic[T]):
         ]
 
 
-# pyre-ignore[2]: obj can have arbitrary type
 def get_storage_path(obj: Any, logical_path: str, rank: int, replicated: bool) -> str:
     if isinstance(obj, ShardedTensor):
         return os.path.join("sharded", logical_path)
@@ -363,7 +430,6 @@ def get_storage_path(obj: Any, logical_path: str, rank: int, replicated: bool) -
 
 
 def prepare_write(
-    # pyre-ignore[2]: obj can have arbitrary type
     obj: Any,
     logical_path: str,
     rank: int,
@@ -394,7 +460,6 @@ def prepare_write(
     return entry, obj_write_req
 
 
-# pyre-ignore[2]: obj can have arbitrary type
 def prepare_read(entry: Entry, obj_out: Optional[Any] = None) -> List[ReadReq]:
     """
     Prepare read for an object.

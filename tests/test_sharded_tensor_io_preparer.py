@@ -21,6 +21,7 @@ from torch.distributed._shard.metadata import ShardMetadata
 from torch.distributed._shard.sharded_tensor import init_from_local_shards, Shard
 
 from torchsnapshot.io_preparer import ShardedTensorIOPreparer
+from torchsnapshot.serialization import string_to_dtype, tensor_from_memoryview
 from torchsnapshot.test_utils import get_pet_launch_config
 
 
@@ -71,7 +72,7 @@ class ShardedTensorIOPreparerTest(unittest.TestCase):
                         sizes=[chunk_sz, dim_1],
                         tensor=manifest.TensorEntry(
                             location=f"/foo_{begin}_0",
-                            serializer="torch_save",
+                            serializer="buffer_protocol",
                             dtype="torch.float32",
                             shape=[chunk_sz, dim_1],
                             replicated=False,
@@ -92,7 +93,11 @@ class ShardedTensorIOPreparerTest(unittest.TestCase):
         buf = loop.run_until_complete(write_reqs[0].buffer_stager.stage_buffer())
 
         # Make sure only the data described by the view gets persisted
-        loaded = torch.load(io.BytesIO(buf))
+        loaded = tensor_from_memoryview(
+            mv=memoryview(buf),
+            dtype=string_to_dtype(entry.shards[0].tensor.dtype),
+            shape=entry.shards[0].tensor.shape,
+        )
         tc.assertEqual(loaded.nelement(), loaded.storage().size())
 
         # Randomize the original sharded tensor before restoring
