@@ -162,6 +162,7 @@ class Snapshot:
             url_path=path, event_loop=event_loop
         )
         replicated = replicated or []
+        # TODO: validate app_state
         # TODO: verify replicated across ranks
         # TODO: infer replicated pattern for known stateful types (e.g.
         # DistributedDataParallel)
@@ -172,6 +173,7 @@ class Snapshot:
 
         rank = pg_wrapper.get_rank()
         manifest: Manifest = {}
+        flattened: Dict[str, Any] = {}
 
         # Invariant: for the same snapshot, the RNG state is the same after
         # .take() and .restore().
@@ -183,15 +185,9 @@ class Snapshot:
         if rng_state_item is not None:
             key, stateful = rng_state_item
             rng_state_dict = stateful.state_dict()
-            mnfst = cls._save_stateful(
-                stateful_key=key,
-                stateful=stateful,
-                storage=storage,
-                replicated=replicated,
-                pg=pg_wrapper,
-                event_loop=event_loop,
-            )
+            mnfst, fltnd = flatten(rng_state_dict, prefix=key)
             manifest.update(mnfst)
+            flattened.update(fltnd)
 
         # Different ranks can register different sets of stateful objects,
         # whose .state_dict() methods may invoke collectives. To avoid
@@ -201,18 +197,48 @@ class Snapshot:
         global_keys = cls._gather_keys(keys=list(app_state.keys()), pg=pg)
 
         for key in global_keys:
-            mnfst = cls._save_stateful(
-                stateful_key=key,
-                stateful=app_state.get(key),
-                storage=storage,
-                replicated=replicated,
-                pg=pg_wrapper,
-                event_loop=event_loop,
-            )
-            manifest.update(mnfst)
+            if key in app_state:
+                state_dict = app_state[key].state_dict()
+                mnfst, fltnd = flatten(state_dict, prefix=key)
+                manifest.update(mnfst)
+                flattened.update(fltnd)
             pg_wrapper.barrier()
 
+        # Undo any potential side effects to the RNG state. The rest of this
+        # function won't affect the RNG state or execute application code.
+        if rng_state_item is not None:
+            _, stateful = rng_state_item
+            rng_state_dict = stateful.load_state_dict(
+                cast(Dict[str, Any], rng_state_dict)  # pyre-ignore[33]
+            )
+
+        replicated_paths = cls._calculate_replicated_entries(
+            flattened, replicated, pg_wrapper
+        )
+
+        object_entries: Dict[str, Entry] = {}
+        write_reqs: List[WriteReq] = []
+        for logical_path, obj in flattened.items():
+            entry, item_write_reqs = prepare_write(
+                obj=obj,
+                logical_path=logical_path,
+                rank=pg_wrapper.get_rank(),
+                replicated=logical_path in replicated_paths,
+            )
+            object_entries[logical_path] = entry
+            write_reqs += item_write_reqs
+        manifest.update(object_entries)
         manifest = cls._gather_manifest(manifest=manifest, pg=pg_wrapper)
+
+        memory_budget_bytes = get_process_memory_budget_bytes(pg=pg_wrapper)
+        sync_execute_write_reqs(
+            write_reqs=write_reqs,
+            storage=storage,
+            memory_budget_bytes=memory_budget_bytes,
+            rank=pg_wrapper.get_rank(),
+            event_loop=event_loop,
+        )
+
         if rank == 0:
             cls._write_snapshot_metadata(
                 world_size=pg_wrapper.get_world_size(),
@@ -220,16 +246,9 @@ class Snapshot:
                 storage=storage,
                 event_loop=event_loop,
             )
-        pg_wrapper.barrier()
-
-        # Undo any potential side effects to the RNG state.
-        if rng_state_item is not None:
-            _, stateful = rng_state_item
-            rng_state_dict = stateful.load_state_dict(
-                cast(Dict[str, Any], rng_state_dict)  # pyre-ignore[33]
-            )
 
         storage.sync_close(event_loop=event_loop)
+        pg_wrapper.barrier()
         return cls(path=path, pg=pg)
 
     def restore(self, app_state: AppState) -> None:
@@ -284,50 +303,8 @@ class Snapshot:
             )
         storage.sync_close(event_loop=event_loop)
 
-    @classmethod
-    def _save_stateful(
-        cls,
-        stateful_key: str,
-        stateful: Optional[Stateful],
-        storage: StoragePlugin,
-        replicated: List[str],
-        pg: PGWrapper,
-        event_loop: asyncio.AbstractEventLoop,
-    ) -> Manifest:
-        if stateful is not None:
-            state_dict = stateful.state_dict()
-            manifest, flattened = flatten(state_dict, prefix=stateful_key)
-        else:
-            manifest, flattened = {}, {}
-
-        # This is a collective call
-        replicated_paths = cls._scatter_replicated_entries(flattened, replicated, pg)
-
-        entries: List[Entry] = []
-        write_reqs: List[WriteReq] = []
-        for logical_path, obj in flattened.items():
-            entry, item_write_reqs = prepare_write(
-                obj=obj,
-                logical_path=logical_path,
-                rank=pg.get_rank(),
-                replicated=logical_path in replicated_paths,
-            )
-            entries.append(entry)
-            write_reqs += item_write_reqs
-
-        memory_budget_bytes = get_process_memory_budget_bytes(pg=pg)
-        sync_execute_write_reqs(
-            write_reqs=write_reqs,
-            storage=storage,
-            memory_budget_bytes=memory_budget_bytes,
-            rank=pg.get_rank(),
-            event_loop=event_loop,
-        )
-        manifest.update(dict(zip(flattened.keys(), entries)))
-        return manifest
-
     @staticmethod
-    def _scatter_replicated_entries(
+    def _calculate_replicated_entries(
         flattened: Dict[str, Any],
         replicated: List[str],
         pg: PGWrapper,
