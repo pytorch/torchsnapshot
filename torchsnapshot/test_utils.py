@@ -5,6 +5,8 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+# pyre-ignore-all-errors[2]: allow `Any` in type annotations
+
 import unittest
 import uuid
 from contextlib import contextmanager
@@ -17,7 +19,6 @@ import torch.distributed.launcher as pet
 from torch.distributed._shard.sharded_tensor import ShardedTensor
 
 
-# pyre-ignore[2]: Parameter annotation cannot contain `Any`.
 def _tensor_eq(lhs: Union[torch.Tensor, ShardedTensor], rhs: Any) -> bool:
     if type(lhs) != type(rhs):
         return False
@@ -51,9 +52,7 @@ def _patch_tensor_eq() -> Generator[None, None, None]:
 
 def assert_state_dict_eq(
     tc: unittest.TestCase,
-    # pyre-ignore[2]: Parameter annotation cannot contain `Any`.
     lhs: Dict[Any, Any],
-    # pyre-ignore[2]: Parameter annotation cannot contain `Any`.
     rhs: Dict[Any, Any],
 ) -> None:
     """
@@ -68,7 +67,6 @@ def assert_state_dict_eq(
         tc.assertDictEqual(lhs, rhs)
 
 
-# pyre-ignore[2]: Parameter annotation cannot contain `Any`.
 def check_state_dict_eq(lhs: Dict[Any, Any], rhs: Dict[Any, Any]) -> bool:
     """
     dict.__eq__ except that it knows how to handle tensors.

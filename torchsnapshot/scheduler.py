@@ -69,12 +69,18 @@ class _WritePipeline:
 
     async def stage_buffer(self, executor: Executor) -> "_WritePipeline":
         self.buf = await self.write_req.buffer_stager.stage_buffer(executor)
-        self.buf_sz_bytes = len(self.buf)
+        if isinstance(self.buf, bytes):
+            self.buf_sz_bytes = len(self.buf)
+        else:
+            # self.buf is memoryview
+            self.buf_sz_bytes = self.buf.nbytes
         return self
 
     async def write_buffer(self) -> "_WritePipeline":
         if self.buf is None:
             raise AssertionError("self.buf can not be None.")
+        # pyre-ignore[6]: it's valid to initialize BytesIO with memoryview
+        # according to: https://docs.python.org/3/library/io.html#io.BytesIO
         io_req = IOReq(path=self.write_req.path, buf=io.BytesIO(self.buf))
         await self.storage.write(io_req)
 
@@ -229,7 +235,7 @@ class _ReadPipeline:
             read_req.buffer_consumer.get_consuming_cost_bytes()
         )
         self.storage = storage
-        self.buf: Optional[BufferType] = None
+        self.buf: Optional[bytes] = None
         self.buf_sz_bytes: Optional[int] = None
 
     async def read_buffer(self) -> "_ReadPipeline":
