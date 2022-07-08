@@ -17,6 +17,7 @@ from typing import Any, cast, Dict, List, Optional, Tuple, TypeVar
 
 import torch.distributed as dist
 from torch.distributed._shard.sharded_tensor import ShardedTensor
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 from .flatten import flatten, inflate
 from .io_preparer import ObjectBufferConsumer, prepare_read, prepare_write
@@ -130,6 +131,26 @@ class Snapshot:
         self.path: str = path
         self.pg: Optional[dist.ProcessGroup] = pg
 
+    @staticmethod
+    def _infer_replicated(replicated: List[str], app_state: AppState) -> List[str]:
+        new_replicated = replicated.copy()
+        if "**" in new_replicated:
+            return new_replicated
+        for key, val in app_state.items():
+            if isinstance(val, DDP):
+                # pyre-fixme[6]: For 1st param expected `Iterable[Variable[_T]]` but
+                #  got `Union[Tensor, Module]`.
+                ignored = set(getattr(val, "_ddp_params_and_buffers_to_ignore", []))
+                if not ignored:
+                    new_replicated.append(os.path.join(key, "**"))
+                    continue
+                for name, _ in itertools.chain(
+                    val.named_parameters(), val.named_buffers()
+                ):
+                    if name not in ignored:
+                        new_replicated.append(os.path.join(key, name))
+        return new_replicated
+
     @classmethod
     def take(
         cls,
@@ -164,8 +185,7 @@ class Snapshot:
         replicated = replicated or []
         # TODO: validate app_state
         # TODO: verify replicated across ranks
-        # TODO: infer replicated pattern for known stateful types (e.g.
-        # DistributedDataParallel)
+        replicated = cls._infer_replicated(replicated, app_state)
 
         app_state = app_state.copy()
         rng_state_item = cls._pop_rng_state(app_state=app_state)
@@ -311,6 +331,7 @@ class Snapshot:
     ) -> List[str]:
         rank = pg.get_rank()
         world_size = pg.get_world_size()
+
         replicated_paths = []
         for path, val in flattened.items():
             if any(fnmatch.fnmatch(path, p) for p in replicated) and not isinstance(
