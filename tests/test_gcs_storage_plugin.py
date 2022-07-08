@@ -5,7 +5,6 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-import asyncio
 import logging
 import os
 import unittest
@@ -13,6 +12,7 @@ import uuid
 
 import torch
 import torchsnapshot
+from torchsnapshot.test_utils import async_test
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,8 @@ class GCSStoragePluginTest(unittest.TestCase):
         self.assertTrue(torch.allclose(tensor, app_state["state"]["tensor"]))
 
     @unittest.skipIf(os.environ.get("TORCHSNAPSHOT_ENABLE_GCP_TEST") is None, "")
-    def test_write_read_delete(self) -> None:
+    @async_test
+    async def test_write_read_delete(self) -> None:
         path = f"{_TEST_BUCKET}/{uuid.uuid4()}"
         logger.info(path)
 
@@ -49,13 +50,12 @@ class GCSStoragePluginTest(unittest.TestCase):
         write_req = torchsnapshot.io_types.IOReq(path="tensor")
         torch.save(tensor, write_req.buf)
 
-        loop = asyncio.new_event_loop()
-        loop.run_until_complete(plugin.write(io_req=write_req))
+        await plugin.write(io_req=write_req)
 
         read_req = torchsnapshot.io_types.IOReq(path="tensor")
-        loop.run_until_complete(plugin.read(io_req=read_req))
+        await plugin.read(io_req=read_req)
         loaded = torch.load(read_req.buf)
         self.assertTrue(torch.allclose(tensor, loaded))
 
-        loop.run_until_complete(plugin.delete(path="tensor"))
-        plugin.close()
+        await plugin.delete(path="tensor")
+        await plugin.close()

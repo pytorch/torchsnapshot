@@ -7,11 +7,12 @@
 
 # pyre-ignore-all-errors[2]: allow `Any` in type annotations
 
+import asyncio
 import unittest
 import uuid
 from contextlib import contextmanager
 
-from typing import Any, Dict, Generator, Union
+from typing import Any, Awaitable, Callable, Dict, Generator, TypeVar, Union
 from unittest import mock
 
 import torch
@@ -102,3 +103,28 @@ def get_pet_launch_config(nproc: int) -> pet.LaunchConfig:
         max_restarts=0,
         monitor_interval=1,
     )
+
+
+T = TypeVar("T")
+
+
+def async_test(coro: Callable[..., Awaitable[T]]) -> Callable[..., T]:
+    """
+    Decorator for testing asynchronous code.
+    Once we drop support for Python 3.7.x, we can use `unittest.IsolatedAsyncioTestCase` instead.
+
+    Usage:
+        class MyTest(unittest.TestCase):
+            @async_test
+            async def test_x(self):
+                ...
+    """
+
+    def wrapper(*args, **kwargs) -> T:
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro(*args, **kwargs))
+        finally:
+            loop.close()
+
+    return wrapper
