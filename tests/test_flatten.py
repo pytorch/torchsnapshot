@@ -13,6 +13,7 @@ from torchsnapshot.flatten import flatten, inflate
 from torchsnapshot.manifest import DictEntry, ListEntry, OrderedDictEntry
 
 
+# pyre-fixme[5]: Global expression must be annotated.
 _OBJ = {
     "foo": 0,
     "bar": 1,
@@ -99,7 +100,11 @@ class FlattenTest(unittest.TestCase):
         """
         OBJ = {0: {"0": "foo", 1: "bar"}, "1": "baz"}
         EXPECTED_MANIFEST = {
+            # pyre-fixme[6]: For 1st param expected `List[str]` but got
+            #  `List[Union[int, str]]`.
             "": DictEntry(keys=[0, "1"]),
+            # pyre-fixme[6]: For 1st param expected `List[str]` but got
+            #  `List[Union[int, str]]`.
             "0": DictEntry(keys=["0", 1]),
         }
         EXPECTED_FLATTENED = {"0/0": "foo", "0/1": "bar", "1": "baz"}

@@ -15,7 +15,7 @@ import torchsnapshot
 from torchsnapshot.storage_plugins.fs import FSStoragePlugin
 from torchsnapshot.test_utils import async_test
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 _TENSOR_SZ = int(100_000_000 / 4)
 

@@ -14,6 +14,7 @@ import torch
 import torch.distributed as dist
 import torch.distributed.launcher as pet
 import torchsnapshot
+from torchsnapshot import Stateful
 from torchsnapshot.manifest import is_replicated, SnapshotMetadata
 from torchsnapshot.snapshot import SNAPSHOT_METADATA_FNAME
 from torchsnapshot.test_utils import get_pet_launch_config
@@ -39,8 +40,8 @@ class ReplicationGlobTest(unittest.TestCase):
         Take a snapshot of a _TestStateful object with the given replication globs.
         """
         dist.init_process_group(backend="gloo")
-        stateful = _TestStateful()
-        app_state = {"my_stateful": stateful}
+        stateful: Stateful = _TestStateful()
+        app_state: Dict[str, Stateful] = {"my_stateful": stateful}
         torchsnapshot.Snapshot.take(
             path=path,
             app_state=app_state,

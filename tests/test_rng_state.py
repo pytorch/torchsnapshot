@@ -30,8 +30,12 @@ class RNGStateTest(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as tmp_dir:
+            # pyre-fixme[6]: For 2nd param expected `Dict[str, Stateful]` but got
+            #  `Dict[str, Union[StatefulWithRNGSideEffect, RNGState]]`.
             snapshot = torchsnapshot.Snapshot.take(path=tmp_dir, app_state=app_state)
             after_take = torch.rand(1)
+            # pyre-fixme[6]: For 1st param expected `Dict[str, Stateful]` but got
+            #  `Dict[str, Union[StatefulWithRNGSideEffect, RNGState]]`.
             snapshot.restore(app_state)
             after_restore = torch.rand(1)
             torch.testing.assert_close(after_take, after_restore)

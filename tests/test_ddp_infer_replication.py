@@ -6,18 +6,19 @@
 # LICENSE file in the root directory of this source tree.
 
 import unittest
+from typing import Dict, List
 
 import torch
 import torch.distributed as dist
 import torch.distributed.launcher as pet
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torchsnapshot import Snapshot
+from torchsnapshot import Snapshot, Stateful
 from torchsnapshot.test_utils import get_pet_launch_config
 
 
 class DDPInferReplicatedTest(unittest.TestCase):
     @staticmethod
-    def _worker_helper(replicated, expected_replicated):
+    def _worker_helper(replicated: List[str], expected_replicated: List[str]) -> None:
         dist.init_process_group(backend="gloo")
         model = torch.nn.Sequential(torch.nn.Linear(4, 2), torch.nn.Linear(2, 1))
         inferred_replicated = Snapshot._infer_replicated(
@@ -53,14 +54,16 @@ class DDPInferReplicatedTest(unittest.TestCase):
         )(replicated, expected_replicated)
 
     @staticmethod
-    def _worker_with_params_to_ignore(replicated, expected_replicated) -> None:
+    def _worker_with_params_to_ignore(
+        replicated: List[str], expected_replicated: List[str]
+    ) -> None:
         model = torch.nn.Sequential(torch.nn.Linear(4, 2), torch.nn.Linear(2, 1))
         dist.init_process_group(backend="gloo")
         ddp_model = DDP(model)
-        DDP._set_params_and_buffers_to_ignore_for_model(
+        DDP._set_params_and_buffers_to_ignore_for_model(  # pyre-ignore[16]
             ddp_model, ["module.0.bias", "module.0.weight"]
         )
-        app_state = {"ddp": ddp_model, "nonddp": model}
+        app_state: Dict[str, Stateful] = {"ddp": ddp_model, "nonddp": model}
 
         inferred_replicated = Snapshot._infer_replicated(
             replicated=replicated, app_state=app_state
@@ -78,15 +81,15 @@ class DDPInferReplicatedTest(unittest.TestCase):
 
     @staticmethod
     def _worker_with_params_to_ignore_and_all_glob(
-        replicated, expected_replicated
+        replicated: List[str], expected_replicated: List[str]
     ) -> None:
         model = torch.nn.Sequential(torch.nn.Linear(4, 2), torch.nn.Linear(2, 1))
         dist.init_process_group(backend="gloo")
         ddp_model = DDP(model)
-        DDP._set_params_and_buffers_to_ignore_for_model(
+        DDP._set_params_and_buffers_to_ignore_for_model(  # pyre-ignore[16]
             ddp_model, ["module.0.bias", "module.0.weight"]
         )
-        app_state = {"ddp": ddp_model, "nonddp": model}
+        app_state: Dict[str, Stateful] = {"ddp": ddp_model, "nonddp": model}
         inferred_replicated = Snapshot._infer_replicated(
             replicated=replicated, app_state=app_state
         )
