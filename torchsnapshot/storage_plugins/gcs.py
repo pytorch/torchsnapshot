@@ -5,6 +5,9 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+# pyre-ignore-all-errors[2]: Allow `Any` in type annotations
+# pyre-ignore-all-errors[21]: Undefined import
+
 import asyncio
 import functools
 import io
@@ -12,26 +15,32 @@ import logging
 import os
 import random
 import time
-from typing import Awaitable, Callable, Optional, TypeVar
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Awaitable, Callable, Optional, TypeVar
 from urllib.parse import quote
 
-import aiohttp  # @manual
-
-# pyre-ignore-all-errors[21]: Undefined import
 import google.auth.exceptions  # @manual
-from google._async_resumable_media.requests import (  # @manual
-    ChunkedDownload,
-    ResumableUpload,
-)
-from google.auth._default_async import default_async  # @manual
-from google.auth.transport._aiohttp_requests import AuthorizedSession  # @manual
+import requests.exceptions
+import urllib3.exceptions
+from google.auth import default  # @manual
+from google.auth.transport.requests import AuthorizedSession  # @manual
+
+from google.resumable_media import common  # @manual
+from google.resumable_media.requests import ChunkedDownload, ResumableUpload  # @manual
 
 from torchsnapshot.io_types import IOReq, StoragePlugin
 
 logger: logging.Logger = logging.getLogger(__name__)
 
+_DEFAULT_CONNECTION_POOLS: int = 8
+_DEFAULT_CONNECTION_POOL_SIZE: int = 128
+_DEFAULT_CONNECTION_RETRIES: int = 3
+_DEFAULT_IO_CONCURRENCY: int = 8
 _DEFAULT_DEADLINE_SEC: int = 180
 _DEFAULT_CHUNK_SIZE_BYTE: int = 100 * 1024 * 1024
+
+
+T = TypeVar("T")
 
 
 class GCSStoragePlugin(StoragePlugin):
@@ -60,37 +69,69 @@ class GCSStoragePlugin(StoragePlugin):
         self.root: str = "/".join(components[1:])
 
         # pyre-ignore
-        credentials, _ = default_async(scopes=self.SCOPES)
+        credentials, _ = default(scopes=self.SCOPES)
         # pyre-ignore
         self.authed_session = AuthorizedSession(credentials)
+        # https://github.com/googleapis/python-storage/issues/253
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=_DEFAULT_CONNECTION_POOLS,
+            pool_maxsize=_DEFAULT_CONNECTION_POOL_SIZE,
+            max_retries=_DEFAULT_CONNECTION_RETRIES,
+            pool_block=True,
+        )
+        self.authed_session.mount("https://", adapter)
+        self.executor = ThreadPoolExecutor(max_workers=_DEFAULT_IO_CONCURRENCY)
         self.retry_strategy = _RetryStrategy(deadline_sec=_DEFAULT_DEADLINE_SEC)
 
     @staticmethod
     def _is_transient_error(e: Exception) -> bool:
+        if (
+            # pyre-ignore
+            isinstance(e, common.InvalidResponse)
+            # pyre-ignore
+            and e.response.status_code in common.RETRYABLE
+        ):
+            return True
         return isinstance(
             e,
             (
-                ConnectionError,
-                aiohttp.ClientConnectionError,
                 # pyre-ignore
                 google.auth.exceptions.TransportError,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.ChunkedEncodingError,
+                requests.exceptions.Timeout,
+                urllib3.exceptions.ProtocolError,
+                ConnectionError,
             ),
         )
 
     @staticmethod
-    async def _recover_resumable_upload(
+    def _recover_resumable_upload(
         # pyre-ignore
         upload: ResumableUpload,
         stream: io.BytesIO,
     ) -> None:
         if upload.invalid:
-            await upload.recover()
+            upload.recover()
         # When ResumableUpload becomes invalid, its .recover() method rewinds
         # the stream. However, certain failures can cause the cursor position
         # to be different from ResumableUpload.bytes_uploaded without rendering
         # the ResumableUpload invalid. In such cases, we need to rewind the
         # stream explicitly.
         stream.seek(upload.bytes_uploaded)
+
+    def _async_partial(
+        self,
+        func: Callable[[Any], T],
+        *args,
+        **kwargs,
+    ) -> Callable[[], Awaitable[T]]:
+        event_loop = asyncio.get_running_loop()
+        return functools.partial(
+            event_loop.run_in_executor,
+            executor=self.executor,
+            func=functools.partial(func, *args, **kwargs),
+        )
 
     async def write(self, io_req: IOReq) -> None:
         # pyre-ignore
@@ -99,7 +140,7 @@ class GCSStoragePlugin(StoragePlugin):
             chunk_size=_DEFAULT_CHUNK_SIZE_BYTE,
         )
         await self.retry_strategy.await_with_retry(
-            func=functools.partial(
+            func=self._async_partial(
                 upload.initiate,
                 transport=self.authed_session,
                 stream=io_req.buf,
@@ -110,12 +151,15 @@ class GCSStoragePlugin(StoragePlugin):
         )
         while not upload.finished:
             await self.retry_strategy.await_with_retry(
-                func=functools.partial(
-                    upload.transmit_next_chunk, transport=self.authed_session
+                func=self._async_partial(
+                    upload.transmit_next_chunk,
+                    transport=self.authed_session,
                 ),
                 is_transient_error=self._is_transient_error,
-                before_retry=functools.partial(
-                    self._recover_resumable_upload, upload=upload, stream=io_req.buf
+                before_retry=self._async_partial(
+                    self._recover_resumable_upload,
+                    upload=upload,
+                    stream=io_req.buf,
                 ),
             )
 
@@ -134,7 +178,7 @@ class GCSStoragePlugin(StoragePlugin):
         )
         while not download.finished:
             await self.retry_strategy.await_with_retry(
-                func=functools.partial(
+                func=self._async_partial(
                     download.consume_next_chunk, transport=self.authed_session
                 ),
                 is_transient_error=self._is_transient_error,
@@ -144,10 +188,7 @@ class GCSStoragePlugin(StoragePlugin):
         raise NotImplementedError()
 
     async def close(self) -> None:
-        await self.authed_session.close()
-
-
-T = TypeVar("T")
+        self.authed_session.close()
 
 
 class _RetryStrategy:
