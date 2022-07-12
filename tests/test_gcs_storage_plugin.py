@@ -16,7 +16,7 @@ from torchsnapshot.test_utils import async_test
 
 logger: logging.Logger = logging.getLogger(__name__)
 
-_TEST_BUCKET = "torchsnapshot-test"
+_TEST_BUCKET = "torchsnapshot-benchmark"
 _TENSOR_SZ = int(100_000_000 / 4)
 
 
@@ -59,13 +59,15 @@ class GCSStoragePluginTest(unittest.TestCase):
         tensor = torch.rand((_TENSOR_SZ,))
         write_req = torchsnapshot.io_types.IOReq(path="tensor")
         torch.save(tensor, write_req.buf)
-
+        write_req.buf.seek(0)
         await plugin.write(io_req=write_req)
 
         read_req = torchsnapshot.io_types.IOReq(path="tensor")
         await plugin.read(io_req=read_req)
+        read_req.buf.seek(0)
         loaded = torch.load(read_req.buf)
         self.assertTrue(torch.allclose(tensor, loaded))
 
-        await plugin.delete(path="tensor")
+        # TODO: bring this back
+        # await plugin.delete(path="tensor")
         await plugin.close()
