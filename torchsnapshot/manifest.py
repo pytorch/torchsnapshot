@@ -6,7 +6,7 @@
 # LICENSE file in the root directory of this source tree.
 
 from dataclasses import asdict, dataclass
-from typing import Dict, List
+from typing import Dict, List, TypeVar
 
 import yaml
 
@@ -105,7 +105,8 @@ class OrderedDictEntry(Entry):
         self.keys = keys
 
 
-Manifest = Dict[str, Entry]
+T = TypeVar("T", bound=Entry)
+Manifest = Dict[str, T]
 
 
 @dataclass

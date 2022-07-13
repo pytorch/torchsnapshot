@@ -93,9 +93,6 @@ class ManifestTest(unittest.TestCase):
         metadata = SnapshotMetadata(
             version="0.0.0",
             world_size=2,
-            # pyre-fixme[6]: For 3rd param expected `Dict[str, Entry]` but got
-            #  `Dict[str, Union[DictEntry, ObjectEntry, ShardedTensorEntry,
-            #  TensorEntry]]`.
             manifest=_MANIFEST,
         )
         yaml_str = metadata.to_yaml()
@@ -103,8 +100,6 @@ class ManifestTest(unittest.TestCase):
         self.assertDictEqual(metadata.manifest, loaded_metadata.manifest)
 
     def test_load_with_same_world_size(self) -> None:
-        # pyre-fixme[6]: For 1st param expected `Dict[str, Entry]` but got
-        #  `Dict[str, Union[DictEntry, ObjectEntry, ShardedTensorEntry, TensorEntry]]`.
         available_entries = get_available_entries(_MANIFEST, 0)
         expected_available_entries = {
             "foo/bar": ObjectEntry(
@@ -156,8 +151,6 @@ class ManifestTest(unittest.TestCase):
         self.assertDictEqual(available_entries, expected_available_entries)
 
     def test_load_with_larger_world_size(self) -> None:
-        # pyre-fixme[6]: For 1st param expected `Dict[str, Entry]` but got
-        #  `Dict[str, Union[DictEntry, ObjectEntry, ShardedTensorEntry, TensorEntry]]`.
         available_entries = get_available_entries(_MANIFEST, 42)
         expected_available_entries = {
             "foo/baz": ObjectEntry(
