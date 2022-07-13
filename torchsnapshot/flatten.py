@@ -5,6 +5,8 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+# pyre-ignore-all-errors[2]: Allow `Any` in type annotations
+
 import itertools
 import os
 from collections import OrderedDict
@@ -13,7 +15,6 @@ from typing import Any, Dict, Tuple
 from .manifest import DictEntry, ListEntry, Manifest, OrderedDictEntry
 
 
-# pyre-ignore[2]: obj can have arbitrary type
 def flatten(obj: Any, prefix: str = "") -> Tuple[Manifest, Dict[str, Any]]:
     """
     Recursively flatten a container in a reversible manner.
@@ -126,7 +127,6 @@ def inflate(manifest: Manifest, flattened: Dict[str, Any], prefix: str = "") -> 
     return combined["/"]
 
 
-# pyre-ignore [2]: Parameter `d` must have a type that does not contain `Any`.
 def _should_flatten_dict(d: Dict[Any, Any]) -> bool:
     """
     Determine if a dict should be flattened.

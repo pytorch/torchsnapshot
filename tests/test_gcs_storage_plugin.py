@@ -5,6 +5,8 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+# pyre-ignore-all-errors[56]
+
 import logging
 import os
 import unittest
@@ -21,9 +23,6 @@ _TENSOR_SZ = int(100_000_000 / 4)
 
 
 class GCSStoragePluginTest(unittest.TestCase):
-    # pyre-fixme[56]: Pyre was not able to infer the type of argument
-    #  `os.environ.get("TORCHSNAPSHOT_ENABLE_GCP_TEST") is None` to decorator factory
-    #  `unittest.skipIf`.
     @unittest.skipIf(os.environ.get("TORCHSNAPSHOT_ENABLE_GCP_TEST") is None, "")
     def test_read_write_via_snapshot(self) -> None:
         path = f"gs://{_TEST_BUCKET}/{uuid.uuid4()}"
@@ -39,9 +38,6 @@ class GCSStoragePluginTest(unittest.TestCase):
         snapshot.restore(app_state)
         self.assertTrue(torch.allclose(tensor, app_state["state"]["tensor"]))
 
-    # pyre-fixme[56]: Pyre was not able to infer the type of argument
-    #  `os.environ.get("TORCHSNAPSHOT_ENABLE_GCP_TEST") is None` to decorator factory
-    #  `unittest.skipIf`.
     @unittest.skipIf(os.environ.get("TORCHSNAPSHOT_ENABLE_GCP_TEST") is None, "")
     @async_test
     async def test_write_read_delete(self) -> None:

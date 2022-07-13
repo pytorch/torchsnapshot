@@ -43,12 +43,8 @@ def url_to_storage_plugin(url_path: str) -> StoragePlugin:
         return GCSStoragePlugin(root=path)
 
     # Registered storage plugins
-    registered_plugins = {
-        ep.name: ep
-        # pyre-fixme[16]: Item `EntryPoints` of `Union[EntryPoints,
-        #  SelectableGroups]` has no attribute `get`.
-        for ep in entry_points().get("storage_plugins", [])
-    }
+    eps = entry_points(group="storage_plugins")
+    registered_plugins = {ep.name: ep for ep in eps}
     if protocol in registered_plugins:
         entry = registered_plugins[protocol]
         factory = entry.load()

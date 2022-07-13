@@ -5,6 +5,8 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+# pyre-ignore-all-errors[56]
+
 import logging
 import os
 import tempfile
@@ -101,12 +103,12 @@ class TorchrecTest(unittest.TestCase):
                 for table in _TABLES
             },
         )
+        pg = dist.group.WORLD
+        assert pg is not None
         return planner.collective_plan(
             module,
             _SHARDERS,
-            # pyre-fixme[6]: For 3rd param expected `ProcessGroup` but got
-            #  `Optional[ProcessGroup]`.
-            dist.group.WORLD,
+            pg,
         )
 
     @classmethod
@@ -161,8 +163,6 @@ class TorchrecTest(unittest.TestCase):
         snapshot.restore(app_state={"dmp": dmp_1})
         assert_state_dict_eq(tc, dmp_0.state_dict(), dmp_1.state_dict())
 
-    # pyre-fixme[56]: Pyre was not able to infer the type of argument
-    #  `torch.cuda.is_available()` to decorator factory `unittest.skipUnless`.
     @unittest.skipUnless(torch.cuda.is_available(), "This test requires GPU to run.")
     def test_torchrec(self) -> None:
         lc = get_pet_launch_config(nproc=4)

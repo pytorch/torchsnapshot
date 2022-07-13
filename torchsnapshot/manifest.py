@@ -6,7 +6,7 @@
 # LICENSE file in the root directory of this source tree.
 
 from dataclasses import asdict, dataclass
-from typing import Dict, List, TypeVar
+from typing import Dict, List, TypeVar, Union
 
 import yaml
 
@@ -89,9 +89,9 @@ class ListEntry(Entry):
 
 @dataclass
 class DictEntry(Entry):
-    keys: List[str]
+    keys: List[Union[str, int]]
 
-    def __init__(self, keys: List[str]) -> None:
+    def __init__(self, keys: List[Union[str, int]]) -> None:
         super().__init__(type="dict")
         self.keys = keys
 

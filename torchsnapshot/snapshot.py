@@ -13,7 +13,7 @@ import itertools
 import logging
 import os
 from collections import defaultdict
-from typing import Any, cast, Dict, List, Optional, Tuple, TypeVar
+from typing import Any, cast, Dict, List, Optional, Tuple
 
 import torch.distributed as dist
 from torch.distributed._shard.sharded_tensor import ShardedTensor
@@ -136,9 +136,7 @@ class Snapshot:
             return new_replicated
         for key, val in app_state.items():
             if isinstance(val, DDP):
-                # pyre-fixme[6]: For 1st param expected `Iterable[Variable[_T]]` but
-                #  got `Union[Tensor, Module]`.
-                ignored = set(getattr(val, "_ddp_params_and_buffers_to_ignore", []))
+                ignored = set(cast(List[str], val.parameters_to_ignore))
                 if not ignored:
                     new_replicated.append(os.path.join(key, "**"))
                     continue

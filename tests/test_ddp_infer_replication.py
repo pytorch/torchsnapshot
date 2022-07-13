@@ -57,12 +57,12 @@ class DDPInferReplicatedTest(unittest.TestCase):
     def _worker_with_params_to_ignore(
         replicated: List[str], expected_replicated: List[str]
     ) -> None:
-        model = torch.nn.Sequential(torch.nn.Linear(4, 2), torch.nn.Linear(2, 1))
         dist.init_process_group(backend="gloo")
-        ddp_model = DDP(model)
+        model = torch.nn.Sequential(torch.nn.Linear(4, 2), torch.nn.Linear(2, 1))
         DDP._set_params_and_buffers_to_ignore_for_model(  # pyre-ignore[16]
-            ddp_model, ["module.0.bias", "module.0.weight"]
+            model, ["module.0.bias", "module.0.weight"]
         )
+        ddp_model = DDP(model)
         app_state: Dict[str, Stateful] = {"ddp": ddp_model, "nonddp": model}
 
         inferred_replicated = Snapshot._infer_replicated(
@@ -83,12 +83,12 @@ class DDPInferReplicatedTest(unittest.TestCase):
     def _worker_with_params_to_ignore_and_all_glob(
         replicated: List[str], expected_replicated: List[str]
     ) -> None:
-        model = torch.nn.Sequential(torch.nn.Linear(4, 2), torch.nn.Linear(2, 1))
         dist.init_process_group(backend="gloo")
-        ddp_model = DDP(model)
+        model = torch.nn.Sequential(torch.nn.Linear(4, 2), torch.nn.Linear(2, 1))
         DDP._set_params_and_buffers_to_ignore_for_model(  # pyre-ignore[16]
-            ddp_model, ["module.0.bias", "module.0.weight"]
+            model, ["module.0.bias", "module.0.weight"]
         )
+        ddp_model = DDP(model)
         app_state: Dict[str, Stateful] = {"ddp": ddp_model, "nonddp": model}
         inferred_replicated = Snapshot._infer_replicated(
             replicated=replicated, app_state=app_state

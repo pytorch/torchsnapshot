@@ -94,13 +94,9 @@ def get_rowwise_sharding_plan(
             for table in TABLES
         },
     )
-    return planner.collective_plan(
-        module,
-        SHARDERS,
-        # pyre-fixme[6]: For 3rd param expected `ProcessGroup` but got
-        #  `Optional[ProcessGroup]`.
-        dist.group.WORLD,
-    )
+    pg = dist.group.WORLD
+    assert pg is not None
+    return planner.collective_plan(module=module, sharders=SHARDERS, pg=pg)
 
 
 def train(work_dir: str, max_epochs: int, snapshot_path: Optional[str] = None) -> None:

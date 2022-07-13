@@ -108,8 +108,8 @@ class ShardedTensorIOPreparerTest(unittest.TestCase):
 
         # For this sharded tensor, each rank writes 1 shard
         tc.assertEqual(len(read_reqs), 1)
-        # pyre-fixme[6]: For 1st param expected `bytes` but got `Union[bytes,
-        #  memoryview]`.
+        if isinstance(buf, memoryview):
+            buf = buf.tobytes()
         loop.run_until_complete(read_reqs[0].buffer_consumer.consume_buffer(buf))
 
         # Verify that the original sharded tensor gets restored
