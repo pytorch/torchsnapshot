@@ -8,7 +8,7 @@
 import argparse
 import os
 import uuid
-from typing import cast, Generator, List, Optional
+from typing import Generator, List, Optional
 
 import torch
 import torch.distributed as dist
@@ -138,8 +138,7 @@ def train(work_dir: str, max_epochs: int, snapshot_path: Optional[str] = None) -
 
     # torchsnapshot: define app state
     app_state = {
-        # dmp overloads the Stateful methods inconsistently
-        "dmp": cast(torchsnapshot.stateful.Stateful, dmp),
+        "dmp": dmp,
         "optim": dmp.fused_optimizer,
         "progress": progress,
     }

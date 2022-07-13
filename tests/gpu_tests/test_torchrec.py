@@ -148,8 +148,6 @@ class TorchrecTest(unittest.TestCase):
         # It's important seed different rank differently
         torch.manual_seed(42 + dist.get_rank())
         dmp_0 = cls._initialize_dmp(device)
-        # pyre-fixme[6]: For 2nd param expected `Dict[str, Stateful]` but got
-        #  `Dict[str, DistributedModelParallel]`.
         snapshot = torchsnapshot.Snapshot.take(path=path, app_state={"dmp": dmp_0})
 
         torch.manual_seed(777 + dist.get_rank())
@@ -160,8 +158,6 @@ class TorchrecTest(unittest.TestCase):
 
         tc.assertFalse(check_state_dict_eq(dmp_0.state_dict(), dmp_1.state_dict()))
 
-        # pyre-fixme[6]: For 1st param expected `Dict[str, Stateful]` but got
-        #  `Dict[str, DistributedModelParallel]`.
         snapshot.restore(app_state={"dmp": dmp_1})
         assert_state_dict_eq(tc, dmp_0.state_dict(), dmp_1.state_dict())
 

@@ -44,8 +44,6 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 SNAPSHOT_METADATA_FNAME = ".snapshot_metadata"
 
-T = TypeVar("T")
-
 
 class Snapshot:
     """

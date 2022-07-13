@@ -31,15 +31,11 @@ class GCSStoragePluginTest(unittest.TestCase):
 
         tensor = torch.rand((_TENSOR_SZ,))
         app_state = {"state": torchsnapshot.StateDict(tensor=tensor)}
-        # pyre-fixme[6]: For 2nd param expected `Dict[str, Stateful]` but got
-        #  `Dict[str, StateDict]`.
         snapshot = torchsnapshot.Snapshot.take(path=path, app_state=app_state)
 
         app_state["state"]["tensor"] = torch.rand((_TENSOR_SZ,))
         self.assertFalse(torch.allclose(tensor, app_state["state"]["tensor"]))
 
-        # pyre-fixme[6]: For 1st param expected `Dict[str, Stateful]` but got
-        #  `Dict[str, StateDict]`.
         snapshot.restore(app_state)
         self.assertTrue(torch.allclose(tensor, app_state["state"]["tensor"]))
 

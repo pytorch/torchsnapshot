@@ -5,7 +5,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, Dict
+from typing import Any, Dict, TypeVar
 
 from typing_extensions import Protocol, runtime_checkable
 
@@ -19,4 +19,5 @@ class Stateful(Protocol):
         ...
 
 
-AppState = Dict[str, Stateful]
+T = TypeVar("T", bound=Stateful)
+AppState = Dict[str, T]
