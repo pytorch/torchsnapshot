@@ -7,7 +7,6 @@
 
 import asyncio
 import copy
-import io
 import unittest
 from typing import List, Tuple
 
@@ -35,7 +34,7 @@ class ShardedTensorIOPreparerTest(unittest.TestCase):
         dim_1: int = 16
 
         dist.init_process_group(backend="gloo")
-        torch.manual_seed(42)
+        torch.manual_seed(42 + dist.get_rank())
         global_tensor = torch.rand((dim_0, dim_1))
 
         rank = dist.get_rank()

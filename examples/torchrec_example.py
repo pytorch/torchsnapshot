@@ -173,6 +173,12 @@ def train(work_dir: str, max_epochs: int, snapshot_path: Optional[str] = None) -
         print(f"Final loss: {final_loss}")
     snapshot.restore(app_state)
 
+    # torchsnapshot: examine snapshot content
+    if dist.get_rank() == 0:
+        entries = snapshot.get_manifest()
+        for path in entries.keys():
+            print(path)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

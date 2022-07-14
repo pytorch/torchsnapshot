@@ -34,14 +34,15 @@ from torchrec.distributed.types import ShardingPlan, ShardingType
 from torchrec.models.dlrm import DLRM, DLRMTrain
 from torchsnapshot.io_preparer import ShardedTensorIOPreparer
 from torchsnapshot.test_utils import (
+    _tensor_eq,
     assert_state_dict_eq,
     check_state_dict_eq,
     get_pet_launch_config,
 )
 
-# Each embedding table is about 1GB in size
+# Each embedding table is about 100MB in size
 _EMBEDDING_DIM = 128
-_NUM_EMBEDDINGS = 2_000_000
+_NUM_EMBEDDINGS = 200_000
 _DENSE_IN_FEATURES = 128
 _NUM_CLASSES = 8
 
@@ -133,12 +134,10 @@ class TorchrecTest(unittest.TestCase):
         )
 
     @classmethod
-    def _worker(cls, path: str, max_shard_sz_bytes: int) -> None:
+    def _test_take_restore(cls, path: str, max_shard_sz_bytes: int) -> None:
+        os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
         logger = logging.getLogger("torchsnapshot.scheduler")
         logger.setLevel(logging.DEBUG)
-
-        # Uncomment this for ease of debugging
-        os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
         dist.init_process_group(backend="nccl")
         local_rank = int(os.environ["LOCAL_RANK"])
@@ -147,28 +146,87 @@ class TorchrecTest(unittest.TestCase):
 
         ShardedTensorIOPreparer.DEFAULT_MAX_SHARD_SIZE_BYTES = max_shard_sz_bytes
 
-        # It's important seed different rank differently
+        # First, initialize a dmp with a certain random seed
+        # IMPORTANT: seed different rank differently
         torch.manual_seed(42 + dist.get_rank())
         dmp_0 = cls._initialize_dmp(device)
+
+        # Take a snapshot of dmp_0
         snapshot = torchsnapshot.Snapshot.take(path=path, app_state={"dmp": dmp_0})
 
+        # Initialize another dmp with a different random seed
         torch.manual_seed(777 + dist.get_rank())
         dmp_1 = cls._initialize_dmp(device)
 
         tc = unittest.TestCase()
         tc.maxDiff = None
 
+        # Sanity check that the state dicts of the two dmps are different
         tc.assertFalse(check_state_dict_eq(dmp_0.state_dict(), dmp_1.state_dict()))
 
+        # Restore dmp_1 with dmp_0's snapshot, after which the state dicts of
+        # the two dmps should be the same
         snapshot.restore(app_state={"dmp": dmp_1})
         assert_state_dict_eq(tc, dmp_0.state_dict(), dmp_1.state_dict())
 
+        # Initialize another dmp to verify the behavior of snapshot.loadd_entry
+        del dmp_1
+        torch.manual_seed(420 + dist.get_rank())
+        dmp_2 = cls._initialize_dmp(device)
+
+        t1_weight_key = (
+            "model.sparse_arch.embedding_bag_collection.embedding_bags.t1.weight"
+        )
+        dmp_0_t1_weight = dmp_0.state_dict()[t1_weight_key]
+        dmp_2_t1_weight = dmp_2.state_dict()[t1_weight_key]
+
+        # Since dmp_0 and dmp_2 were initialized with different random seeds,
+        # their t1 weight should be different
+        tc.assertFalse(_tensor_eq(dmp_2_t1_weight, dmp_0_t1_weight))
+
+        # Load dmp_2's t1 weight from dmp_1's snapshot, after which the t1
+        # weights of dmp_0 and dmp_2 should be the same
+        t1_weight_entry_path = os.path.join("0/dmp", t1_weight_key)
+        snapshot.read_object(path=t1_weight_entry_path, obj_out=dmp_2_t1_weight)
+        tc.assertTrue(_tensor_eq(dmp_2_t1_weight, dmp_0_t1_weight))
+
+    @classmethod
+    def _test_resharding(cls, path: str) -> None:
+        dist.init_process_group(backend="nccl")
+        local_rank = int(os.environ["LOCAL_RANK"])
+        device = torch.device(f"cuda:{local_rank}")
+        torch.cuda.set_device(device)
+
+        tc = unittest.TestCase()
+        tc.maxDiff = None
+
+        dmp_0 = cls._initialize_dmp(device)
+        snapshot = torchsnapshot.Snapshot(path=path)
+        snapshot.restore(app_state={"dmp": dmp_0})
+        # TODO: verify weight
+
+        torch.manual_seed(420 + dist.get_rank())
+        dmp_1 = cls._initialize_dmp(device)
+
+        t1_weight_key = (
+            "model.sparse_arch.embedding_bag_collection.embedding_bags.t1.weight"
+        )
+        dmp_0_t1_weight = dmp_0.state_dict()[t1_weight_key]
+        dmp_1_t1_weight = dmp_1.state_dict()[t1_weight_key]
+        tc.assertFalse(_tensor_eq(dmp_1_t1_weight, dmp_0_t1_weight))
+
+        t1_weight_entry_path = os.path.join("0/dmp", t1_weight_key)
+        snapshot.read_object(path=t1_weight_entry_path, obj_out=dmp_1_t1_weight)
+        tc.assertTrue(_tensor_eq(dmp_1_t1_weight, dmp_0_t1_weight))
+
     @unittest.skipUnless(torch.cuda.is_available(), "This test requires GPU to run.")
     def test_torchrec(self) -> None:
-        lc = get_pet_launch_config(nproc=4)
         for max_shard_sz_bytes in [16 * 1024 * 1024, 16 * 1024 * 1024 - 1]:
             with self.subTest(max_shard_sz_bytes=max_shard_sz_bytes):
                 with tempfile.TemporaryDirectory() as path:
-                    pet.elastic_launch(lc, entrypoint=self._worker)(
+                    lc = get_pet_launch_config(nproc=4)
+                    pet.elastic_launch(lc, entrypoint=self._test_take_restore)(
                         path, max_shard_sz_bytes
                     )
+                    lc = get_pet_launch_config(nproc=3)
+                    pet.elastic_launch(lc, entrypoint=self._test_resharding)(path)

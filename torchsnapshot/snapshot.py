@@ -6,6 +6,8 @@
 # LICENSE file in the root directory of this source tree.
 
 import asyncio
+
+import copy
 import fnmatch
 import functools
 import io
@@ -13,8 +15,9 @@ import itertools
 import logging
 import os
 from collections import defaultdict
-from typing import Any, cast, Dict, List, Optional, Tuple
+from typing import Any, cast, Dict, List, Optional, Tuple, TypeVar
 
+import torch
 import torch.distributed as dist
 from torch.distributed._shard.sharded_tensor import ShardedTensor
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -32,6 +35,7 @@ from .manifest import (
 from .pg_wrapper import PGWrapper
 from .rng_state import RNGState
 from .scheduler import (
+    _MAX_PER_RANK_MEMORY_BUDGET_BYTES,
     get_process_memory_budget_bytes,
     sync_execute_read_reqs,
     sync_execute_write_reqs,
@@ -43,6 +47,8 @@ from .version import __version__ as torchsnapshot_version
 logger: logging.Logger = logging.getLogger(__name__)
 
 SNAPSHOT_METADATA_FNAME = ".snapshot_metadata"
+
+T = TypeVar("T")
 
 
 class Snapshot:
@@ -128,6 +134,7 @@ class Snapshot:
         """
         self.path: str = path
         self.pg: Optional[dist.ProcessGroup] = pg
+        self._metadata: Optional[SnapshotMetadata] = None
 
     @staticmethod
     def _infer_replicated(replicated: List[str], app_state: AppState) -> List[str]:
@@ -255,17 +262,23 @@ class Snapshot:
             event_loop=event_loop,
         )
 
+        metadata = SnapshotMetadata(
+            version=torchsnapshot_version,
+            world_size=pg_wrapper.get_world_size(),
+            manifest=manifest,
+        )
         if rank == 0:
             cls._write_snapshot_metadata(
-                world_size=pg_wrapper.get_world_size(),
-                manifest=manifest,
+                snapshot_metadata=metadata,
                 storage=storage,
                 event_loop=event_loop,
             )
 
         storage.sync_close(event_loop=event_loop)
         pg_wrapper.barrier()
-        return cls(path=path, pg=pg)
+        snapshot = cls(path=path, pg=pg)
+        snapshot._metadata = metadata
+        return snapshot
 
     def restore(self, app_state: AppState) -> None:
         """
@@ -284,14 +297,10 @@ class Snapshot:
         app_state = app_state.copy()
         rng_state_item = self._pop_rng_state(app_state=app_state)
 
-        # TODO: cache this for newly created snapshot
-        snapshot_metadata = self._read_snapshot_metadata(
-            storage=storage, event_loop=event_loop
-        )
-        manifest = snapshot_metadata.manifest
-        available_entries = get_available_entries(manifest, rank)
-
         global_keys = self._gather_keys(keys=list(app_state.keys()), pg=self.pg)
+        available_entries = get_available_entries(
+            manifest=self.metadata.manifest, rank=rank
+        )
 
         for key in global_keys:
             self._load_stateful(
@@ -318,6 +327,116 @@ class Snapshot:
                 event_loop=event_loop,
             )
         storage.sync_close(event_loop=event_loop)
+        event_loop.close()
+
+    @property
+    def metadata(self) -> SnapshotMetadata:
+        if self._metadata is None:
+            event_loop = asyncio.new_event_loop()
+            storage = url_to_storage_plugin_in_event_loop(
+                url_path=self.path, event_loop=event_loop
+            )
+            self._metadata = self._read_snapshot_metadata(
+                storage=storage, event_loop=event_loop
+            )
+            storage.sync_close(event_loop=event_loop)
+            event_loop.close()
+        return cast(SnapshotMetadata, self._metadata)
+
+    def read_object(self, path: str, obj_out: Optional[T] = None) -> T:
+        """
+        Read a persisted object from the snapshot's content.
+
+        The persisted object to read is specified by its path in the snapshot
+        metadata. Available paths can be obtained via `snapshot.get_manifest()`.
+
+        A path in snapshot metadata follows the following format:
+
+            RANK/STATEFUL_NAME/STATE_DICT_KEY[/NESTED_CONTAINER_KEY ...]
+
+        The rank only matters when the persisted object is "per-rank".
+        Arbitrary rank can be used when the persisted object is "replicated" or
+        "sharded".
+
+        If the persisted object is a sharded tensor, `obj_out` must be
+        supplied. `read_object` will correctly populate `obj_out`'s local
+        shards according to its sharding spec.
+
+        Args:
+            path: The path to the persisted object.
+            obj_out: If specified and the object type supports in-place load,
+                `read_object` will directly read the persisted object into
+                `obj_out`'s buffer.
+
+        Returns:
+            The object read from the snapshot's content.
+        """
+        rank_str, unranked_path = path.split("/", 1)
+        rank = int(rank_str)
+        # Transform the manifest such that (1) replicated entries are made
+        # available to the rank (2) sharded tensor shards saved by all ranks
+        # are made available to the rank. The availability of the entries is
+        # determined from the perspective of the rank specified in the path.
+        manifest = get_available_entries(manifest=self.metadata.manifest, rank=rank)
+
+        if unranked_path not in manifest:
+            # TODO: show candidates based on edit distance
+            raise RuntimeError(
+                f'The supplied path "{path}" does not exist in the snapshot\'s manifest. '
+                "Please verify the available paths within the snapshot via `snapshot.get_manifest()`."
+            )
+        if not isinstance(obj_out, (torch.Tensor, ShardedTensor)):
+            logger.warning(
+                f"`obj_out` is of type {type(obj_out)}, which does not support in-place load. "
+                "Its state won't be changed after load. The loaded object will be returned."
+            )
+
+        event_loop = asyncio.new_event_loop()
+        pg_wrapper = PGWrapper(self.pg)
+        storage = url_to_storage_plugin_in_event_loop(
+            url_path=self.path, event_loop=event_loop
+        )
+
+        read_reqs = prepare_read(
+            entry=manifest[unranked_path],
+            obj_out=obj_out,
+        )
+        box = []
+        for read_req in read_reqs:
+            buffer_consumer = read_req.buffer_consumer
+            if isinstance(buffer_consumer, ObjectBufferConsumer):
+                # ObjectBufferConsumer deals with objects that can not be
+                # in-place restored. We need to replace the original object
+                # in the flattened dictionary with the object materialized
+                # by the buffer consumer.
+                buffer_consumer.set_consume_callback(functools.partial(box.append))
+
+        sync_execute_read_reqs(
+            read_reqs=read_reqs,
+            storage=storage,
+            memory_budget_bytes=_MAX_PER_RANK_MEMORY_BUDGET_BYTES,
+            rank=pg_wrapper.get_rank(),
+            event_loop=event_loop,
+        )
+        storage.sync_close(event_loop=event_loop)
+        event_loop.close()
+        if len(box) != 0:
+            if len(box) != 1:
+                raise AssertionError(
+                    f"Expect to load a single object from an entry (got {len(box)})."
+                )
+            return box[0]
+        else:
+            return cast(T, obj_out)
+
+    def get_manifest(self) -> Dict[str, Entry]:
+        """
+        Returns the snapshot's manifest.
+
+        Returns:
+            The snapshot's manifest.
+        """
+        return copy.deepcopy(self.metadata.manifest)
 
     @staticmethod
     def _calculate_replicated_entries(
@@ -446,15 +565,10 @@ path "{logical_path}" which was not available to rank {rank}.
 
     @staticmethod
     def _write_snapshot_metadata(
-        world_size: int,
-        manifest: Manifest,
+        snapshot_metadata: SnapshotMetadata,
         storage: StoragePlugin,
         event_loop: asyncio.AbstractEventLoop,
     ) -> None:
-        # TODO: use semantic versioning for backward compatibility
-        snapshot_metadata = SnapshotMetadata(
-            version=torchsnapshot_version, world_size=world_size, manifest=manifest
-        )
         io_req = IOReq(
             path=SNAPSHOT_METADATA_FNAME,
             buf=io.BytesIO(snapshot_metadata.to_yaml().encode("utf-8")),
