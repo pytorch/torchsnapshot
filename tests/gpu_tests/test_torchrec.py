@@ -134,7 +134,9 @@ class TorchrecTest(unittest.TestCase):
         )
 
     @classmethod
-    def _test_take_restore(cls, path: str, max_shard_sz_bytes: int) -> None:
+    def _test_take_restore(
+        cls, path: str, max_shard_sz_bytes: int, use_async: bool
+    ) -> None:
         os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
         logger = logging.getLogger("torchsnapshot.scheduler")
         logger.setLevel(logging.DEBUG)
@@ -152,7 +154,13 @@ class TorchrecTest(unittest.TestCase):
         dmp_0 = cls._initialize_dmp(device)
 
         # Take a snapshot of dmp_0
-        snapshot = torchsnapshot.Snapshot.take(path=path, app_state={"dmp": dmp_0})
+        if use_async:
+            future = torchsnapshot.Snapshot.async_take(
+                path=path, app_state={"dmp": dmp_0}
+            )
+            snapshot = future.wait()
+        else:
+            snapshot = torchsnapshot.Snapshot.take(path=path, app_state={"dmp": dmp_0})
 
         # Initialize another dmp with a different random seed
         torch.manual_seed(777 + dist.get_rank())
@@ -226,7 +234,17 @@ class TorchrecTest(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as path:
                     lc = get_pet_launch_config(nproc=4)
                     pet.elastic_launch(lc, entrypoint=self._test_take_restore)(
-                        path, max_shard_sz_bytes
+                        path, max_shard_sz_bytes, False
                     )
-                    lc = get_pet_launch_config(nproc=3)
+                    pet.elastic_launch(lc, entrypoint=self._test_resharding)(path)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "This test requires GPU to run.")
+    def test_torchrec_async(self) -> None:
+        for max_shard_sz_bytes in [16 * 1024 * 1024, 16 * 1024 * 1024 - 1]:
+            with self.subTest(max_shard_sz_bytes=max_shard_sz_bytes):
+                with tempfile.TemporaryDirectory() as path:
+                    lc = get_pet_launch_config(nproc=4)
+                    pet.elastic_launch(lc, entrypoint=self._test_take_restore)(
+                        path, max_shard_sz_bytes, True
+                    )
                     pet.elastic_launch(lc, entrypoint=self._test_resharding)(path)
