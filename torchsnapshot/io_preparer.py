@@ -245,7 +245,10 @@ class TensorBufferStager(BufferStager):
                 )
             else:
                 cpu_tensor = self.tensor.detach().to("cpu")
-        elif self.tensor.nelement() != self.tensor.storage().size():
+        elif (
+            self.tensor.nelement() != self.tensor.storage().size()
+            or self.entry.serializer == Serializer.BUFFER_PROTOCOL
+        ):
             # Avoid saving the entire storage when saving a view
             cpu_tensor = self.tensor.detach().clone()
         else:

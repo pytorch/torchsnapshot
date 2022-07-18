@@ -90,12 +90,58 @@ class _WritePipeline:
         return self
 
 
+class PendingIOWork:
+    def __init__(
+        self,
+        ready_for_io: Set[_WritePipeline],
+        io_tasks: Set[asyncio.Task],
+        rank: int,
+        memory_budget_bytes: int,
+        begin_ts: float,
+        bytes_written: int,
+    ) -> None:
+        self.ready_for_io = ready_for_io
+        self.io_tasks = io_tasks
+        self.rank = rank
+        self.memory_budget_bytes = memory_budget_bytes
+        self.begin_ts = begin_ts
+        self.bytes_written = bytes_written
+
+    async def complete(self) -> None:
+        while len(self.ready_for_io) + len(self.io_tasks) != 0:
+            done, _ = await asyncio.wait(
+                self.io_tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+            for d in done:
+                write_pipeline: _WritePipeline = d.result()
+                self.memory_budget_bytes += cast(int, write_pipeline.buf_sz_bytes)
+                self.bytes_written += cast(int, write_pipeline.buf_sz_bytes)
+                self.io_tasks.remove(d)
+                for p in set(self.ready_for_io):
+                    if len(self.io_tasks) >= _MAX_PER_RANK_IO_CONCURRENCY:
+                        break
+                    io_task = asyncio.create_task(p.write_buffer())
+                    self.io_tasks.add(io_task)
+                    self.ready_for_io.remove(p)
+            logger.debug(
+                f"Rank {self.rank}\t"
+                f"ready_for_io: {len(self.ready_for_io)}\t"
+                f"io_tasks: {len(self.io_tasks)}\t"
+                f"memory_budget_bytes: {self.memory_budget_bytes}"
+            )
+        mbps = (self.bytes_written / 1024**2) / (time.monotonic() - self.begin_ts)
+        logger.info(f"Rank {self.rank} finished saving. Throughput: {mbps:.2f}MB/s")
+
+    def sync_complete(self, event_loop: asyncio.AbstractEventLoop) -> None:
+        event_loop.run_until_complete(self.complete())
+
+
 async def execute_write_reqs(
     write_reqs: List[WriteReq],
     storage: StoragePlugin,
     memory_budget_bytes: int,
     rank: int,
-) -> None:
+) -> PendingIOWork:
     # This function fulfills the write requests by moving them through the
     # following stages with the specified memory budget:
     #
@@ -105,9 +151,8 @@ async def execute_write_reqs(
     # io - Writing the buffer to the storage.
     # done (implicit) - The write request has been fulfilled.
     #
-    # TODO: for async checkpointing, as soon as all write requests move past
-    # the staging stage, this function can return and continue writing to
-    # storage in the background.
+    # It returns as soon as all write requests are moved past the staging
+    # stage.
     ready_for_staging = {_WritePipeline(write_req, storage) for write_req in write_reqs}
     staging_tasks = set()
     ready_for_io = set()
@@ -154,10 +199,7 @@ async def execute_write_reqs(
         executor=executor,
     )
 
-    while (
-        len(ready_for_staging) + len(staging_tasks) + len(ready_for_io) + len(io_tasks)
-        != 0
-    ):
+    while len(ready_for_staging) + len(staging_tasks) != 0:
         done, _ = await asyncio.wait(
             staging_tasks | io_tasks, return_when=asyncio.FIRST_COMPLETED
         )
@@ -171,12 +213,6 @@ async def execute_write_reqs(
                 # torch.save, the staging cost is 2x the buffer size.
                 memory_budget_bytes += write_pipeline.staging_cost_bytes
                 memory_budget_bytes -= cast(int, write_pipeline.buf_sz_bytes)
-
-                if len(ready_for_staging) == 0 and len(staging_tasks) == 0:
-                    logger.debug(
-                        f"Rank {rank} finished staging in "
-                        f"{time.monotonic() - begin_ts:.2f} seconds"
-                    )
             elif d in io_tasks:
                 io_tasks.remove(d)
                 write_pipeline: _WritePipeline = d.result()
@@ -193,7 +229,6 @@ async def execute_write_reqs(
                 memory_budget_bytes=memory_budget_bytes,
                 executor=executor,
             )
-
         logger.debug(
             f"Rank {rank}\t"
             f"ready_for_staging: {len(ready_for_staging)}\t"
@@ -203,10 +238,18 @@ async def execute_write_reqs(
             f"memory_budget_bytes: {memory_budget_bytes}"
         )
 
-    mbps = (bytes_written / 1e6) / (time.monotonic() - begin_ts)
-    logger.info(f"Rank {rank} finished saving. Throughput: {mbps:.2f}MB/s")
-
+    logger.debug(
+        f"Rank {rank} finished staging in " f"{time.monotonic() - begin_ts:.2f} seconds"
+    )
     executor.shutdown()
+    return PendingIOWork(
+        ready_for_io=ready_for_io,
+        io_tasks=io_tasks,
+        rank=rank,
+        memory_budget_bytes=memory_budget_bytes,
+        begin_ts=begin_ts,
+        bytes_written=bytes_written,
+    )
 
 
 def sync_execute_write_reqs(
@@ -215,10 +258,10 @@ def sync_execute_write_reqs(
     memory_budget_bytes: int,
     rank: int,
     event_loop: Optional[asyncio.AbstractEventLoop] = None,
-) -> None:
+) -> PendingIOWork:
     if event_loop is None:
         event_loop = asyncio.new_event_loop()
-    event_loop.run_until_complete(
+    return event_loop.run_until_complete(
         execute_write_reqs(
             write_reqs=write_reqs,
             storage=storage,

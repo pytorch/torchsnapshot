@@ -14,13 +14,20 @@ import io
 import itertools
 import logging
 import os
+import sys
+import traceback
+
 from collections import defaultdict
+from datetime import timedelta
+from threading import Thread
 from typing import Any, cast, Dict, List, Optional, Tuple, TypeVar
 
 import torch
 import torch.distributed as dist
 from torch.distributed._shard.sharded_tensor import ShardedTensor
 from torch.nn.parallel import DistributedDataParallel as DDP
+
+from .dist_store import get_or_create_store, LinearBarrier
 
 from .flatten import flatten, inflate
 from .io_preparer import ObjectBufferConsumer, prepare_read, prepare_write
@@ -37,6 +44,7 @@ from .rng_state import RNGState
 from .scheduler import (
     _MAX_PER_RANK_MEMORY_BUDGET_BYTES,
     get_process_memory_budget_bytes,
+    PendingIOWork,
     sync_execute_read_reqs,
     sync_execute_write_reqs,
 )
@@ -180,12 +188,95 @@ class Snapshot:
             The newly taken snapshot.
         """
         event_loop = asyncio.new_event_loop()
-        pg_wrapper = PGWrapper(pg)
-        path = cls._collate_path(path, pg)
+        pg_wrapper = PGWrapper(pg=pg)
+        path = cls._collate_path(path=path, pg_wrapper=pg_wrapper)
         storage = url_to_storage_plugin_in_event_loop(
             url_path=path, event_loop=event_loop
         )
-        replicated = replicated or []
+        pending_io_work, metadata = cls._take_impl(
+            path=path,
+            app_state=app_state,
+            replicated=replicated or [],
+            pg_wrapper=PGWrapper(pg),
+            storage=storage,
+            event_loop=event_loop,
+        )
+        pending_io_work.sync_complete(event_loop=event_loop)
+
+        # IMPORTANT: commit snapshot metadata only after all ranks complete writing
+        pg_wrapper.barrier()
+        if pg_wrapper.get_rank() == 0:
+            cls._write_snapshot_metadata(
+                snapshot_metadata=metadata,
+                storage=storage,
+                event_loop=event_loop,
+            )
+
+        storage.sync_close(event_loop=event_loop)
+        event_loop.close()
+        snapshot = cls(path=path, pg=pg)
+        snapshot._metadata = metadata
+        return snapshot
+
+    @classmethod
+    def async_take(
+        cls,
+        path: str,
+        app_state: AppState,
+        pg: Optional[dist.ProcessGroup] = None,
+        replicated: Optional[List[str]] = None,
+    ) -> "PendingSnapshot":
+        """
+        Take a snapshot from the program state.
+
+        Args:
+            app_state: The program state to take the snapshot from.
+            path: The location to save the snapshot.
+            pg: The process group for the processes taking the snapshot.
+                When unspecified:
+                    - If distributed is initialized, the global process group will be used.
+                    - If distributed is not initialized, single process is assumed.
+            replicated: A list of glob patterns for hinting the matching paths
+                as replicated. Note that patterns not specified by all ranks
+                are ignored.
+
+        Returns:
+            The newly taken snapshot.
+        """
+        event_loop = asyncio.new_event_loop()
+        pg_wrapper = PGWrapper(pg=pg)
+        path = cls._collate_path(path=path, pg_wrapper=pg_wrapper)
+        storage = url_to_storage_plugin_in_event_loop(
+            url_path=path, event_loop=event_loop
+        )
+        pending_io_work, metadata = cls._take_impl(
+            path=path,
+            app_state=app_state,
+            replicated=replicated or [],
+            pg_wrapper=PGWrapper(pg),
+            storage=storage,
+            event_loop=event_loop,
+        )
+        # PendingSnapshot is responsible for closing `storage` and `event_loop`
+        return PendingSnapshot(
+            path=path,
+            pending_io_work=pending_io_work,
+            pg_wrapper=pg_wrapper,
+            metadata=metadata,
+            storage=storage,
+            event_loop=event_loop,
+        )
+
+    @classmethod
+    def _take_impl(
+        cls,
+        path: str,
+        app_state: AppState,
+        replicated: List[str],
+        pg_wrapper: PGWrapper,
+        storage: StoragePlugin,
+        event_loop: asyncio.AbstractEventLoop,
+    ) -> Tuple[PendingIOWork, SnapshotMetadata]:
         # TODO: validate app_state
         # TODO: verify replicated across ranks
         replicated = cls._infer_replicated(replicated, app_state)
@@ -194,7 +285,6 @@ class Snapshot:
         rng_state_item = cls._pop_rng_state(app_state=app_state)
         rng_state_dict = None
 
-        rank = pg_wrapper.get_rank()
         manifest: Manifest = {}
         flattened: Dict[str, Any] = {}
 
@@ -217,7 +307,9 @@ class Snapshot:
         # potential interleaving of different collectives, we first gather the
         # global key list, then invoke .state_dict() on stateful objects in
         # order with synchronization.
-        global_keys = cls._gather_keys(keys=list(app_state.keys()), pg=pg)
+        global_keys = cls._gather_keys(
+            keys=list(app_state.keys()), pg_wrapper=pg_wrapper
+        )
 
         for key in global_keys:
             if key in app_state:
@@ -254,31 +346,19 @@ class Snapshot:
         manifest = cls._gather_manifest(manifest=manifest, pg=pg_wrapper)
 
         memory_budget_bytes = get_process_memory_budget_bytes(pg=pg_wrapper)
-        sync_execute_write_reqs(
+        pending_io_work = sync_execute_write_reqs(
             write_reqs=write_reqs,
             storage=storage,
             memory_budget_bytes=memory_budget_bytes,
             rank=pg_wrapper.get_rank(),
             event_loop=event_loop,
         )
-
         metadata = SnapshotMetadata(
             version=torchsnapshot_version,
             world_size=pg_wrapper.get_world_size(),
             manifest=manifest,
         )
-        if rank == 0:
-            cls._write_snapshot_metadata(
-                snapshot_metadata=metadata,
-                storage=storage,
-                event_loop=event_loop,
-            )
-
-        storage.sync_close(event_loop=event_loop)
-        pg_wrapper.barrier()
-        snapshot = cls(path=path, pg=pg)
-        snapshot._metadata = metadata
-        return snapshot
+        return pending_io_work, metadata
 
     def restore(self, app_state: AppState) -> None:
         """
@@ -297,7 +377,9 @@ class Snapshot:
         app_state = app_state.copy()
         rng_state_item = self._pop_rng_state(app_state=app_state)
 
-        global_keys = self._gather_keys(keys=list(app_state.keys()), pg=self.pg)
+        global_keys = self._gather_keys(
+            keys=list(app_state.keys()), pg_wrapper=pg_wrapper
+        )
         available_entries = get_available_entries(
             manifest=self.metadata.manifest, rank=rank
         )
@@ -585,23 +667,21 @@ path "{logical_path}" which was not available to rank {rank}.
         return SnapshotMetadata.from_yaml(yaml_str)
 
     @staticmethod
-    def _collate_path(path: str, pg: Optional[dist.ProcessGroup]) -> str:
+    def _collate_path(path: str, pg_wrapper: PGWrapper) -> str:
         obj_list = [path]
-        PGWrapper(pg).broadcast_object_list(obj_list, src=0)
+        pg_wrapper.broadcast_object_list(obj_list, src=0)
         if obj_list[0] != path:
             logger.warning(
-                f"Rank {PGWrapper(pg).get_rank()} specified a path ({path}) "
+                f"Rank {pg_wrapper.get_rank()} specified a path ({path}) "
                 f"different from rank 0 ({obj_list[0]}). Using path specified by rank 0."
             )
         return obj_list[0]
 
     @staticmethod
-    def _gather_keys(keys: List[str], pg: Optional[dist.ProcessGroup]) -> List[str]:
-        gathered_keys = [None] * PGWrapper(pg).get_world_size()
+    def _gather_keys(keys: List[str], pg_wrapper: PGWrapper) -> List[str]:
         # pyre-ignore
-        gathered_keys[PGWrapper(pg).get_rank()] = keys
-        PGWrapper(pg).all_gather_object(gathered_keys, keys)
-        # pyre-ignore
+        gathered_keys: List[List[str]] = [None] * pg_wrapper.get_world_size()
+        pg_wrapper.all_gather_object(gathered_keys, keys)
         return sorted(set(itertools.chain.from_iterable(gathered_keys)))
 
     @staticmethod
@@ -646,3 +726,93 @@ path "{logical_path}" which was not available to rank {rank}.
                 global_manifest[os.path.join(str(rank), logical_path)] = entry
 
         return global_manifest
+
+
+class PendingSnapshot:
+    DEFAULT_BARRIER_TIMEOUT = timedelta(seconds=1800)
+
+    def __init__(
+        self,
+        path: str,
+        pending_io_work: PendingIOWork,
+        pg_wrapper: PGWrapper,
+        metadata: SnapshotMetadata,
+        storage: StoragePlugin,
+        event_loop: asyncio.AbstractEventLoop,
+    ) -> None:
+        self.path = path
+        self.pg: Optional[dist.ProcessGroup] = pg_wrapper.pg
+        # pyre-ignore
+        self.exc_info: Optional[Any] = None
+        self._done = False
+
+        self.thread = Thread(
+            target=self._complete_snapshot,
+            kwargs={
+                "path": path,
+                "rank": pg_wrapper.get_rank(),
+                "world_size": pg_wrapper.get_world_size(),
+                "pending_io_work": pending_io_work,
+                "metadata": metadata,
+                "storage": storage,
+                "event_loop": event_loop,
+                "store": get_or_create_store(pg_wrapper=pg_wrapper),
+            },
+        )
+        self.thread.start()
+
+    def _complete_snapshot(
+        self,
+        path: str,
+        rank: int,
+        world_size: int,
+        pending_io_work: PendingIOWork,
+        metadata: SnapshotMetadata,
+        storage: StoragePlugin,
+        event_loop: asyncio.AbstractEventLoop,
+        store: dist.TCPStore,
+    ) -> None:
+        # WARNING: do not use any collectives in this method
+
+        # Use a dist.Store-based barrier for synchronization so that the
+        # snapshot can be committed in the background thread.
+        barrier = LinearBarrier(
+            prefix=f"torchsnapshot_{path}",
+            store=store,
+            rank=rank,
+            world_size=world_size,
+            leader_rank=0,
+        )
+        try:
+            pending_io_work.sync_complete(event_loop)
+            barrier.arrive(timeout=self.DEFAULT_BARRIER_TIMEOUT)
+
+            if rank == 0:
+                Snapshot._write_snapshot_metadata(
+                    snapshot_metadata=metadata,
+                    storage=storage,
+                    event_loop=event_loop,
+                )
+            barrier.depart(timeout=self.DEFAULT_BARRIER_TIMEOUT)
+        except Exception as e:
+            barrier.report_error(str(e))
+            self.exc_info = sys.exc_info()
+            logger.warning(
+                f"Encountered exception while taking snapshot asynchronously:\n{e}"
+            )
+        finally:
+            storage.sync_close(event_loop=event_loop)
+            event_loop.close()
+        self._done = True
+
+    def wait(self) -> Snapshot:
+        self.thread.join()
+        if self.exc_info is not None:
+            formatted = "".join(traceback.format_exception(*self.exc_info))
+            raise RuntimeError(
+                f"Encountered exception while taking snapshot asynchronously:\n{formatted}"
+            )
+        return Snapshot(path=self.path, pg=self.pg)
+
+    def done(self) -> bool:
+        return self._done
