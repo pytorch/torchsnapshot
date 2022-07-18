@@ -23,13 +23,13 @@ from torch.distributed._shard.sharded_tensor import ShardedTensor
 def _tensor_eq(lhs: Union[torch.Tensor, ShardedTensor], rhs: Any) -> bool:
     if type(lhs) != type(rhs):
         return False
-    if isinstance(lhs, torch.Tensor):
-        return torch.allclose(lhs, rhs)
-    elif isinstance(lhs, ShardedTensor):
+    if isinstance(lhs, ShardedTensor):
         for l_shard, r_shard in zip(lhs.local_shards(), rhs.local_shards()):
             if not torch.allclose(l_shard.tensor, r_shard.tensor):
                 return False
         return True
+    elif isinstance(lhs, torch.Tensor):
+        return torch.allclose(lhs, rhs)
     else:
         raise AssertionError("The lhs operand must be a Tensor or ShardedTensor.")
 
