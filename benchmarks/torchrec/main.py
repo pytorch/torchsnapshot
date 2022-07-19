@@ -128,6 +128,29 @@ def benchmark_torchsnapshot(
         raise NotImplementedError()
 
 
+def benchmark_torchsnapshot_async(
+    dmp: DistributedModelParallel, work_dir: str, benchmark_load: bool
+) -> None:
+    rank_0_print("Saving a checkpoint with torchsnapshot...")
+    begin_ts = time.monotonic()
+    future = torchsnapshot.Snapshot.async_take(
+        path=f"{work_dir}/{uuid.uuid4()}",
+        app_state={"dmp": dmp},
+        replicated=["**"],
+    )
+    snapshot = future.wait()
+    unblock_ts = time.monotonic()
+    rank_0_print(f"Snapshot.async_take returned after {unblock_ts - begin_ts:.2f}")
+    end_ts = time.monotonic()
+    rank_0_print(
+        f"Completed saving with torchsnapshot (snapshot path: {snapshot.path})."
+        f"Took {end_ts - begin_ts:.2f} seconds "
+        f"(blocked for {unblock_ts - begin_ts:.2f} seconds."
+    )
+    if benchmark_load:
+        raise NotImplementedError()
+
+
 def benchmark_torch_save_path_manager(
     dmp: DistributedModelParallel, work_dir: str, benchmark_load: bool
 ) -> None:
@@ -171,7 +194,9 @@ def main(
             dmp=dmp, work_dir=work_dir, benchmark_load=benchmark_load
         )
     elif benchmark_type == BenchmarkType.TORCHSNAPSHOT_ASYNC:
-        raise NotImplementedError()
+        benchmark_torchsnapshot_async(
+            dmp=dmp, work_dir=work_dir, benchmark_load=benchmark_load
+        )
     elif benchmark_type == BenchmarkType.TORCH_SAVE_PATH_MANAGER:
         benchmark_torch_save_path_manager(
             dmp=dmp, work_dir=work_dir, benchmark_load=benchmark_load
@@ -212,5 +237,6 @@ if __name__ == "__main__":
         main(
             benchmark_type=args.benchmark_type,
             work_dir=args.work_dir,
+            mb_per_gpu=args.mb_per_gpu,
             benchmark_load=args.benchmark_load,
         )
