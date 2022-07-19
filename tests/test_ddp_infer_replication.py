@@ -24,6 +24,7 @@ class DDPInferReplicatedTest(unittest.TestCase):
         inferred_replicated = Snapshot._infer_replicated(
             replicated=replicated, app_state={"ddp": DDP(model), "nonddp": model}
         )
+
         unittest.TestCase().assertCountEqual(expected_replicated, inferred_replicated)
 
     def test_with_no_glob(self) -> None:

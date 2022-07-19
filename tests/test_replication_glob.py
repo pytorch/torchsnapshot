@@ -14,7 +14,7 @@ import torch
 import torch.distributed as dist
 import torch.distributed.launcher as pet
 import torchsnapshot
-from torchsnapshot import Stateful
+from torchsnapshot import Snapshot, Stateful
 from torchsnapshot.manifest import is_replicated, SnapshotMetadata
 from torchsnapshot.snapshot import SNAPSHOT_METADATA_FNAME
 from torchsnapshot.test_utils import get_pet_launch_config
@@ -111,3 +111,45 @@ class ReplicationGlobTest(unittest.TestCase):
             "1/my_stateful/foo",
         ]
         self._test_helper(2, replication_globs, expected_replicated_paths)
+
+
+class CoalesceReplicationGlobTest(unittest.TestCase):
+    def test_all_globs_coalesce(self) -> None:
+        local_replicated = ["my_stateful/foo", "my_stateful/qux"]
+        global_replicated = [
+            ["my_stateful/foo", "my_stateful/qux"],
+            ["my_stateful/foo", "my_stateful/qux"],
+        ]
+
+        verified_replicated = Snapshot._coalesce_replicated(
+            local_replicated, global_replicated
+        )
+        expected_replicated = ["my_stateful/foo", "my_stateful/qux"]
+        self.assertEqual(set(verified_replicated), set(expected_replicated))
+
+    def test_partial_globs_coalesce(self) -> None:
+        local_replicated = ["my_stateful/foo", "my_stateful/qux"]
+        global_replicated = [
+            ["my_stateful/foo", "my_stateful/qux"],
+            ["my_stateful/foo", "my_stateful/baz"],
+        ]
+
+        verified_replicated = Snapshot._coalesce_replicated(
+            local_replicated, global_replicated
+        )
+        expected_replicated = ["my_stateful/foo"]
+        self.assertEqual(set(verified_replicated), set(expected_replicated))
+
+    def test_no_globs_coalesce(self) -> None:
+        local_replicated = ["my_stateful/foo"]
+        global_replicated = [
+            ["my_stateful/foo"],
+            ["my_stateful/foo"],
+            ["my_stateful/qux"],
+        ]
+
+        verified_replicated = Snapshot._coalesce_replicated(
+            local_replicated, global_replicated
+        )
+        expected_replicated = []
+        self.assertEqual(set(verified_replicated), set(expected_replicated))

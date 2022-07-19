@@ -144,24 +144,6 @@ class Snapshot:
         self.pg: Optional[dist.ProcessGroup] = pg
         self._metadata: Optional[SnapshotMetadata] = None
 
-    @staticmethod
-    def _infer_replicated(replicated: List[str], app_state: AppState) -> List[str]:
-        new_replicated = replicated.copy()
-        if "**" in new_replicated:
-            return new_replicated
-        for key, val in app_state.items():
-            if isinstance(val, DDP):
-                ignored = set(cast(List[str], val.parameters_to_ignore))
-                if not ignored:
-                    new_replicated.append(os.path.join(key, "**"))
-                    continue
-                for name, _ in itertools.chain(
-                    val.named_parameters(), val.named_buffers()
-                ):
-                    if name not in ignored:
-                        new_replicated.append(os.path.join(key, name))
-        return new_replicated
-
     @classmethod
     def take(
         cls,
@@ -189,7 +171,9 @@ class Snapshot:
         """
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(pg=pg)
-        path = cls._collate_path(path=path, pg_wrapper=pg_wrapper)
+        path, replicated = cls._coalesce_path_and_replicated(
+            path=path, pg_wrapper=pg_wrapper, app_state=app_state, replicated=replicated
+        )
         storage = url_to_storage_plugin_in_event_loop(
             url_path=path, event_loop=event_loop
         )
@@ -253,7 +237,9 @@ class Snapshot:
         """
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(pg=pg)
-        path = cls._collate_path(path=path, pg_wrapper=pg_wrapper)
+        path, replicated = cls._coalesce_path_and_replicated(
+            path=path, pg_wrapper=pg_wrapper, app_state=app_state, replicated=replicated
+        )
         storage = url_to_storage_plugin_in_event_loop(
             url_path=path, event_loop=event_loop
         )
@@ -286,8 +272,6 @@ class Snapshot:
         event_loop: asyncio.AbstractEventLoop,
     ) -> Tuple[PendingIOWork, SnapshotMetadata]:
         # TODO: validate app_state
-        # TODO: verify replicated across ranks
-        replicated = cls._infer_replicated(replicated, app_state)
 
         app_state = app_state.copy()
         rng_state_item = cls._pop_rng_state(app_state=app_state)
@@ -529,10 +513,34 @@ class Snapshot:
         return copy.deepcopy(self.metadata.manifest)
 
     @staticmethod
+    def _infer_replicated(replicated: List[str], app_state: AppState) -> List[str]:
+        new_replicated = replicated.copy()
+        if "**" in new_replicated:
+            return new_replicated
+        for key, val in app_state.items():
+            if isinstance(val, DDP):
+                ignored = set(cast(List[str], val.parameters_to_ignore))
+                if not ignored:
+                    new_replicated.append(os.path.join(key, "**"))
+                    continue
+                for name, _ in itertools.chain(
+                    val.named_parameters(), val.named_buffers()
+                ):
+                    if name not in ignored:
+                        new_replicated.append(os.path.join(key, name))
+        return new_replicated
+
+    @staticmethod
+    def _coalesce_replicated(
+        replicated: List[str], global_replicated: List[List[str]]
+    ) -> List[str]:
+        # pyre-ignore[6]
+        verified_replicated = list(set.intersection(*map(set, global_replicated)))
+        return verified_replicated
+
+    @staticmethod
     def _calculate_replicated_entries(
-        flattened: Dict[str, Any],
-        replicated: List[str],
-        pg: PGWrapper,
+        flattened: Dict[str, Any], replicated: List[str], pg: PGWrapper
     ) -> List[str]:
         rank = pg.get_rank()
         world_size = pg.get_world_size()
@@ -674,16 +682,41 @@ path "{logical_path}" which was not available to rank {rank}.
         yaml_str = io_req.buf.getvalue().decode("utf-8")
         return SnapshotMetadata.from_yaml(yaml_str)
 
-    @staticmethod
-    def _collate_path(path: str, pg_wrapper: PGWrapper) -> str:
+    @classmethod
+    def _coalesce_path_and_replicated(
+        cls,
+        path: str,
+        pg_wrapper: PGWrapper,
+        app_state: AppState,
+        replicated: Optional[List[str]],
+    ) -> Tuple[str, Optional[List[str]]]:
+
+        rank = pg_wrapper.get_rank()
+
+        # coalesce path
         obj_list = [path]
         pg_wrapper.broadcast_object_list(obj_list, src=0)
         if obj_list[0] != path:
             logger.warning(
-                f"Rank {pg_wrapper.get_rank()} specified a path ({path}) "
+                f"Rank {rank} specified a path ({path}) "
                 f"different from rank 0 ({obj_list[0]}). Using path specified by rank 0."
             )
-        return obj_list[0]
+
+        # coalesce replicated
+        if replicated is not None:
+            replicated = cls._infer_replicated(replicated, app_state)
+            # pyre-ignore[9]
+            global_replicated: List[List[str]] = [None] * pg_wrapper.get_world_size()
+            pg_wrapper.all_gather_object(global_replicated, replicated)
+
+            replicated = cls._coalesce_replicated(replicated, global_replicated)
+            if set(global_replicated[rank]) != set(replicated):
+                logger.warning(
+                    f"Rank {rank} specified replicated paths: {set(global_replicated[rank])} "
+                    f"different from replicated paths verified across all ranks: {set(replicated)}"
+                )
+
+        return obj_list[0], replicated
 
     @staticmethod
     def _gather_keys(keys: List[str], pg_wrapper: PGWrapper) -> List[str]:
