@@ -22,6 +22,7 @@ from datetime import timedelta
 from threading import Thread
 from typing import Any, cast, Dict, List, Optional, Tuple, TypeVar
 
+import numpy as np
 import torch
 import torch.distributed as dist
 from torch.distributed._shard.sharded_tensor import ShardedTensor
@@ -513,32 +514,6 @@ class Snapshot:
         return copy.deepcopy(self.metadata.manifest)
 
     @staticmethod
-    def _infer_replicated(replicated: List[str], app_state: AppState) -> List[str]:
-        new_replicated = replicated.copy()
-        if "**" in new_replicated:
-            return new_replicated
-        for key, val in app_state.items():
-            if isinstance(val, DDP):
-                ignored = set(cast(List[str], val.parameters_to_ignore))
-                if not ignored:
-                    new_replicated.append(os.path.join(key, "**"))
-                    continue
-                for name, _ in itertools.chain(
-                    val.named_parameters(), val.named_buffers()
-                ):
-                    if name not in ignored:
-                        new_replicated.append(os.path.join(key, name))
-        return new_replicated
-
-    @staticmethod
-    def _coalesce_replicated(
-        replicated: List[str], global_replicated: List[List[str]]
-    ) -> List[str]:
-        # pyre-ignore[6]
-        verified_replicated = list(set.intersection(*map(set, global_replicated)))
-        return verified_replicated
-
-    @staticmethod
     def _calculate_replicated_entries(
         flattened: Dict[str, Any], replicated: List[str], pg: PGWrapper
     ) -> List[str]:
@@ -568,19 +543,23 @@ class Snapshot:
                 filter(lambda p: path_count[p] == world_size, replicated_paths)
             )
 
-            # Split the work among ranks
-            obj_list = [replicated_paths]
-            pg.broadcast_object_list(obj_list, src=0)
-        else:
-            # pyre-ignore
-            obj_list = [None]
-            pg.broadcast_object_list(obj_list, src=0)
-            replicated_paths = obj_list[0]
+            paths_partition = Snapshot._partition_replicated_paths(
+                replicated_paths, flattened, world_size
+            )
 
-        # A naive way of spliting write load across ranks
-        # TODO: balance write load across ranks
-        for idx, path in enumerate(replicated_paths):
-            if idx % world_size != rank:
+            # pyre-ignore[9]
+            obj_list = [paths_partition]
+
+        else:
+            # pyre-ignore[9]
+            obj_list = [None]
+
+        pg.broadcast_object_list(obj_list, src=0)
+        paths_partition = obj_list[0]
+
+        replicated_paths = list(set().union(*paths_partition))
+        for path in replicated_paths:
+            if path not in paths_partition[rank]:
                 del flattened[path]
 
         return replicated_paths
@@ -717,6 +696,68 @@ path "{logical_path}" which was not available to rank {rank}.
                 )
 
         return obj_list[0], replicated
+
+    @staticmethod
+    def _partition_replicated_paths(
+        replicated_paths: List[str],
+        flattened: Dict[str, Any],
+        world_size: int,
+    ) -> List[List[str]]:
+        """Greedily partitions replicated paths based on the size of the tensor.
+        Inspired by: https://github.com/pytorch/pytorch/blob/1a6b97b8a39062e97562dcea662a375bf89a8fad/torch/distributed/optim/zero_redundancy_optimizer.py#L621-L685
+        """
+        paths_partition = [[] for _ in range(world_size)]
+        sizes = [0] * world_size
+
+        replicated_paths_tensors = []
+        replicated_paths_nontensors = []
+
+        for path in replicated_paths:
+            if not isinstance(flattened[path], ShardedTensor):
+                if isinstance(flattened[path], torch.Tensor):
+                    replicated_paths_tensors.append(path)
+                else:
+                    replicated_paths_nontensors.append(path)
+
+        replicated_paths_tensors_sorted = sorted(
+            replicated_paths_tensors,
+            key=lambda t: flattened[t].numel() * flattened[t].element_size(),
+            reverse=True,
+        )
+
+        for path in replicated_paths_tensors_sorted:
+            min_rank = np.argmin(sizes)
+            paths_partition[min_rank].append(path)
+            sizes[min_rank] += flattened[path].numel() * flattened[path].element_size()
+        for idx, path in enumerate(replicated_paths_nontensors):
+            paths_partition[idx % world_size].append(path)
+        return paths_partition
+
+    @staticmethod
+    def _infer_replicated(replicated: List[str], app_state: AppState) -> List[str]:
+        new_replicated = replicated.copy()
+        if "**" in new_replicated:
+            return new_replicated
+        for key, val in app_state.items():
+            if isinstance(val, DDP):
+                ignored = set(cast(List[str], val.parameters_to_ignore))
+                if not ignored:
+                    new_replicated.append(os.path.join(key, "**"))
+                    continue
+                for name, _ in itertools.chain(
+                    val.named_parameters(), val.named_buffers()
+                ):
+                    if name not in ignored:
+                        new_replicated.append(os.path.join(key, name))
+        return new_replicated
+
+    @staticmethod
+    def _coalesce_replicated(
+        replicated: List[str], global_replicated: List[List[str]]
+    ) -> List[str]:
+        # pyre-ignore[6]
+        verified_replicated = list(set.intersection(*map(set, global_replicated)))
+        return verified_replicated
 
     @staticmethod
     def _gather_keys(keys: List[str], pg_wrapper: PGWrapper) -> List[str]:
