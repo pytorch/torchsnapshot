@@ -7,13 +7,13 @@ from uuid import uuid4
 import torch
 import torchsnapshot
 from torch import distributed as dist, nn
+from torch.distributed.elastic.multiprocessing.errors import record
 from torch.distributed.fsdp import (
     FullStateDictConfig,
     FullyShardedDataParallel as FSDP,
     StateDictType,
 )
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
-from torch.distributed.elastic.multiprocessing.errors import record
 
 
 @record
@@ -30,7 +30,7 @@ def main():
 
     rank = dist.get_rank()
     # assuming each machine has the same number of GPUs
-    local_rank = rank % torch.cuda.device_count()  
+    local_rank = rank % torch.cuda.device_count()
 
     benchmark = {
         "world_size": dist.get_world_size(),
@@ -96,7 +96,7 @@ def main():
     # torchsnapshot benchmark
     t0 = time.monotonic()
     with FSDP.state_dict_type(model, StateDictType.LOCAL_STATE_DICT):
-        snapshot = torchsnapshot.Snapshot.take(
+        torchsnapshot.Snapshot.take(
             path=f"{args.work_dir}/{uuid4()}",
             app_state=app_state,
         )
