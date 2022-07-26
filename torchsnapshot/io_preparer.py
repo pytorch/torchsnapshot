@@ -179,7 +179,7 @@ class ShardedTensorIOPreparer:
 
 @torch.jit.script
 def tensor_copy(dst: torch.Tensor, src: torch.Tensor) -> None:
-    dst.copy_(src)
+    dst.detach().copy_(src)  # pragma: no cover
 
 
 class ShardedTensorBufferConsumer(BufferConsumer):
@@ -225,7 +225,7 @@ class ShardedTensorBufferConsumer(BufferConsumer):
 
 @torch.jit.script
 def tensor_to_cpu(tensor: torch.Tensor) -> torch.Tensor:
-    return tensor.to("cpu")
+    return tensor.to("cpu")  # pragma: no cover
 
 
 class TensorBufferStager(BufferStager):
