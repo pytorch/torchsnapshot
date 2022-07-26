@@ -54,3 +54,16 @@ class PGWrapper:
             obj_list[0] = obj
             return
         dist.all_gather_object(obj_list, obj, group=self.pg)
+
+    def scatter_object_list(
+        self,
+        # pyre-ignore
+        output_list: List[Any],
+        # pyre-ignore
+        input_list: List[Any],
+        src: int = 0,
+    ) -> None:
+        if self.pg is None:
+            output_list[0] = input_list[src]
+            return
+        dist.scatter_object_list(output_list, input_list, src=src, group=self.pg)
