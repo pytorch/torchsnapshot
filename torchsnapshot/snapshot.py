@@ -546,20 +546,20 @@ class Snapshot:
             paths_partition = Snapshot._partition_replicated_paths(
                 replicated_paths, flattened, world_size
             )
-
-            # pyre-ignore[9]
-            obj_list = [paths_partition]
-
+            replicated_paths_list = [replicated_paths]
         else:
-            # pyre-ignore[9]
-            obj_list = [None]
+            paths_partition = None
+            replicated_paths_list = [[]]
 
-        pg.broadcast_object_list(obj_list, src=0)
-        paths_partition = obj_list[0]
+        local_paths_list = [[]]
+        # pyre-ignore
+        pg.scatter_object_list(local_paths_list, paths_partition, src=0)
+        pg.broadcast_object_list(replicated_paths_list, src=0)
+        local_paths = local_paths_list[0]
+        replicated_paths = replicated_paths_list[0]
 
-        replicated_paths = list(set().union(*paths_partition))
         for path in replicated_paths:
-            if path not in paths_partition[rank]:
+            if path not in local_paths:
                 del flattened[path]
 
         return replicated_paths
