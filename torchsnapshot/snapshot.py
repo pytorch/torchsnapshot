@@ -418,7 +418,12 @@ class Snapshot:
             event_loop.close()
         return cast(SnapshotMetadata, self._metadata)
 
-    def read_object(self, path: str, obj_out: Optional[T] = None) -> T:
+    def read_object(
+        self,
+        path: str,
+        obj_out: Optional[T] = None,
+        memory_budget_bytes: Optional[int] = None,
+    ) -> T:
         """
         Read a persisted object from the snapshot's content.
 
@@ -442,6 +447,8 @@ class Snapshot:
             obj_out: If specified and the object type supports in-place load,
                 `read_object` will directly read the persisted object into
                 `obj_out`'s buffer.
+            memory_budget_bytes: When specified, the read operation will keep
+                the temporary memory buffer size below this threshold.
 
         Returns:
             The object read from the snapshot's content.
@@ -475,6 +482,11 @@ class Snapshot:
         read_reqs = prepare_read(
             entry=manifest[unranked_path],
             obj_out=obj_out,
+            # TODO: find a suitable buffer_size_limit_bytes to enable chunked
+            # read even when memory_budget_bytes is not specified, as chunked
+            # tensor read allows for pipelining HtoD copy and storage I/O when
+            # reading a single tensor.
+            buffer_size_limit_bytes=memory_budget_bytes,
         )
         box = []
         for read_req in read_reqs:
@@ -489,7 +501,8 @@ class Snapshot:
         sync_execute_read_reqs(
             read_reqs=read_reqs,
             storage=storage,
-            memory_budget_bytes=_MAX_PER_RANK_MEMORY_BUDGET_BYTES,
+            memory_budget_bytes=memory_budget_bytes
+            or _MAX_PER_RANK_MEMORY_BUDGET_BYTES,
             rank=pg_wrapper.get_rank(),
             event_loop=event_loop,
         )

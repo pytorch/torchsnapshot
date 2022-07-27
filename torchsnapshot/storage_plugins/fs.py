@@ -34,9 +34,16 @@ class FSStoragePlugin(StoragePlugin):
 
     async def read(self, io_req: IOReq) -> None:
         path = os.path.join(self.root, io_req.path)
+        byte_range = io_req.byte_range
 
         async with aiofiles.open(path, "rb") as f:
-            io_req.buf = io.BytesIO(await f.read())
+            if byte_range is None:
+                io_req.buf = io.BytesIO(await f.read())
+            else:
+                offset = byte_range[0]
+                size = byte_range[1] - byte_range[0]
+                await f.seek(offset)
+                io_req.buf = io.BytesIO(await f.read(size))
 
     async def delete(self, path: str) -> None:
         path = os.path.join(self.root, path)
