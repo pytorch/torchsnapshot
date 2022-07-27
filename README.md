@@ -12,6 +12,12 @@
 
 A light-weight library for adding fault tolerance to large-scale PyTorch distributed training workloads.
 
+torchsnapshot is a library from PyTorch that aims to address common pain points around large scale model checkpointing. In general, it helps:
+- **Performance** - `torchsnapshot` outperforms plain `torch.save` by pipelining and parallelizing device-to-host copy and storage I/O. For replicated data parallel weights, it further exploits the parallelism by partitioning write loads across ranks.
+- **Memory usage** - `torchsnapshot` is designed to move data from GPU to storage (or vice versa) with controlled memory usage. When RAM is constrained, it is still able to save and load large model weights. Its design will allow for saving and loading a model with a memory footprint smaller than the size of the largest tensor in the model.
+- **Checkpoint manipulability** - `torchsnapshot` saves large weights as individual files/objects and provides APIs for efficient access of checkpoint content.
+- **Cloud storage support** - `torchsnapshot` aims to support popular storage out of the box. It supports asynchronous checkpointing which allows users to resume training as soon as all model weights are staged in RAM. This takes the storage latency out of the equation when RAM is abundant.
+
 
 ## Install
 
