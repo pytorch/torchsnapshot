@@ -170,6 +170,7 @@ class Snapshot:
         Returns:
             The newly taken snapshot.
         """
+        torch._C._log_api_usage_once("torchsnapshot.snapshot.take")
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(pg=pg)
         path, replicated = cls._coalesce_path_and_replicated(
@@ -236,6 +237,7 @@ class Snapshot:
                 snapshot will be committed regardless of whether `.wait()` is
                 invoked.
         """
+        torch._C._log_api_usage_once("torchsnapshot.snapshot.async_take")
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(pg=pg)
         path, replicated = cls._coalesce_path_and_replicated(
@@ -360,6 +362,7 @@ class Snapshot:
         Args:
             app_state: The program state to restore from the snapshot.
         """
+        torch._C._log_api_usage_once("torchsnapshot.snapshot.restore")
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(self.pg)
         rank = pg_wrapper.get_rank()
@@ -453,6 +456,7 @@ class Snapshot:
         Returns:
             The object read from the snapshot's content.
         """
+        torch._C._log_api_usage_once("torchsnapshot.snapshot.read_object")
         rank_str, unranked_path = path.split("/", 1)
         rank = int(rank_str)
         # Transform the manifest such that (1) replicated entries are made
