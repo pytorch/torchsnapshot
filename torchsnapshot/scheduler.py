@@ -282,7 +282,7 @@ class _ReadPipeline:
         self.buf_sz_bytes: Optional[int] = None
 
     async def read_buffer(self) -> "_ReadPipeline":
-        io_req = IOReq(path=self.read_req.path)
+        io_req = IOReq(path=self.read_req.path, byte_range=self.read_req.byte_range)
         await self.storage.read(io_req=io_req)
         self.buf = io_req.buf.getvalue()
         self.buf_sz_bytes = len(self.buf)
@@ -324,7 +324,7 @@ async def execute_read_reqs(
                 len(io_tasks) == 0
                 or read_pipeline.consuming_cost_bytes < memory_budget_bytes
             ):
-                memory_budget_bytes += read_pipeline.consuming_cost_bytes
+                memory_budget_bytes -= read_pipeline.consuming_cost_bytes
                 io_task = asyncio.create_task(read_pipeline.read_buffer())
                 io_tasks.add(io_task)
                 dispatched_ids.add(i)
@@ -352,10 +352,10 @@ async def execute_read_reqs(
             if d in consuming_tasks:
                 consuming_tasks.remove(d)
                 read_pipeline: _ReadPipeline = d.result()
-                memory_budget_bytes -= read_pipeline.consuming_cost_bytes
+                memory_budget_bytes += read_pipeline.consuming_cost_bytes
                 bytes_read += cast(int, read_pipeline.buf_sz_bytes)
 
-    mbps = (bytes_read / 1e6) / (time.monotonic() - begin_ts)
+    mbps = (bytes_read / 1024**2) / (time.monotonic() - begin_ts)
     logger.info(f"Rank {rank} finished loading. Throughput: {mbps:.2f}MB/s")
 
     executor.shutdown()
