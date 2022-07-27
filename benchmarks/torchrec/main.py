@@ -13,6 +13,7 @@ import uuid
 from enum import Enum
 from typing import List
 
+import fsspec
 import torch
 import torch.distributed as dist
 import torch.distributed.launcher as pet
@@ -151,6 +152,23 @@ def benchmark_torchsnapshot_async(
         raise NotImplementedError()
 
 
+def benchmark_torch_save_fsspec(
+    dmp: DistributedModelParallel, work_dir: str, benchmark_load: bool
+) -> None:
+    rank_0_print("Saving a checkpoint with torch.save + fsspec...")
+    begin_ts = time.monotonic()
+    path = os.path.join(work_dir, str(uuid.uuid4()))
+    with fsspec.open(path, "wb") as f:
+        torch.save(dmp.state_dict(), f)
+    dist.barrier()
+    rank_0_print(
+        "Completed saving with torch.save + fsspec."
+        f"Took {time.monotonic() - begin_ts:.2f} seconds."
+    )
+    if benchmark_load:
+        raise NotImplementedError()
+
+
 def benchmark_torch_save_path_manager(
     dmp: DistributedModelParallel, work_dir: str, benchmark_load: bool
 ) -> None:
@@ -202,7 +220,9 @@ def main(
             dmp=dmp, work_dir=work_dir, benchmark_load=benchmark_load
         )
     elif benchmark_type == BenchmarkType.TORCH_SAVE_FSSPEC:
-        raise NotImplementedError()
+        benchmark_torch_save_fsspec(
+            dmp=dmp, work_dir=work_dir, benchmark_load=benchmark_load
+        )
     else:
         raise ValueError(f"Unrecognized benchmark type: {benchmark_type}")
 
