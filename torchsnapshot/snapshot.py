@@ -569,7 +569,6 @@ class Snapshot:
             replicated_paths_list = [[]]
 
         local_paths_list = [[]]
-        # pyre-ignore
         pg.scatter_object_list(local_paths_list, paths_partition, src=0)
         pg.broadcast_object_list(replicated_paths_list, src=0)
         local_paths = local_paths_list[0]

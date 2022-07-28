@@ -5,6 +5,8 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+# pyre-ignore-all-errors[2]
+
 from typing import Any, List, Optional
 
 import torch.distributed as dist
@@ -42,13 +44,11 @@ class PGWrapper:
             return
         dist.barrier(group=self.pg)
 
-    # pyre-ignore
     def broadcast_object_list(self, obj_list: List[Any], src: int = 0) -> None:
         if self.pg is None:
             return
         dist.broadcast_object_list(obj_list, src=src, group=self.pg)
 
-    # pyre-ignore
     def all_gather_object(self, obj_list: List[Any], obj: Any) -> None:
         if self.pg is None:
             obj_list[0] = obj
@@ -57,13 +57,33 @@ class PGWrapper:
 
     def scatter_object_list(
         self,
-        # pyre-ignore
         output_list: List[Any],
-        # pyre-ignore
-        input_list: List[Any],
+        input_list: Optional[List[Any]],
         src: int = 0,
     ) -> None:
+        rank = self.get_rank()
+        world_size = self.get_world_size()
+        if rank == src:
+            if input_list is None:
+                raise RuntimeError(
+                    "The src rank's input_list for scatter_object_list must not be None."
+                )
+            if len(input_list) != world_size:
+                raise RuntimeError(
+                    f"The length of input_list {len(input_list)} for scatter_object_list "
+                    f"must be the same as the process group's world size ({world_size})."
+                )
+        else:
+            input_list = [None] * world_size
+
         if self.pg is None:
-            output_list[0] = input_list[src]
+            output_list[0] = input_list[0]
             return
+
+        # scatter_object_list does not yet support NCCL backend
+        if dist.get_backend(self.pg) == "nccl":
+            self.broadcast_object_list(obj_list=input_list, src=src)
+            output_list[0] = input_list[rank]
+            return
+
         dist.scatter_object_list(output_list, input_list, src=src, group=self.pg)
