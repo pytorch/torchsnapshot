@@ -688,6 +688,8 @@ path "{logical_path}" which was not available to rank {rank}.
         rank = pg_wrapper.get_rank()
 
         # coalesce path
+        # TODO: use a single all_gather for both path and replicated.
+        # Only emit a single message for path inconsistency.
         obj_list = [path]
         pg_wrapper.broadcast_object_list(obj_list, src=0)
         if obj_list[0] != path:

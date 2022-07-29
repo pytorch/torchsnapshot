@@ -7,7 +7,9 @@ import socket
 import time
 from collections import defaultdict
 from concurrent.futures import Executor, ThreadPoolExecutor
-from typing import cast, List, Optional, Set
+from typing import cast, List, Optional, Set, ClassVar
+import math
+
 
 import psutil
 
@@ -83,22 +85,106 @@ class _WritePipeline:
         return self
 
 
+_LOG_LINE_LIMIT = 8
+
+
+class _WriteReporter:
+    _WRITE_LOG_TEMPLATE: ClassVar[str] = (
+        "{rank:>4} {stageable:>12} {staging:>12} {writeable:>12} "
+        "{writing:>12} {rss_delta:>16} {memory_budget:>20} {data_written:>18}"
+    )
+
+    def __init__(
+        self,
+        ready_for_staging: Set[_WritePipeline],
+        staging_tasks: Set[asyncio.Task],
+        ready_for_io: Set[_WritePipeline],
+        io_tasks: Set[asyncio.Task],
+        rank: int,
+        total_memory_budget_bytes: int,
+    ) -> None:
+        self.ready_for_staging = ready_for_staging
+        self.staging_tasks = staging_tasks
+        self.ready_for_io = ready_for_io
+        self.io_tasks = io_tasks
+        self.rank = rank
+        self.total_memory_budget_bytes = total_memory_budget_bytes
+
+        self._process = psutil.Process()
+        self.baseline_rss_bytes = self._process.memory_info().rss
+        self.begin_ts = time.monotonic()
+        self.bytes_written = 0
+
+        self._header = self._WRITE_LOG_TEMPLATE.format(
+            rank="Rank",
+            stageable="Stage-able",
+            staging="Staging",
+            writeable="Write-able",
+            writing="Writing",
+            rss_delta="RSS Delta (GB)",
+            memory_budget="Memory Budget (GB)",
+            data_written="Data Written (GB)",
+        )
+
+    def print_header(self) -> None:
+        if self.rank == 0:
+            logger.info(self._header)
+            logger.info("-" * len(self._header))
+
+    def report(self, memory_budget_bytes: int) -> None:
+        rss_bytes = self._process.memory_info().rss
+        rss_delta_gb = (rss_bytes - self.baseline_rss_bytes) / 1024**3
+        msg = self._WRITE_LOG_TEMPLATE.format(
+            rank=self.rank,
+            stageable=len(self.ready_for_staging),
+            staging=len(self.staging_tasks),
+            writeable=len(self.ready_for_io),
+            writing=len(self.io_tasks),
+            rss_delta=f"{rss_delta_gb:.2f}",
+            memory_budget=(
+                f"{memory_budget_bytes / 1024**3:.2f}/"
+                f"{self.total_memory_budget_bytes / 1024**3:.2f}"
+            ),
+            data_written=f"{self.bytes_written / 1024**3:.2f}",
+        )
+        logger.info(msg)
+
+    def report_staging_done(self) -> None:
+        msg = (
+            f"Rank {self.rank} completed staging in "
+            f"{time.monotonic() - self.begin_ts:.2f} seconds"
+        )
+        logger.info(self._pad_msg(msg=msg))
+
+    def report_writing_done(self) -> None:
+        elapsed_secs = time.monotonic() - self.begin_ts
+        mbps = self.bytes_written / 1024**2 / (elapsed_secs)
+        msg = (
+            f"Rank {self.rank} completed writing in "
+            f"{elapsed_secs:.2f} seconds (throughput {mbps:.2f}MB/s)"
+        )
+        logger.info(self._pad_msg(msg=msg))
+
+    def _pad_msg(self, msg: str) -> None:
+        padding = (len(self._header) - len(msg) - 2) / 2
+        return f"{'-' * math.ceil(padding)} {msg} {'-' * math.floor(padding)}"
+
+
 class PendingIOWork:
     def __init__(
         self,
         ready_for_io: Set[_WritePipeline],
         io_tasks: Set[asyncio.Task],
-        rank: int,
         memory_budget_bytes: int,
-        begin_ts: float,
-        bytes_written: int,
+        write_reporter: _WriteReporter,
     ) -> None:
         self.ready_for_io = ready_for_io
         self.io_tasks = io_tasks
-        self.rank = rank
         self.memory_budget_bytes = memory_budget_bytes
-        self.begin_ts = begin_ts
-        self.bytes_written = bytes_written
+        self.write_reporter = write_reporter
+        self.logging_freq = math.ceil(
+            (len(self.ready_for_io) + len(self.io_tasks)) / _LOG_LINE_LIMIT
+        )
 
     async def complete(self) -> None:
         while len(self.ready_for_io) + len(self.io_tasks) != 0:
@@ -108,7 +194,9 @@ class PendingIOWork:
             for d in done:
                 write_pipeline: _WritePipeline = d.result()
                 self.memory_budget_bytes += cast(int, write_pipeline.buf_sz_bytes)
-                self.bytes_written += cast(int, write_pipeline.buf_sz_bytes)
+                self.write_reporter.bytes_written += cast(
+                    int, write_pipeline.buf_sz_bytes
+                )
                 self.io_tasks.remove(d)
                 for p in set(self.ready_for_io):
                     if len(self.io_tasks) >= _MAX_PER_RANK_IO_CONCURRENCY:
@@ -116,14 +204,9 @@ class PendingIOWork:
                     io_task = asyncio.create_task(p.write_buffer())
                     self.io_tasks.add(io_task)
                     self.ready_for_io.remove(p)
-            logger.debug(
-                f"Rank {self.rank}\t"
-                f"ready_for_io: {len(self.ready_for_io)}\t"
-                f"io_tasks: {len(self.io_tasks)}\t"
-                f"memory_budget_bytes: {self.memory_budget_bytes}"
-            )
-        mbps = (self.bytes_written / 1024**2) / (time.monotonic() - self.begin_ts)
-        logger.info(f"Rank {self.rank} finished saving. Throughput: {mbps:.2f}MB/s")
+            if (len(self.ready_for_io) + len(self.io_tasks)) % self.logging_freq == 0:
+                self.write_reporter.report(memory_budget_bytes=self.memory_budget_bytes)
+        self.write_reporter.report_writing_done()
 
     def sync_complete(self, event_loop: asyncio.AbstractEventLoop) -> None:
         event_loop.run_until_complete(self.complete())
@@ -150,10 +233,19 @@ async def execute_write_reqs(
     staging_tasks = set()
     ready_for_io: Set[_WritePipeline] = set()
     io_tasks: Set[asyncio.Task] = set()
-    executor = ThreadPoolExecutor(max_workers=_MAX_PER_RANK_CPU_CONCURRENCY)
 
-    bytes_written = 0
-    begin_ts = time.monotonic()
+    write_reporter = _WriteReporter(
+        ready_for_staging=ready_for_staging,
+        staging_tasks=staging_tasks,
+        ready_for_io=ready_for_io,
+        io_tasks=io_tasks,
+        rank=rank,
+        total_memory_budget_bytes=memory_budget_bytes,
+    )
+    logging_freq = math.ceil(len(ready_for_staging) / _LOG_LINE_LIMIT)
+    write_reporter.print_header()
+
+    executor = ThreadPoolExecutor(max_workers=_MAX_PER_RANK_CPU_CONCURRENCY)
 
     def dispatch_staging(
         ready_for_staging: Set[_WritePipeline],
@@ -211,11 +303,14 @@ async def execute_write_reqs(
                 # torch.save, the staging cost is 2x the buffer size.
                 memory_budget_bytes += write_pipeline.staging_cost_bytes
                 memory_budget_bytes -= cast(int, write_pipeline.buf_sz_bytes)
+                if len(staging_tasks) % logging_freq == 0:
+                    write_reporter.report(memory_budget_bytes=memory_budget_bytes)
+
             elif d in io_tasks:
                 io_tasks.remove(d)
                 write_pipeline: _WritePipeline = d.result()
                 memory_budget_bytes += cast(int, write_pipeline.buf_sz_bytes)
-                bytes_written += cast(int, write_pipeline.buf_sz_bytes)
+                write_reporter.bytes_written += cast(int, write_pipeline.buf_sz_bytes)
             else:
                 raise AssertionError(
                     "The completed task must be in either staging_tasks or io_tasks."
@@ -227,26 +322,13 @@ async def execute_write_reqs(
                 memory_budget_bytes=memory_budget_bytes,
                 executor=executor,
             )
-        logger.debug(
-            f"Rank {rank}\t"
-            f"ready_for_staging: {len(ready_for_staging)}\t"
-            f"staging_tasks: {len(staging_tasks)}\t"
-            f"ready_for_io: {len(ready_for_io)}\t"
-            f"io_tasks: {len(io_tasks)}\t"
-            f"memory_budget_bytes: {memory_budget_bytes}"
-        )
-
-    logger.debug(
-        f"Rank {rank} finished staging in " f"{time.monotonic() - begin_ts:.2f} seconds"
-    )
+    write_reporter.report_staging_done()
     executor.shutdown()
     return PendingIOWork(
         ready_for_io=ready_for_io,
         io_tasks=io_tasks,
-        rank=rank,
         memory_budget_bytes=memory_budget_bytes,
-        begin_ts=begin_ts,
-        bytes_written=bytes_written,
+        write_reporter=write_reporter,
     )
 
 
