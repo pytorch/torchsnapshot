@@ -8,7 +8,8 @@
 import io
 import os
 
-from torchsnapshot.io_types import IOReq, StoragePlugin
+from torchsnapshot.io_types import ReadIO, StoragePlugin, WriteIO
+from torchsnapshot.memoryview_stream import MemoryviewStream
 
 
 class S3StoragePlugin(StoragePlugin):
@@ -31,18 +32,24 @@ class S3StoragePlugin(StoragePlugin):
         # pyre-ignore
         self.session = get_session()
 
-    async def write(self, io_req: IOReq) -> None:
-        async with self.session.create_client("s3") as client:
-            key = os.path.join(self.root, io_req.path)
-            io_req.buf.seek(0)
-            await client.put_object(Bucket=self.bucket, Key=key, Body=io_req.buf)
+    async def write(self, write_io: WriteIO) -> None:
+        if isinstance(write_io.buf, bytes):
+            stream = io.BytesIO(write_io.buf)
+        elif isinstance(write_io.buf, memoryview):
+            stream = MemoryviewStream(write_io.buf)
+        else:
+            raise TypeError(f"Unrecognized buffer type: {type(write_io.buf)}")
 
-    async def read(self, io_req: IOReq) -> None:
         async with self.session.create_client("s3") as client:
-            key = os.path.join(self.root, io_req.path)
+            key = os.path.join(self.root, write_io.path)
+            await client.put_object(Bucket=self.bucket, Key=key, Body=stream)
+
+    async def read(self, read_io: ReadIO) -> None:
+        async with self.session.create_client("s3") as client:
+            key = os.path.join(self.root, read_io.path)
             response = await client.get_object(Bucket=self.bucket, Key=key)
             async with response["Body"] as stream:
-                io_req.buf = io.BytesIO(await stream.read())
+                read_io.buf = io.BytesIO(await stream.read())
 
     async def delete(self, path: str) -> None:
         async with self.session.create_client("s3") as client:

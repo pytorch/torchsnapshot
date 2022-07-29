@@ -16,25 +16,25 @@ import torch.distributed as dist
 import torch.distributed.launcher as pet
 import torchsnapshot
 
-from torchsnapshot.io_types import IOReq
+from torchsnapshot.io_types import WriteIO
 from torchsnapshot.snapshot import SNAPSHOT_METADATA_FNAME
 from torchsnapshot.storage_plugins.fs import FSStoragePlugin
 from torchsnapshot.test_utils import get_pet_launch_config
 
 
 class SlowFSStoragePlugin(FSStoragePlugin):
-    async def write(self, io_req: IOReq) -> None:
+    async def write(self, write_io: WriteIO) -> None:
         await asyncio.sleep(5)
-        await super().write(io_req=io_req)
+        await super().write(write_io=write_io)
 
 
 class FaultyFSStoragePlugin(FSStoragePlugin):
-    async def write(self, io_req: IOReq) -> None:
+    async def write(self, write_io: WriteIO) -> None:
         await asyncio.sleep(5)
         if dist.get_world_size() == 1 or dist.get_rank() == 1:
             raise Exception("sorry")
         else:
-            await super().write(io_req=io_req)
+            await super().write(write_io=write_io)
 
 
 class AsyncTakeTest(unittest.TestCase):
