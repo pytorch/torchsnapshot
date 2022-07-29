@@ -54,7 +54,7 @@ def benchmark_torchsnapshot(
     rank_0_print("Saving a checkpoint with torchsnapshot...")
     app_state = {"model": model}
     begin_ts = time.monotonic()
-    with FSDP.state_dict_type(model, StateDictType.SHARDED_STATE_DICT):
+    with FSDP.state_dict_type(model, StateDictType.LOCAL_STATE_DICT):
         Snapshot.take(
             path=save_dir,
             app_state=app_state,
@@ -69,7 +69,7 @@ def benchmark_torchsnapshot(
     if benchmark_load:
         rank_0_print("Loading the checkpoint with torchsnapshot...")
         begin_ts = time.monotonic()
-        with FSDP.state_dict_type(model, StateDictType.SHARDED_STATE_DICT):
+        with FSDP.state_dict_type(model, StateDictType.LOCAL_STATE_DICT):
             snapshot = Snapshot(path=save_dir)
             snapshot.restore(app_state)
         end_ts = time.monotonic()
@@ -85,7 +85,7 @@ def benchmark_torchsave(model: nn.Module, save_dir: str, benchmark_load: bool) -
     begin_ts = time.monotonic()
     with FSDP.state_dict_type(
         model,
-        StateDictType.SHARDED_STATE_DICT,
+        StateDictType.LOCAL_STATE_DICT,
     ):
         state_dict = model.state_dict()
         torch.save(state_dict, save_file)
@@ -98,12 +98,12 @@ def benchmark_torchsave(model: nn.Module, save_dir: str, benchmark_load: bool) -
 
     if benchmark_load:
         begin_ts = time.monotonic()
-        with FSDP.state_dict_type(model, StateDictType.SHARDED_STATE_DICT):
+        with FSDP.state_dict_type(model, StateDictType.LOCAL_STATE_DICT):
             model.load_state_dict(torch.load(save_file))
         dist.barrier()
         end_ts = time.monotonic()
         rank_0_print(
-            f"Completed loading with torchsnapshot.\n"
+            f"Completed loading with torch.save.\n"
             f"Took {end_ts - begin_ts:.2f} seconds."
         )
 
