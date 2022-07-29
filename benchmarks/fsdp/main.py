@@ -1,5 +1,4 @@
 import argparse
-import json
 import os
 import time
 from enum import Enum
@@ -16,7 +15,7 @@ from torchsnapshot import Snapshot
 
 class BenchmarkType(Enum):
     TORCHSNAPSHOT = "torchsnapshot"
-    TORCHSAVE = "torchsave"
+    TORCH_SAVE = "torch_save"
 
     def __str__(self):
         return self.value
@@ -28,13 +27,31 @@ def rank_0_print(msg: str) -> None:
 
 
 def create_model() -> nn.Module:
+    # 7.8GB model, 1.9B parameters
     model = nn.Transformer(
         d_model=864,
         num_encoder_layers=1,
         num_decoder_layers=20,
         nhead=12,
         dim_feedforward=50257,
-    ).to("cuda")
+    )
+
+    # 80GB 21B parameters
+    # model = nn.Transformer(
+    #     d_model=4000,
+    #     num_encoder_layers=1,
+    #     num_decoder_layers=40,
+    #     nhead=40,
+    #     dim_feedforward=50257,
+    # )
+
+    model_size = sum(
+        p.numel() * p.element_size() for p in model.parameters() if p.requires_grad
+    )
+    model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    rank_0_print(f"model parameters: {model_params:,}")
+    rank_0_print(f"model size: {model_size/(1024**3):.3} GB")
 
     return FSDP(
         model,
@@ -45,6 +62,7 @@ def create_model() -> nn.Module:
                 nn.TransformerEncoderLayer,
             },
         ),
+        device_id=int(os.environ["LOCAL_RANK"]),
     )
 
 
@@ -81,7 +99,10 @@ def benchmark_torchsnapshot(
 
 def benchmark_torchsave(model: nn.Module, save_dir: str, benchmark_load: bool) -> None:
     rank_0_print("Saving a checkpoint with torch.save...")
-    save_file = f"state_dict-{dist.get_rank()}.pt"
+
+    os.makedirs(save_dir, exist_ok=True)
+    save_file = f"{save_dir}/state_dict-{dist.get_rank()}.pt"
+
     begin_ts = time.monotonic()
     with FSDP.state_dict_type(
         model,
@@ -126,7 +147,7 @@ def main(benchmark_type: BenchmarkType, work_dir: str, benchmark_load: bool) -> 
 
     if benchmark_type == BenchmarkType.TORCHSNAPSHOT:
         benchmark_torchsnapshot(model, save_dir, benchmark_load)
-    elif benchmark_type == BenchmarkType.TORCHSAVE:
+    elif benchmark_type == BenchmarkType.TORCH_SAVE:
         benchmark_torchsave(model, save_dir, benchmark_load)
     else:
         raise ValueError(f"Unrecognized benchmark type: {benchmark_type}")
