@@ -10,7 +10,7 @@ import asyncio
 import io
 from concurrent.futures import Executor
 from dataclasses import dataclass, field
-from typing import Optional, Union
+from typing import Optional, Tuple, Union
 
 
 BufferType = Union[bytes, memoryview]
@@ -48,21 +48,29 @@ class BufferConsumer:
 class ReadReq:
     path: str
     buffer_consumer: BufferConsumer
+    byte_range: Optional[Tuple[int, int]] = None
 
 
 @dataclass
-class IOReq:
+class WriteIO:
+    path: str
+    buf: BufferType
+
+
+@dataclass
+class ReadIO:
     path: str
     buf: io.BytesIO = field(default_factory=io.BytesIO)
+    byte_range: Optional[Tuple[int, int]] = None
 
 
 class StoragePlugin(abc.ABC):
     @abc.abstractmethod
-    async def write(self, io_req: IOReq) -> None:
+    async def write(self, write_io: WriteIO) -> None:
         pass
 
     @abc.abstractmethod
-    async def read(self, io_req: IOReq) -> None:
+    async def read(self, read_io: ReadIO) -> None:
         pass
 
     @abc.abstractmethod
@@ -74,18 +82,18 @@ class StoragePlugin(abc.ABC):
         pass
 
     def sync_write(
-        self, io_req: IOReq, event_loop: Optional[asyncio.AbstractEventLoop] = None
+        self, write_io: WriteIO, event_loop: Optional[asyncio.AbstractEventLoop] = None
     ) -> None:
         if event_loop is None:
             event_loop = asyncio.new_event_loop()
-        event_loop.run_until_complete(self.write(io_req=io_req))
+        event_loop.run_until_complete(self.write(write_io=write_io))
 
     def sync_read(
-        self, io_req: IOReq, event_loop: Optional[asyncio.AbstractEventLoop] = None
+        self, read_io: ReadIO, event_loop: Optional[asyncio.AbstractEventLoop] = None
     ) -> None:
         if event_loop is None:
             event_loop = asyncio.new_event_loop()
-        event_loop.run_until_complete(self.read(io_req=io_req))
+        event_loop.run_until_complete(self.read(read_io=read_io))
 
     def sync_close(
         self, event_loop: Optional[asyncio.AbstractEventLoop] = None

@@ -179,7 +179,7 @@ class ShardedTensorIOPreparer:
 
 @torch.jit.script
 def tensor_copy(dst: torch.Tensor, src: torch.Tensor) -> None:
-    dst.copy_(src)
+    dst.detach().copy_(src)  # pragma: no cover
 
 
 class ShardedTensorBufferConsumer(BufferConsumer):
@@ -225,7 +225,7 @@ class ShardedTensorBufferConsumer(BufferConsumer):
 
 @torch.jit.script
 def tensor_to_cpu(tensor: torch.Tensor) -> torch.Tensor:
-    return tensor.to("cpu")
+    return tensor.to("cpu")  # pragma: no cover
 
 
 class TensorBufferStager(BufferStager):
@@ -340,16 +340,59 @@ class TensorIOPreparer:
         cls,
         entry: TensorEntry,
         tensor_out: Optional[torch.Tensor] = None,
+        buffer_size_limit_bytes: Optional[int] = None,
     ) -> List[ReadReq]:
         if tensor_out is None:
             raise RuntimeError(
                 "Reading a Tensor without a runtime object is not yet supported."
             )
-        buffer_consumer = TensorBufferConsumer(
-            tensor=tensor_out,
-            entry=entry,
+
+        if (
+            buffer_size_limit_bytes is None
+            or entry.serializer != Serializer.BUFFER_PROTOCOL.value
+        ):
+            buffer_consumer = TensorBufferConsumer(
+                tensor=tensor_out,
+                entry=entry,
+            )
+            return [ReadReq(path=entry.location, buffer_consumer=buffer_consumer)]
+
+        num_chunks = math.ceil(
+            cls.get_tensor_size_from_entry(entry) / buffer_size_limit_bytes
         )
-        return [ReadReq(path=entry.location, buffer_consumer=buffer_consumer)]
+        # Try to flatten the tensor without copying to achieve better chunking granularity.
+        # This is only possible if the tensor satisfies the contiguity condition described in:
+        # https://pytorch.org/docs/stable/generated/torch.Tensor.view.html#torch.Tensor.view
+        try:
+            tensor_out = tensor_out.view(-1)
+        except RuntimeError:
+            pass
+        chunks = torch.chunk(tensor_out, chunks=num_chunks, dim=0)
+        element_size = dtype_to_element_size(string_to_dtype(entry.dtype))
+
+        read_reqs = []
+        offset = 0
+        for chunk in chunks:
+            chunk_sz_bytes = chunk.nelement() * element_size
+            buffer_consumer = TensorBufferConsumer(
+                tensor=chunk,
+                entry=TensorEntry(
+                    location=entry.location,
+                    serializer=entry.serializer,
+                    dtype=entry.dtype,
+                    shape=list(chunk.shape),
+                    replicated=entry.replicated,
+                ),
+            )
+            read_reqs.append(
+                ReadReq(
+                    path=entry.location,
+                    byte_range=(offset, offset + chunk_sz_bytes),
+                    buffer_consumer=buffer_consumer,
+                )
+            )
+            offset += chunk_sz_bytes
+        return read_reqs
 
     @staticmethod
     def get_tensor_size_from_entry(entry: TensorEntry) -> int:
@@ -463,7 +506,11 @@ def prepare_write(
     return entry, obj_write_req
 
 
-def prepare_read(entry: Entry, obj_out: Optional[Any] = None) -> List[ReadReq]:
+def prepare_read(
+    entry: Entry,
+    obj_out: Optional[Any] = None,
+    buffer_size_limit_bytes: Optional[int] = None,
+) -> List[ReadReq]:
     """
     Prepare read for an object.
 
@@ -482,7 +529,9 @@ def prepare_read(entry: Entry, obj_out: Optional[Any] = None) -> List[ReadReq]:
             )
         return ShardedTensorIOPreparer.prepare_read(entry, obj_out)
     elif isinstance(entry, TensorEntry):
-        return TensorIOPreparer.prepare_read(entry, obj_out)
+        return TensorIOPreparer.prepare_read(
+            entry, obj_out, buffer_size_limit_bytes=buffer_size_limit_bytes
+        )
     elif isinstance(entry, ObjectEntry):
         return ObjectIOPreparer.prepare_read(entry, obj_out)
     else:

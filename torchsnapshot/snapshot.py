@@ -10,7 +10,6 @@ import asyncio
 import copy
 import fnmatch
 import functools
-import io
 import itertools
 import logging
 import os
@@ -32,7 +31,7 @@ from .dist_store import get_or_create_store, LinearBarrier
 
 from .flatten import flatten, inflate
 from .io_preparer import ObjectBufferConsumer, prepare_read, prepare_write
-from .io_types import IOReq, ReadReq, StoragePlugin, WriteReq
+from .io_types import ReadIO, ReadReq, StoragePlugin, WriteIO, WriteReq
 from .manifest import (
     Entry,
     get_available_entries,
@@ -170,6 +169,7 @@ class Snapshot:
         Returns:
             The newly taken snapshot.
         """
+        torch._C._log_api_usage_once("torchsnapshot.Snapshot.take")
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(pg=pg)
         path, replicated = cls._coalesce_path_and_replicated(
@@ -236,6 +236,7 @@ class Snapshot:
                 snapshot will be committed regardless of whether `.wait()` is
                 invoked.
         """
+        torch._C._log_api_usage_once("torchsnapshot.Snapshot.async_take")
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(pg=pg)
         path, replicated = cls._coalesce_path_and_replicated(
@@ -360,6 +361,7 @@ class Snapshot:
         Args:
             app_state: The program state to restore from the snapshot.
         """
+        torch._C._log_api_usage_once("torchsnapshot.Snapshot.restore")
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(self.pg)
         rank = pg_wrapper.get_rank()
@@ -418,7 +420,12 @@ class Snapshot:
             event_loop.close()
         return cast(SnapshotMetadata, self._metadata)
 
-    def read_object(self, path: str, obj_out: Optional[T] = None) -> T:
+    def read_object(
+        self,
+        path: str,
+        obj_out: Optional[T] = None,
+        memory_budget_bytes: Optional[int] = None,
+    ) -> T:
         """
         Read a persisted object from the snapshot's content.
 
@@ -442,10 +449,13 @@ class Snapshot:
             obj_out: If specified and the object type supports in-place load,
                 `read_object` will directly read the persisted object into
                 `obj_out`'s buffer.
+            memory_budget_bytes: When specified, the read operation will keep
+                the temporary memory buffer size below this threshold.
 
         Returns:
             The object read from the snapshot's content.
         """
+        torch._C._log_api_usage_once("torchsnapshot.Snapshot.read_object")
         rank_str, unranked_path = path.split("/", 1)
         rank = int(rank_str)
         # Transform the manifest such that (1) replicated entries are made
@@ -475,6 +485,11 @@ class Snapshot:
         read_reqs = prepare_read(
             entry=manifest[unranked_path],
             obj_out=obj_out,
+            # TODO: find a suitable buffer_size_limit_bytes to enable chunked
+            # read even when memory_budget_bytes is not specified, as chunked
+            # tensor read allows for pipelining HtoD copy and storage I/O when
+            # reading a single tensor.
+            buffer_size_limit_bytes=memory_budget_bytes,
         )
         box = []
         for read_req in read_reqs:
@@ -489,7 +504,8 @@ class Snapshot:
         sync_execute_read_reqs(
             read_reqs=read_reqs,
             storage=storage,
-            memory_budget_bytes=_MAX_PER_RANK_MEMORY_BUDGET_BYTES,
+            memory_budget_bytes=memory_budget_bytes
+            or _MAX_PER_RANK_MEMORY_BUDGET_BYTES,
             rank=pg_wrapper.get_rank(),
             event_loop=event_loop,
         )
@@ -546,20 +562,19 @@ class Snapshot:
             paths_partition = Snapshot._partition_replicated_paths(
                 replicated_paths, flattened, world_size
             )
-
-            # pyre-ignore[9]
-            obj_list = [paths_partition]
-
+            replicated_paths_list = [replicated_paths]
         else:
-            # pyre-ignore[9]
-            obj_list = [None]
+            paths_partition = None
+            replicated_paths_list = [[]]
 
-        pg.broadcast_object_list(obj_list, src=0)
-        paths_partition = obj_list[0]
+        local_paths_list = [[]]
+        pg.scatter_object_list(local_paths_list, paths_partition, src=0)
+        pg.broadcast_object_list(replicated_paths_list, src=0)
+        local_paths = local_paths_list[0]
+        replicated_paths = replicated_paths_list[0]
 
-        replicated_paths = list(set().union(*paths_partition))
         for path in replicated_paths:
-            if path not in paths_partition[rank]:
+            if path not in local_paths:
                 del flattened[path]
 
         return replicated_paths
@@ -646,19 +661,19 @@ path "{logical_path}" which was not available to rank {rank}.
         storage: StoragePlugin,
         event_loop: asyncio.AbstractEventLoop,
     ) -> None:
-        io_req = IOReq(
+        write_io = WriteIO(
             path=SNAPSHOT_METADATA_FNAME,
-            buf=io.BytesIO(snapshot_metadata.to_yaml().encode("utf-8")),
+            buf=snapshot_metadata.to_yaml().encode("utf-8"),
         )
-        storage.sync_write(io_req=io_req, event_loop=event_loop)
+        storage.sync_write(write_io=write_io, event_loop=event_loop)
 
     @staticmethod
     def _read_snapshot_metadata(
         storage: StoragePlugin, event_loop: asyncio.AbstractEventLoop
     ) -> SnapshotMetadata:
-        io_req = IOReq(path=SNAPSHOT_METADATA_FNAME)
-        storage.sync_read(io_req=io_req, event_loop=event_loop)
-        yaml_str = io_req.buf.getvalue().decode("utf-8")
+        read_io = ReadIO(path=SNAPSHOT_METADATA_FNAME)
+        storage.sync_read(read_io=read_io, event_loop=event_loop)
+        yaml_str = read_io.buf.getvalue().decode("utf-8")
         return SnapshotMetadata.from_yaml(yaml_str)
 
     @classmethod

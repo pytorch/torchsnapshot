@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import asyncio
-import io
 import logging
 import os
 import socket
@@ -12,14 +11,14 @@ from typing import cast, List, Optional, Set
 
 import psutil
 
-from .io_types import BufferType, IOReq, ReadReq, StoragePlugin, WriteReq
+from .io_types import BufferType, ReadIO, ReadReq, StoragePlugin, WriteIO, WriteReq
 from .pg_wrapper import PGWrapper
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 
 _MAX_PER_RANK_MEMORY_BUDGET_BYTES: int = 32 * 1024 * 1024 * 1024
-_AVAILABLE_MEMORY_MULTIPLIER: float = 0.8
+_AVAILABLE_MEMORY_MULTIPLIER: float = 0.6
 _MAX_PER_RANK_CPU_CONCURRENCY: int = 4
 _MAX_PER_RANK_IO_CONCURRENCY: int = 16
 
@@ -69,23 +68,17 @@ class _WritePipeline:
 
     async def stage_buffer(self, executor: Executor) -> "_WritePipeline":
         self.buf = await self.write_req.buffer_stager.stage_buffer(executor)
-        if isinstance(self.buf, bytes):
-            self.buf_sz_bytes = len(self.buf)
-        else:
-            # self.buf is memoryview
-            self.buf_sz_bytes = self.buf.nbytes
+        self.buf_sz_bytes = len(self.buf)
         return self
 
     async def write_buffer(self) -> "_WritePipeline":
         if self.buf is None:
             raise AssertionError("self.buf can not be None.")
-        # pyre-ignore[6]: it's valid to initialize BytesIO with memoryview
-        # according to: https://docs.python.org/3/library/io.html#io.BytesIO
-        io_req = IOReq(path=self.write_req.path, buf=io.BytesIO(self.buf))
-        await self.storage.write(io_req)
+        write_io = WriteIO(path=self.write_req.path, buf=self.buf)
+        await self.storage.write(write_io=write_io)
 
         # Reclaim buffer memory
-        del io_req
+        del write_io
         self.buf = None
         return self
 
@@ -155,8 +148,8 @@ async def execute_write_reqs(
     # stage.
     ready_for_staging = {_WritePipeline(write_req, storage) for write_req in write_reqs}
     staging_tasks = set()
-    ready_for_io = set()
-    io_tasks = set()
+    ready_for_io: Set[_WritePipeline] = set()
+    io_tasks: Set[asyncio.Task] = set()
     executor = ThreadPoolExecutor(max_workers=_MAX_PER_RANK_CPU_CONCURRENCY)
 
     bytes_written = 0
@@ -172,7 +165,12 @@ async def execute_write_reqs(
         Dispatch as many staging tasks as the memory budget allows.
         """
         for p in set(ready_for_staging):
-            if len(staging_tasks) == 0 or p.staging_cost_bytes < memory_budget_bytes:
+            # Allow staging tasks whose cost exceeds the memory budget only
+            # when there is no inflight write pipeline.
+            if (
+                len(staging_tasks) + len(ready_for_io) + len(io_tasks) == 0
+                or p.staging_cost_bytes < memory_budget_bytes
+            ):
                 memory_budget_bytes -= p.staging_cost_bytes
                 staging_task = asyncio.create_task(p.stage_buffer(executor))
                 staging_tasks.add(staging_task)
@@ -282,9 +280,9 @@ class _ReadPipeline:
         self.buf_sz_bytes: Optional[int] = None
 
     async def read_buffer(self) -> "_ReadPipeline":
-        io_req = IOReq(path=self.read_req.path)
-        await self.storage.read(io_req=io_req)
-        self.buf = io_req.buf.getvalue()
+        read_io = ReadIO(path=self.read_req.path, byte_range=self.read_req.byte_range)
+        await self.storage.read(read_io=read_io)
+        self.buf = read_io.buf.getvalue()
         self.buf_sz_bytes = len(self.buf)
         return self
 
@@ -324,7 +322,7 @@ async def execute_read_reqs(
                 len(io_tasks) == 0
                 or read_pipeline.consuming_cost_bytes < memory_budget_bytes
             ):
-                memory_budget_bytes += read_pipeline.consuming_cost_bytes
+                memory_budget_bytes -= read_pipeline.consuming_cost_bytes
                 io_task = asyncio.create_task(read_pipeline.read_buffer())
                 io_tasks.add(io_task)
                 dispatched_ids.add(i)
@@ -352,10 +350,10 @@ async def execute_read_reqs(
             if d in consuming_tasks:
                 consuming_tasks.remove(d)
                 read_pipeline: _ReadPipeline = d.result()
-                memory_budget_bytes -= read_pipeline.consuming_cost_bytes
+                memory_budget_bytes += read_pipeline.consuming_cost_bytes
                 bytes_read += cast(int, read_pipeline.buf_sz_bytes)
 
-    mbps = (bytes_read / 1e6) / (time.monotonic() - begin_ts)
+    mbps = (bytes_read / 1024**2) / (time.monotonic() - begin_ts)
     logger.info(f"Rank {rank} finished loading. Throughput: {mbps:.2f}MB/s")
 
     executor.shutdown()

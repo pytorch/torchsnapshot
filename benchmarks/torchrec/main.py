@@ -13,6 +13,7 @@ import uuid
 from enum import Enum
 from typing import List
 
+import fsspec
 import torch
 import torch.distributed as dist
 import torch.distributed.launcher as pet
@@ -26,6 +27,7 @@ from torchrec.distributed.planner import EmbeddingShardingPlanner, Topology
 from torchrec.distributed.planner.types import ParameterConstraints
 from torchrec.distributed.types import ShardingType
 from torchrec.models.dlrm import DLRM, DLRMTrain
+from torchsnapshot.rss_profiler import measure_rss_deltas
 
 
 NUM_TABLES = 2
@@ -138,14 +140,31 @@ def benchmark_torchsnapshot_async(
         app_state={"dmp": dmp},
         replicated=["**"],
     )
-    snapshot = future.wait()
     unblock_ts = time.monotonic()
+    snapshot = future.wait()
     rank_0_print(f"Snapshot.async_take returned after {unblock_ts - begin_ts:.2f}")
     end_ts = time.monotonic()
     rank_0_print(
         f"Completed saving with torchsnapshot (snapshot path: {snapshot.path})."
         f"Took {end_ts - begin_ts:.2f} seconds "
         f"(blocked for {unblock_ts - begin_ts:.2f} seconds."
+    )
+    if benchmark_load:
+        raise NotImplementedError()
+
+
+def benchmark_torch_save_fsspec(
+    dmp: DistributedModelParallel, work_dir: str, benchmark_load: bool
+) -> None:
+    rank_0_print("Saving a checkpoint with torch.save + fsspec...")
+    begin_ts = time.monotonic()
+    path = os.path.join(work_dir, str(uuid.uuid4()))
+    with fsspec.open(path, "wb") as f:
+        torch.save(dmp.state_dict(), f)
+    dist.barrier()
+    rank_0_print(
+        "Completed saving with torch.save + fsspec."
+        f"Took {time.monotonic() - begin_ts:.2f} seconds."
     )
     if benchmark_load:
         raise NotImplementedError()
@@ -189,22 +208,27 @@ def main(
     torch.cuda.set_device(device)
 
     dmp = initialize_dmp(device=device, mb_per_gpu=mb_per_gpu)
-    if benchmark_type == BenchmarkType.TORCHSNAPSHOT:
-        benchmark_torchsnapshot(
-            dmp=dmp, work_dir=work_dir, benchmark_load=benchmark_load
-        )
-    elif benchmark_type == BenchmarkType.TORCHSNAPSHOT_ASYNC:
-        benchmark_torchsnapshot_async(
-            dmp=dmp, work_dir=work_dir, benchmark_load=benchmark_load
-        )
-    elif benchmark_type == BenchmarkType.TORCH_SAVE_PATH_MANAGER:
-        benchmark_torch_save_path_manager(
-            dmp=dmp, work_dir=work_dir, benchmark_load=benchmark_load
-        )
-    elif benchmark_type == BenchmarkType.TORCH_SAVE_FSSPEC:
-        raise NotImplementedError()
-    else:
-        raise ValueError(f"Unrecognized benchmark type: {benchmark_type}")
+    rss_deltas = []
+    with measure_rss_deltas(rss_deltas=rss_deltas):
+        if benchmark_type == BenchmarkType.TORCHSNAPSHOT:
+            benchmark_torchsnapshot(
+                dmp=dmp, work_dir=work_dir, benchmark_load=benchmark_load
+            )
+        elif benchmark_type == BenchmarkType.TORCHSNAPSHOT_ASYNC:
+            benchmark_torchsnapshot_async(
+                dmp=dmp, work_dir=work_dir, benchmark_load=benchmark_load
+            )
+        elif benchmark_type == BenchmarkType.TORCH_SAVE_PATH_MANAGER:
+            benchmark_torch_save_path_manager(
+                dmp=dmp, work_dir=work_dir, benchmark_load=benchmark_load
+            )
+        elif benchmark_type == BenchmarkType.TORCH_SAVE_FSSPEC:
+            benchmark_torch_save_fsspec(
+                dmp=dmp, work_dir=work_dir, benchmark_load=benchmark_load
+            )
+        else:
+            raise ValueError(f"Unrecognized benchmark type: {benchmark_type}")
+    print(f"Peak RSS delta: {max(rss_deltas) // 1024**2}MB")
 
 
 if __name__ == "__main__":

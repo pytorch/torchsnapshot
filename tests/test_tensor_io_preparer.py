@@ -5,6 +5,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 import asyncio
+import tempfile
 
 import unittest
 from typing import cast, List
@@ -13,11 +14,14 @@ import torch
 
 from torchsnapshot.io_preparer import TensorIOPreparer
 from torchsnapshot.io_types import ReadReq, WriteReq
+from torchsnapshot.scheduler import execute_read_reqs, execute_write_reqs
 from torchsnapshot.serialization import (
     ALL_SUPPORTED_DTYPES,
     BUFFER_PROTOCOL_SUPPORTED_DTYPES,
     Serializer,
 )
+from torchsnapshot.storage_plugins.fs import FSStoragePlugin
+from torchsnapshot.test_utils import async_test
 
 
 class TensorIOPreparerTest(unittest.TestCase):
@@ -109,3 +113,67 @@ class TensorIOPreparerTest(unittest.TestCase):
                     TensorIOPreparer.get_tensor_size_from_entry(entry),
                     tensor.element_size() * tensor.nelement(),
                 )
+
+    async def _test_chunked_read_helper(
+        self, src: torch.Tensor, dst: torch.Tensor
+    ) -> None:
+        """
+        First save src tensor. Then load the persisted src tensor into dst
+        tensor using a buffer_size_limit_bytes that would lead to chunked read.
+        Finally verify that src tensor equals to dst tensor.
+        """
+        self.assertFalse(torch.allclose(src, dst))
+
+        with tempfile.TemporaryDirectory() as path:
+            storage = FSStoragePlugin(root=path)
+            entry, write_reqs = TensorIOPreparer.prepare_write(
+                storage_path="src", tensor=src
+            )
+            pending_io_work = await execute_write_reqs(
+                write_reqs=write_reqs,
+                storage=storage,
+                memory_budget_bytes=32 * 1024**3,
+                rank=0,
+            )
+            await pending_io_work.complete()
+
+            buffer_size_limit_bytes = src.nelement() * src.element_size() // 4
+            read_reqs = TensorIOPreparer.prepare_read(
+                entry=entry,
+                tensor_out=dst,
+                buffer_size_limit_bytes=buffer_size_limit_bytes,
+            )
+            self.assertEqual(len(read_reqs), 4)
+            await execute_read_reqs(
+                read_reqs=read_reqs,
+                storage=storage,
+                memory_budget_bytes=32 * 1024**3,
+                rank=0,
+            )
+        self.assertTrue(torch.allclose(src, dst))
+
+    @async_test
+    async def test_chunked_read(self) -> None:
+        foo = torch.rand(2000, 2000)
+        bar = torch.rand(2000, 2000)
+        await self._test_chunked_read_helper(src=foo, dst=bar)
+
+        # strided
+        foo = torch.rand(5000, 5000).as_strided((2000, 2000), (2, 2))
+        bar = torch.rand(5000, 5000).as_strided((2000, 2000), (2, 2))
+        await self._test_chunked_read_helper(src=foo, dst=bar)
+
+        # strided with storage_offset
+        foo = torch.rand(5000, 5000).as_strided((2000, 2000), (2, 2), 1009)
+        bar = torch.rand(5000, 5000).as_strided((2000, 2000), (2, 2), 1009)
+        await self._test_chunked_read_helper(src=foo, dst=bar)
+
+        # non-contiguous view
+        foo = torch.rand(4000, 4000)[1000:3000, 1000:3000]
+        bar = torch.rand(4000, 4000)[1000:3000, 1000:3000]
+        await self._test_chunked_read_helper(src=foo, dst=bar)
+
+        # 1009 is a prime number
+        foo = torch.rand(1009, 1009)
+        bar = torch.rand(1009, 1009)
+        await self._test_chunked_read_helper(src=foo, dst=bar)
