@@ -164,7 +164,7 @@ def tensor_as_memoryview(tensor: torch.Tensor) -> memoryview:
         tensor = tensor.contiguous()
     if tensor.dtype == torch.bfloat16:
         return _bfloat16_tensor_to_memoryview(tensor)
-    return memoryview(tensor.numpy())
+    return memoryview(tensor.numpy()).cast("b")
 
 
 def _bfloat16_tensor_to_memoryview(tensor: torch.Tensor) -> memoryview:
@@ -193,7 +193,7 @@ def _bfloat16_tensor_to_memoryview(tensor: torch.Tensor) -> memoryview:
     untyped_storage = tensor.storage()._untyped()
     tensor = torch.empty(tensor.size(), dtype=torch.float16)
     tensor.set_(untyped_storage)
-    return memoryview(tensor.numpy())
+    return memoryview(tensor.numpy()).cast("b")
 
 
 def tensor_from_memoryview(

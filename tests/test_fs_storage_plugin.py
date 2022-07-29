@@ -5,13 +5,14 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+import io
 import logging
 import os
 import tempfile
 import unittest
 
 import torch
-import torchsnapshot
+from torchsnapshot.io_types import ReadIO, WriteIO
 from torchsnapshot.storage_plugins.fs import FSStoragePlugin
 from torchsnapshot.test_utils import async_test
 
@@ -29,15 +30,16 @@ class FSStoragePluginTest(unittest.TestCase):
 
             tensor = torch.rand((_TENSOR_SZ,))
             tensor_path = os.path.join(path, "tensor")
-            write_req = torchsnapshot.io_types.IOReq(path="tensor")
-            torch.save(tensor, write_req.buf)
+            buf = io.BytesIO()
+            torch.save(tensor, buf)
+            write_io = WriteIO(path="tensor", buf=memoryview(buf.getvalue()))
 
-            await plugin.write(io_req=write_req)
+            await plugin.write(write_io=write_io)
             self.assertTrue(os.path.exists(tensor_path))
 
-            read_req = torchsnapshot.io_types.IOReq(path="tensor")
-            await plugin.read(io_req=read_req)
-            loaded = torch.load(read_req.buf)
+            read_io = ReadIO(path="tensor")
+            await plugin.read(read_io=read_io)
+            loaded = torch.load(read_io.buf)
             self.assertTrue(torch.allclose(tensor, loaded))
 
             await plugin.delete(path="tensor")

@@ -13,7 +13,7 @@ from typing import Set
 import aiofiles
 import aiofiles.os
 
-from torchsnapshot.io_types import IOReq, StoragePlugin
+from torchsnapshot.io_types import ReadIO, StoragePlugin, WriteIO
 
 
 class FSStoragePlugin(StoragePlugin):
@@ -21,8 +21,8 @@ class FSStoragePlugin(StoragePlugin):
         self.root = root
         self._dir_cache: Set[pathlib.Path] = set()
 
-    async def write(self, io_req: IOReq) -> None:
-        path = os.path.join(self.root, io_req.path)
+    async def write(self, write_io: WriteIO) -> None:
+        path = os.path.join(self.root, write_io.path)
 
         dir_path = pathlib.Path(path).parent
         if dir_path not in self._dir_cache:
@@ -30,20 +30,21 @@ class FSStoragePlugin(StoragePlugin):
             self._dir_cache.add(dir_path)
 
         async with aiofiles.open(path, "wb+") as f:
-            await f.write(io_req.buf.getvalue())
+            # pyre-ignore: memoryview is actually supported
+            await f.write(write_io.buf)
 
-    async def read(self, io_req: IOReq) -> None:
-        path = os.path.join(self.root, io_req.path)
-        byte_range = io_req.byte_range
+    async def read(self, read_io: ReadIO) -> None:
+        path = os.path.join(self.root, read_io.path)
+        byte_range = read_io.byte_range
 
         async with aiofiles.open(path, "rb") as f:
             if byte_range is None:
-                io_req.buf = io.BytesIO(await f.read())
+                read_io.buf = io.BytesIO(await f.read())
             else:
                 offset = byte_range[0]
                 size = byte_range[1] - byte_range[0]
                 await f.seek(offset)
-                io_req.buf = io.BytesIO(await f.read(size))
+                read_io.buf = io.BytesIO(await f.read(size))
 
     async def delete(self, path: str) -> None:
         path = os.path.join(self.root, path)

@@ -28,7 +28,8 @@ from google.auth.transport.requests import AuthorizedSession  # @manual
 from google.resumable_media import common  # @manual
 from google.resumable_media.requests import ChunkedDownload, ResumableUpload  # @manual
 
-from torchsnapshot.io_types import IOReq, StoragePlugin
+from torchsnapshot.io_types import ReadIO, StoragePlugin, WriteIO
+from torchsnapshot.memoryview_stream import MemoryviewStream
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -133,7 +134,14 @@ class GCSStoragePlugin(StoragePlugin):
             func=functools.partial(func, *args, **kwargs),
         )
 
-    async def write(self, io_req: IOReq) -> None:
+    async def write(self, write_io: WriteIO) -> None:
+        if isinstance(write_io.buf, bytes):
+            stream = io.BytesIO(write_io.buf)
+        elif isinstance(write_io.buf, memoryview):
+            stream = MemoryviewStream(write_io.buf)
+        else:
+            raise TypeError(f"Unrecognized buffer type: {type(write_io.buf)}")
+
         # pyre-ignore
         upload = ResumableUpload(
             upload_url=self.UPLOAD_URL_TEMPLATE.format(bucket=self.bucket_name),
@@ -143,8 +151,8 @@ class GCSStoragePlugin(StoragePlugin):
             func=self._async_partial(
                 upload.initiate,
                 transport=self.authed_session,
-                stream=io_req.buf,
-                metadata={"name": os.path.join(self.root, io_req.path)},
+                stream=stream,
+                metadata={"name": os.path.join(self.root, write_io.path)},
                 content_type="application/octet-stream",
             ),
             is_transient_error=self._is_transient_error,
@@ -159,13 +167,13 @@ class GCSStoragePlugin(StoragePlugin):
                 before_retry=self._async_partial(
                     self._recover_resumable_upload,
                     upload=upload,
-                    stream=io_req.buf,
+                    stream=stream,
                 ),
             )
 
-    async def read(self, io_req: IOReq) -> None:
+    async def read(self, read_io: ReadIO) -> None:
         blob_name = quote(
-            os.path.join(self.root, io_req.path).encode("utf-8"), safe=b"~"
+            os.path.join(self.root, read_io.path).encode("utf-8"), safe=b"~"
         )
         # pyre-ignore
         download = ChunkedDownload(
@@ -174,7 +182,7 @@ class GCSStoragePlugin(StoragePlugin):
                 blob_name=blob_name,
             ),
             chunk_size=_DEFAULT_CHUNK_SIZE_BYTE,
-            stream=io_req.buf,
+            stream=read_io.buf,
         )
         while not download.finished:
             await self.retry_strategy.await_with_retry(
@@ -183,6 +191,7 @@ class GCSStoragePlugin(StoragePlugin):
                 ),
                 is_transient_error=self._is_transient_error,
             )
+        read_io.buf.seek(0)
 
     async def delete(self, path: str) -> None:
         raise NotImplementedError()

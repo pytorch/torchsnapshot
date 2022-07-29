@@ -7,6 +7,7 @@
 
 # pyre-ignore-all-errors[56]
 
+import io
 import logging
 import os
 import unittest
@@ -14,6 +15,7 @@ import uuid
 
 import torch
 import torchsnapshot
+from torchsnapshot.io_types import ReadIO, WriteIO
 from torchsnapshot.test_utils import async_test
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -49,15 +51,14 @@ class GCSStoragePluginTest(unittest.TestCase):
         plugin = GCSStoragePlugin(root=path)
 
         tensor = torch.rand((_TENSOR_SZ,))
-        write_req = torchsnapshot.io_types.IOReq(path="tensor")
-        torch.save(tensor, write_req.buf)
-        write_req.buf.seek(0)
-        await plugin.write(io_req=write_req)
+        buf = io.BytesIO()
+        torch.save(tensor, buf)
+        write_io = WriteIO(path="tensor", buf=memoryview(buf.getvalue()))
+        await plugin.write(write_io=write_io)
 
-        read_req = torchsnapshot.io_types.IOReq(path="tensor")
-        await plugin.read(io_req=read_req)
-        read_req.buf.seek(0)
-        loaded = torch.load(read_req.buf)
+        read_io = ReadIO(path="tensor")
+        await plugin.read(read_io=read_io)
+        loaded = torch.load(read_io.buf)
         self.assertTrue(torch.allclose(tensor, loaded))
 
         # TODO: bring this back

@@ -10,7 +10,6 @@ import asyncio
 import copy
 import fnmatch
 import functools
-import io
 import itertools
 import logging
 import os
@@ -32,7 +31,7 @@ from .dist_store import get_or_create_store, LinearBarrier
 
 from .flatten import flatten, inflate
 from .io_preparer import ObjectBufferConsumer, prepare_read, prepare_write
-from .io_types import IOReq, ReadReq, StoragePlugin, WriteReq
+from .io_types import ReadIO, ReadReq, StoragePlugin, WriteIO, WriteReq
 from .manifest import (
     Entry,
     get_available_entries,
@@ -662,19 +661,19 @@ path "{logical_path}" which was not available to rank {rank}.
         storage: StoragePlugin,
         event_loop: asyncio.AbstractEventLoop,
     ) -> None:
-        io_req = IOReq(
+        write_io = WriteIO(
             path=SNAPSHOT_METADATA_FNAME,
-            buf=io.BytesIO(snapshot_metadata.to_yaml().encode("utf-8")),
+            buf=snapshot_metadata.to_yaml().encode("utf-8"),
         )
-        storage.sync_write(io_req=io_req, event_loop=event_loop)
+        storage.sync_write(write_io=write_io, event_loop=event_loop)
 
     @staticmethod
     def _read_snapshot_metadata(
         storage: StoragePlugin, event_loop: asyncio.AbstractEventLoop
     ) -> SnapshotMetadata:
-        io_req = IOReq(path=SNAPSHOT_METADATA_FNAME)
-        storage.sync_read(io_req=io_req, event_loop=event_loop)
-        yaml_str = io_req.buf.getvalue().decode("utf-8")
+        read_io = ReadIO(path=SNAPSHOT_METADATA_FNAME)
+        storage.sync_read(read_io=read_io, event_loop=event_loop)
+        yaml_str = read_io.buf.getvalue().decode("utf-8")
         return SnapshotMetadata.from_yaml(yaml_str)
 
     @classmethod
