@@ -65,6 +65,19 @@ class ShardedTensorEntry(Entry):
 
 
 @dataclass
+class ChunkedTensorEntry(Entry):
+    dtype: str
+    shape: List[int]
+    chunks: List[Shard]
+
+    def __init__(self, dtype: str, shape: List[int], chunks: List[Shard]) -> None:
+        super().__init__(type="ChunkedTensor")
+        self.dtype = dtype
+        self.shape = shape
+        self.chunks = chunks
+
+
+@dataclass
 class ObjectEntry(Entry):
     location: str
     serializer: str
@@ -149,6 +162,29 @@ class SnapshotMetadata:
                     for shard in entry["shards"]
                 ]
                 manifest[path] = ShardedTensorEntry(shards=shards)
+            elif type_name == "ChunkedTensor":
+                dtype = entry["dtype"]
+                chunks = [
+                    Shard(
+                        offsets=chunk["offsets"],
+                        sizes=chunk["sizes"],
+                        tensor=TensorEntry(
+                            location=chunk["tensor"]["location"],
+                            serializer=chunk["tensor"]["serializer"],
+                            dtype=chunk["tensor"]["dtype"],
+                            shape=chunk["tensor"]["shape"],
+                            replicated=chunk["tensor"]["replicated"],
+                        ),
+                    )
+                    for chunk in entry["chunks"]
+                ]
+                shape = entry["shape"]
+                manifest[path] = ChunkedTensorEntry(
+                    dtype=dtype,
+                    shape=shape,
+                    chunks=chunks,
+                )
+
             elif type_name == "object":
                 manifest[path] = ObjectEntry(**entry)
         d["manifest"] = manifest
@@ -195,6 +231,13 @@ def get_available_entries(manifest: Manifest, rank: int) -> Manifest:
             local_manifest[local_path] = ShardedTensorEntry(
                 shards=[shard for entry in entries for shard in entry.shards]
             )
+        elif isinstance(entries[0], ChunkedTensorEntry):
+            if rank in group:
+                local_manifest[local_path] = group[rank]
+            # The current rank did not save the entry. Only make the entry
+            # available to the rank if the entry is replicated.
+            elif entries[0].chunks[0].tensor.replicated:
+                local_manifest[local_path] = entries[0]
         elif isinstance(entries[0], (TensorEntry, ObjectEntry)):
             if rank in group:
                 local_manifest[local_path] = group[rank]

@@ -8,6 +8,7 @@
 import unittest
 
 from torchsnapshot.manifest import (
+    ChunkedTensorEntry,
     DictEntry,
     get_available_entries,
     ObjectEntry,
@@ -44,7 +45,7 @@ _MANIFEST = {
         ]
     ),
     "0/foo/quux": TensorEntry(
-        location="replicated/foo/quux",
+        location="0/foo/quux",
         serializer="torch_save",
         dtype="float32",
         shape=[128, 128],
@@ -76,11 +77,56 @@ _MANIFEST = {
         ]
     ),
     "1/foo/quux": TensorEntry(
-        location="replicated/foo/quux",
+        location="1/foo/quux",
         serializer="torch_save",
         dtype="float32",
         shape=[128, 128],
         replicated=False,
+    ),
+    "1/foo/qux_chunked": ChunkedTensorEntry(
+        dtype="float32",
+        shape=[7, 10],
+        chunks=[
+            Shard(
+                offsets=[0, 0],
+                sizes=[5, 10],
+                tensor=TensorEntry(
+                    location="replicated/foo/qux_chunked.0",
+                    serializer="torch_save",
+                    dtype="float32",
+                    shape=[5, 10],
+                    replicated=True,
+                ),
+            ),
+            Shard(
+                offsets=[5, 0],
+                sizes=[2, 10],
+                tensor=TensorEntry(
+                    location="replicated/foo/qux_chunked.1",
+                    serializer="torch_save",
+                    dtype="float32",
+                    shape=[2, 10],
+                    replicated=True,
+                ),
+            ),
+        ],
+    ),
+    "1/foo/quux_chunked": ChunkedTensorEntry(
+        dtype="float32",
+        shape=[5, 5],
+        chunks=[
+            Shard(
+                offsets=[0, 0],
+                sizes=[5, 5],
+                tensor=TensorEntry(
+                    location="replicated/foo/quux_chunked",
+                    serializer="torch_save",
+                    dtype="float32",
+                    shape=[5, 5],
+                    replicated=True,
+                ),
+            )
+        ],
     ),
 }
 
@@ -141,11 +187,56 @@ class ManifestTest(unittest.TestCase):
                 ]
             ),
             "foo/quux": TensorEntry(
-                location="replicated/foo/quux",
+                location="0/foo/quux",
                 serializer="torch_save",
                 dtype="float32",
                 shape=[128, 128],
                 replicated=False,
+            ),
+            "foo/qux_chunked": ChunkedTensorEntry(
+                dtype="float32",
+                shape=[7, 10],
+                chunks=[
+                    Shard(
+                        offsets=[0, 0],
+                        sizes=[5, 10],
+                        tensor=TensorEntry(
+                            location="replicated/foo/qux_chunked.0",
+                            serializer="torch_save",
+                            dtype="float32",
+                            shape=[5, 10],
+                            replicated=True,
+                        ),
+                    ),
+                    Shard(
+                        offsets=[5, 0],
+                        sizes=[2, 10],
+                        tensor=TensorEntry(
+                            location="replicated/foo/qux_chunked.1",
+                            serializer="torch_save",
+                            dtype="float32",
+                            shape=[2, 10],
+                            replicated=True,
+                        ),
+                    ),
+                ],
+            ),
+            "foo/quux_chunked": ChunkedTensorEntry(
+                dtype="float32",
+                shape=[5, 5],
+                chunks=[
+                    Shard(
+                        offsets=[0, 0],
+                        sizes=[5, 5],
+                        tensor=TensorEntry(
+                            location="replicated/foo/quux_chunked",
+                            serializer="torch_save",
+                            dtype="float32",
+                            shape=[5, 5],
+                            replicated=True,
+                        ),
+                    )
+                ],
             ),
         }
         self.assertDictEqual(available_entries, expected_available_entries)
@@ -184,6 +275,51 @@ class ManifestTest(unittest.TestCase):
                         ),
                     ),
                 ]
+            ),
+            "foo/qux_chunked": ChunkedTensorEntry(
+                dtype="float32",
+                shape=[7, 10],
+                chunks=[
+                    Shard(
+                        offsets=[0, 0],
+                        sizes=[5, 10],
+                        tensor=TensorEntry(
+                            location="replicated/foo/qux_chunked.0",
+                            serializer="torch_save",
+                            dtype="float32",
+                            shape=[5, 10],
+                            replicated=True,
+                        ),
+                    ),
+                    Shard(
+                        offsets=[5, 0],
+                        sizes=[2, 10],
+                        tensor=TensorEntry(
+                            location="replicated/foo/qux_chunked.1",
+                            serializer="torch_save",
+                            dtype="float32",
+                            shape=[2, 10],
+                            replicated=True,
+                        ),
+                    ),
+                ],
+            ),
+            "foo/quux_chunked": ChunkedTensorEntry(
+                dtype="float32",
+                shape=[5, 5],
+                chunks=[
+                    Shard(
+                        offsets=[0, 0],
+                        sizes=[5, 5],
+                        tensor=TensorEntry(
+                            location="replicated/foo/quux_chunked",
+                            serializer="torch_save",
+                            dtype="float32",
+                            shape=[5, 5],
+                            replicated=True,
+                        ),
+                    )
+                ],
             ),
         }
         self.assertDictEqual(available_entries, expected_available_entries)
