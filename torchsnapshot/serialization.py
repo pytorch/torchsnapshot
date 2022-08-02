@@ -7,6 +7,7 @@
 
 import io
 import logging
+import warnings
 from enum import Enum
 from typing import Dict, List
 
@@ -204,7 +205,12 @@ def _bfloat16_tensor_to_memoryview(tensor: torch.Tensor) -> memoryview:
 def tensor_from_memoryview(
     mv: memoryview, dtype: torch.dtype, shape: List[int]
 ) -> torch.Tensor:
-    return torch.reshape(torch.frombuffer(mv, dtype=dtype), shape)
+    # PyTorch issues a warning if the given memoryview is non-writable. This is
+    # not a concern for torchsnapshot, as tensors created from non-writable
+    # buffers are all read-only, intermediate tensors.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return torch.reshape(torch.frombuffer(mv, dtype=dtype), shape)
 
 
 def torch_save_as_bytes(tensor: torch.Tensor) -> bytes:
