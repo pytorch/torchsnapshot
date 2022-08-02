@@ -69,7 +69,7 @@ if __name__ == "__main__":
         description="A lightweight library for adding fault tolerance to large-scale PyTorch distributed training workloads.",
         long_description=readme,
         long_description_content_type="text/markdown",
-        url="https://github.com/facebookresearch/torchsnapshot",
+        url="https://github.com/pytorch/torchsnapshot",
         license="BSD-3",
         keywords=["pytorch", "snapshot", "checkpoint"],
         python_requires=">=3.7",
