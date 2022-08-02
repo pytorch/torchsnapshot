@@ -190,7 +190,12 @@ def _bfloat16_tensor_to_memoryview(tensor: torch.Tensor) -> memoryview:
             "The input tensor must have be of type torch.bfloat16 "
             f"(got {tensor.dtype})."
         )
-    untyped_storage = tensor.storage()._untyped()
+    if hasattr(tensor.storage(), "_untyped"):
+        # TODO: drop this once PyTorch 1.12 is no longer supported
+        # https://github.com/pytorch/pytorch/pull/82438
+        untyped_storage = tensor.storage()._untyped()
+    else:
+        untyped_storage = tensor.storage().untyped()
     tensor = torch.empty(tensor.size(), dtype=torch.float16)
     tensor.set_(untyped_storage)
     return memoryview(tensor.numpy()).cast("b")
