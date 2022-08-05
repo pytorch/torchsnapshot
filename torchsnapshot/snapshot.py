@@ -772,7 +772,6 @@ path "{logical_path}" which was not available to rank {rank}.
     def _coalesce_replicated(
         replicated: List[str], global_replicated: List[List[str]]
     ) -> List[str]:
-        # pyre-ignore[6]
         verified_replicated = list(set.intersection(*map(set, global_replicated)))
         return verified_replicated
 
