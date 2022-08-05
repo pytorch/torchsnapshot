@@ -42,7 +42,7 @@ release = "0.0.1"
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = ["sphinx.ext.napoleon", "sphinx.ext.autodoc", 'sphinx.ext.intersphinx']
+extensions = ["sphinx.ext.napoleon", "sphinx.ext.autodoc", "sphinx.ext.intersphinx"]
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
@@ -58,7 +58,6 @@ exclude_patterns = []
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-# html_theme = 'alabaster'
 html_theme = "pytorch_sphinx_theme"
 html_theme_path = [pytorch_sphinx_theme.get_html_theme_path()]
 
@@ -69,5 +68,5 @@ html_static_path = ["_static"]
 
 # where to find external docs
 intersphinx_mapping = {
-    'torch': ('https://pytorch.org/docs/stable/', None),
+    "torch": ("https://pytorch.org/docs/stable/", None),
 }
