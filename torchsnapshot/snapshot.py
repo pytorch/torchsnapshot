@@ -65,6 +65,7 @@ class Snapshot:
 
     Basic usage:
     ::
+
         # Define the program state
         app_state = {"model": model, "optimizer": optimizer"}
 
@@ -81,13 +82,17 @@ class Snapshot:
         describing the persisted values and the structure of the original state
         dict.
 
-        Comparing with func:`torch.save` and func:`torch.load`, torchsnapshot:
+        Comparing with :py:func:`torch.save` and :py:func:`torch.load`, torchsnapshot:
 
         - Enables efficient random access of persisted model weights.
+
         - Accelerates persistence by parallelizing writes.
+
             - For replicated values, persistence is parallelized across ranks.
+
         - Enables flexible yet robust elasticity (changing world size on
           restore).
+
 
     Elasticity:
 
@@ -99,24 +104,33 @@ class Snapshot:
         the categories in [per-rank, replicated, sharded].
 
         per-rank:
+
             By default, all non-sharded values are treated as per-rank.
+
             On save, the value is only saved by the owning rank.
+
             On load, the value is only made available to the same rank.
 
         replicated:
+
             A user can suggest any non-sharded value as replicated via glob
-                patterns.
+            patterns.
+
             On save, the value is only saved once (can be by any rank).
+
             On load, the value is made available to all ranks, including newly
-                joined ranks.
+            joined ranks.
 
         sharded:
+
             Specific types are always treated as sharded (e.g. ShardedTensor).
+
             On save, all shard-owning ranks save their shards.
+
             On load, all shards are made available to all ranks, including
-                newly joined rank. All ranks can read from all shards for
-                restoring the runtime object from persisted values.
-                (ShardedTensor resharding is powered by torch.dist.checkpoint).
+            newly joined rank. All ranks can read from all shards for
+            restoring the runtime object from persisted values.
+            (ShardedTensor resharding is powered by torch.dist.checkpoint).
 
         If all values within a snapshot are either replicated or sharded, the
         snapshot is automatically reshard-able.
@@ -159,7 +173,7 @@ class Snapshot:
             app_state: The program state to take the snapshot from.
             path: The location to save the snapshot.
             pg: The process group for the processes taking the snapshot.
-                When unspecified:
+            When unspecified:
                     - If distributed is initialized, the global process group will be used.
                     - If distributed is not initialized, single process is assumed.
             replicated: A list of glob patterns for hinting the matching paths
@@ -223,7 +237,7 @@ class Snapshot:
             app_state: The program state to take the snapshot from.
             path: The location to save the snapshot.
             pg: The process group for the processes taking the snapshot.
-                When unspecified:
+            When unspecified:
                     - If distributed is initialized, the global process group will be used.
                     - If distributed is not initialized, single process is assumed.
             replicated: A list of glob patterns for hinting the matching paths
@@ -232,9 +246,9 @@ class Snapshot:
 
         Returns:
             A handle with which the newly taken snapshot can be obtained via
-                `.wait()`. Note that waiting on the handle is optional. The
-                snapshot will be committed regardless of whether `.wait()` is
-                invoked.
+            `.wait()`. Note that waiting on the handle is optional. The
+            snapshot will be committed regardless of whether `.wait()` is
+            invoked.
         """
         torch._C._log_api_usage_once("torchsnapshot.Snapshot.async_take")
         event_loop = asyncio.new_event_loop()
@@ -434,7 +448,7 @@ class Snapshot:
 
         A path in snapshot metadata follows the following format:
 
-            RANK/STATEFUL_NAME/STATE_DICT_KEY[/NESTED_CONTAINER_KEY ...]
+            ``RANK/STATEFUL_NAME/STATE_DICT_KEY[/NESTED_CONTAINER_KEY...]``
 
         The rank only matters when the persisted object is "per-rank".
         Arbitrary rank can be used when the persisted object is "replicated" or

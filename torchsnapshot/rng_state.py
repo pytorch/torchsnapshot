@@ -13,7 +13,7 @@ import torch
 class RNGState:
     """
     When captured in app state, it is guaranteed that rng states will be the
-    same after Snapshot.take and Snapshot.restore.
+    same after ``Snapshot.take`` and ``Snapshot.restore``.
 
     ::
 
@@ -28,7 +28,7 @@ class RNGState:
 
         torch.testing.assert_close(after_take, after_restore)
 
-    TODO: augment this to capture rng states other than torch.get_rng_state().
+    TODO augment this to capture rng states other than torch.get_rng_state().
     """
 
     def state_dict(self) -> Dict[str, torch.Tensor]:

@@ -7,10 +7,10 @@
 
 "A lightweight library for adding fault tolerance to large-scale PyTorch distributed training workloads"
 
-from .rng_state import RNGState
 from .snapshot import Snapshot
-from .state_dict import StateDict
 from .stateful import Stateful
+from .state_dict import StateDict
+from .rng_state import RNGState
 from .version import __version__
 
 
