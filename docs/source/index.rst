@@ -8,10 +8,7 @@ Welcome to the TorchSnapshot documentation!
 
 TorchRec is a PyTorch library for adding fault tolerance to large-scale PyTorch distributed training workloads.
 
-
-For installation instructions, visit
-
-https://github.com/pytorch/torchsnapshot#readme
+`Installation instructions <https://github.com/pytorch/torchsnapshot#readme>`_
 
 Examples
 --------
