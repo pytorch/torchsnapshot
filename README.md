@@ -1,11 +1,11 @@
 # torchsnapshot
 
 <p align="center">
-<a href="https://github.com/facebookresearch/torchsnapshot/actions?query=branch%3Amain"><img src="https://img.shields.io/github/workflow/status/facebookresearch/torchsnapshot/unit%20test/main" alt="build status"></a>
+<a href="https://github.com/pytorch/torchsnapshot/actions?query=branch%3Amain"><img src="https://img.shields.io/github/workflow/status/pytorch/torchsnapshot/unit%20test/main" alt="build status"></a>
 <a href="https://pypi.org/project/torchsnapshot"><img src="https://img.shields.io/pypi/v/torchsnapshot" alt="pypi version"></a>
 <a href="https://pypi.org/project/torchsnapshot-nightly"><img src="https://img.shields.io/pypi/v/torchsnapshot-nightly?label=nightly" alt="pypi nightly version"></a>
-<a href="https://codecov.io/gh/facebookresearch/torchsnapshot"><img src="https://codecov.io/gh/facebookresearch/torchsnapshot/branch/main/graph/badge.svg?token=DR67Q6T7YF" alt="codecov"></a>
-<a href="https://github.com/facebookresearch/torchsnapshot/blob/main/LICENSE"><img src="https://img.shields.io/pypi/l/torchsnapshot" alt="bsd license"></a>
+<a href="https://codecov.io/gh/pytorch/torchsnapshot"><img src="https://codecov.io/gh/pytorch/torchsnapshot/branch/main/graph/badge.svg?token=DR67Q6T7YF" alt="codecov"></a>
+<a href="https://github.com/pytorch/torchsnapshot/blob/main/LICENSE"><img src="https://img.shields.io/pypi/l/torchsnapshot" alt="bsd license"></a>
 </div>
 
 **This library is currently in Alpha and currently does not have a stable release. The API may change and may not be backward compatible. If you have suggestions for improvements, please open a GitHub issue. We'd love to hear your feedback.**
