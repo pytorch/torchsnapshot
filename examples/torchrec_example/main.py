@@ -171,7 +171,6 @@ def train(work_dir: str, max_epochs: int, snapshot_path: Optional[str] = None) -
         )
         print(f"Snapshot path: {snapshot.path}")
         print(f"Final loss: {final_loss}")
-    snapshot.restore(app_state)
 
     # torchsnapshot: examine snapshot content
     if dist.get_rank() == 0:
@@ -183,20 +182,28 @@ def train(work_dir: str, max_epochs: int, snapshot_path: Optional[str] = None) -
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--work-dir", default="/tmp")
-    parser.add_argument("--num-processes", type=int, default=2)
     parser.add_argument("--max-epochs", type=int, default=2)
     parser.add_argument("--snapshot-path")
+    parser.add_argument("--use-pet", action="store_true", default=False)
+    parser.add_argument("--num-processes", type=int, default=2)
     args: argparse.Namespace = parser.parse_args()
-    lc = pet.LaunchConfig(
-        min_nodes=1,
-        max_nodes=1,
-        nproc_per_node=args.num_processes,
-        run_id=str(uuid.uuid4()),
-        rdzv_backend="c10d",
-        rdzv_endpoint="localhost:0",
-        max_restarts=0,
-        monitor_interval=1,
-    )
-    pet.elastic_launch(lc, entrypoint=train)(
-        args.work_dir, args.max_epochs, args.snapshot_path
-    )
+    if args.use_pet:
+        lc = pet.LaunchConfig(
+            min_nodes=1,
+            max_nodes=1,
+            nproc_per_node=args.num_processes,
+            run_id=str(uuid.uuid4()),
+            rdzv_backend="c10d",
+            rdzv_endpoint="localhost:0",
+            max_restarts=0,
+            monitor_interval=1,
+        )
+        pet.elastic_launch(lc, entrypoint=train)(
+            args.work_dir, args.max_epochs, args.snapshot_path
+        )
+    else:
+        train(
+            work_dir=args.work_dir,
+            max_epochs=args.max_epochs,
+            snapshot_path=args.snapshot_path,
+        )
