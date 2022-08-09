@@ -10,7 +10,7 @@ from torchsnapshot import Snapshot, StateDict
 logger = logging.getLogger(__name__)
 
 
-def _save_zero_checkpoint(self, save_path, tag):
+def _save_zero_checkpoint(self, save_path: str, tag: str) -> None:
     app_state = {
         "optimizer": self.optimizer,
         "objects": StateDict(ds_config=self.config, ds_version=version),
@@ -60,7 +60,12 @@ class Zero3StateAdapter:
             )
 
 
-def _load_zero_checkpoint(self, load_dir, tag, load_optimizer_states=True):
+def _load_zero_checkpoint(
+    self,
+    load_dir: str,
+    tag: str,
+    load_optimizer_states: bool = True,
+) -> bool:
     snapshot = Snapshot(path=load_dir)
     app_state = {
         "optimizer": Zero3StateAdapter(
