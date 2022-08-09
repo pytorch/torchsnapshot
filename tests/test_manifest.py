@@ -83,7 +83,7 @@ _MANIFEST = {
         shape=[128, 128],
         replicated=False,
     ),
-    "1/foo/qux_chunked": ChunkedTensorEntry(
+    "0/foo/qux_chunked": ChunkedTensorEntry(
         dtype="float32",
         shape=[7, 10],
         chunks=[
@@ -91,7 +91,7 @@ _MANIFEST = {
                 offsets=[0, 0],
                 sizes=[5, 10],
                 tensor=TensorEntry(
-                    location="replicated/foo/qux_chunked.0",
+                    location="replicated/foo/qux_chunked_0_0",
                     serializer="torch_save",
                     dtype="float32",
                     shape=[5, 10],
@@ -102,7 +102,7 @@ _MANIFEST = {
                 offsets=[5, 0],
                 sizes=[2, 10],
                 tensor=TensorEntry(
-                    location="replicated/foo/qux_chunked.1",
+                    location="replicated/foo/qux_chunked_5_0",
                     serializer="torch_save",
                     dtype="float32",
                     shape=[2, 10],
@@ -111,21 +111,32 @@ _MANIFEST = {
             ),
         ],
     ),
-    "1/foo/quux_chunked": ChunkedTensorEntry(
+    "1/foo/qux_chunked": ChunkedTensorEntry(
         dtype="float32",
-        shape=[5, 5],
+        shape=[7, 10],
         chunks=[
             Shard(
                 offsets=[0, 0],
-                sizes=[5, 5],
+                sizes=[5, 10],
                 tensor=TensorEntry(
-                    location="replicated/foo/quux_chunked",
+                    location="replicated/foo/qux_chunked_0_0",
                     serializer="torch_save",
                     dtype="float32",
-                    shape=[5, 5],
+                    shape=[5, 10],
                     replicated=True,
                 ),
-            )
+            ),
+            Shard(
+                offsets=[5, 0],
+                sizes=[2, 10],
+                tensor=TensorEntry(
+                    location="replicated/foo/qux_chunked_5_0",
+                    serializer="torch_save",
+                    dtype="float32",
+                    shape=[2, 10],
+                    replicated=True,
+                ),
+            ),
         ],
     ),
 }
@@ -201,7 +212,7 @@ class ManifestTest(unittest.TestCase):
                         offsets=[0, 0],
                         sizes=[5, 10],
                         tensor=TensorEntry(
-                            location="replicated/foo/qux_chunked.0",
+                            location="replicated/foo/qux_chunked_0_0",
                             serializer="torch_save",
                             dtype="float32",
                             shape=[5, 10],
@@ -212,30 +223,13 @@ class ManifestTest(unittest.TestCase):
                         offsets=[5, 0],
                         sizes=[2, 10],
                         tensor=TensorEntry(
-                            location="replicated/foo/qux_chunked.1",
+                            location="replicated/foo/qux_chunked_5_0",
                             serializer="torch_save",
                             dtype="float32",
                             shape=[2, 10],
                             replicated=True,
                         ),
                     ),
-                ],
-            ),
-            "foo/quux_chunked": ChunkedTensorEntry(
-                dtype="float32",
-                shape=[5, 5],
-                chunks=[
-                    Shard(
-                        offsets=[0, 0],
-                        sizes=[5, 5],
-                        tensor=TensorEntry(
-                            location="replicated/foo/quux_chunked",
-                            serializer="torch_save",
-                            dtype="float32",
-                            shape=[5, 5],
-                            replicated=True,
-                        ),
-                    )
                 ],
             ),
         }
@@ -284,7 +278,7 @@ class ManifestTest(unittest.TestCase):
                         offsets=[0, 0],
                         sizes=[5, 10],
                         tensor=TensorEntry(
-                            location="replicated/foo/qux_chunked.0",
+                            location="replicated/foo/qux_chunked_0_0",
                             serializer="torch_save",
                             dtype="float32",
                             shape=[5, 10],
@@ -295,30 +289,13 @@ class ManifestTest(unittest.TestCase):
                         offsets=[5, 0],
                         sizes=[2, 10],
                         tensor=TensorEntry(
-                            location="replicated/foo/qux_chunked.1",
+                            location="replicated/foo/qux_chunked_5_0",
                             serializer="torch_save",
                             dtype="float32",
                             shape=[2, 10],
                             replicated=True,
                         ),
                     ),
-                ],
-            ),
-            "foo/quux_chunked": ChunkedTensorEntry(
-                dtype="float32",
-                shape=[5, 5],
-                chunks=[
-                    Shard(
-                        offsets=[0, 0],
-                        sizes=[5, 5],
-                        tensor=TensorEntry(
-                            location="replicated/foo/quux_chunked",
-                            serializer="torch_save",
-                            dtype="float32",
-                            shape=[5, 5],
-                            replicated=True,
-                        ),
-                    )
                 ],
             ),
         }
