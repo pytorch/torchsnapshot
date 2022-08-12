@@ -26,11 +26,18 @@ import torch
 import torch.distributed as dist
 from torch.distributed._shard.sharded_tensor import ShardedTensor
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torchsnapshot.manifest import ChunkedTensorEntry
 
 from .dist_store import get_or_create_store, LinearBarrier
 
 from .flatten import flatten, inflate
-from .io_preparer import ObjectBufferConsumer, prepare_read, prepare_write
+from .io_preparer import (
+    ChunkedTensorIOPreparer,
+    get_storage_path,
+    ObjectBufferConsumer,
+    prepare_read,
+    prepare_write,
+)
 from .io_types import ReadIO, ReadReq, StoragePlugin, WriteIO, WriteReq
 from .manifest import (
     Entry,
@@ -338,10 +345,41 @@ class Snapshot:
         replicated_paths = cls._calculate_replicated_entries(
             flattened, replicated, pg_wrapper
         )
-
         object_entries: Dict[str, Entry] = {}
         write_reqs: List[WriteReq] = []
+
+        enable_chunking = os.getenv("TORCHSNAPSHOT_ENABLE_CHUNKING") is not None
+
+        if enable_chunking:
+            chunking_instructions = {}
+            chunk_write_reqs: Dict[str, List[WriteReq]] = {}
+            for logical_path, obj in flattened.items():
+                if isinstance(obj, ShardedTensor) or not isinstance(obj, torch.Tensor):
+                    continue
+                chunking_instruction = ChunkedTensorIOPreparer.chunk_tensor(obj)
+                chunking_instructions[logical_path] = chunking_instruction
+                chunk_is_replicated = logical_path in replicated_paths
+                entry, cwrs = ChunkedTensorIOPreparer.prepare_write(
+                    storage_path=get_storage_path(
+                        obj,
+                        logical_path,
+                        pg_wrapper.get_rank(),
+                        replicated=chunk_is_replicated,
+                    ),
+                    tensor=obj,
+                    chunking_instruction=chunking_instructions[logical_path],
+                )
+                for chunk in entry.chunks:
+                    chunk.tensor.replicated = chunk_is_replicated
+                object_entries[logical_path] = entry
+                chunk_write_reqs[logical_path] = cwrs
+
+                # Add chunk write reqs to write reqs
+                write_reqs.extend(cwrs)
+
         for logical_path, obj in flattened.items():
+            if logical_path in object_entries:
+                continue
             entry, item_write_reqs = prepare_write(
                 obj=obj,
                 logical_path=logical_path,
@@ -350,6 +388,7 @@ class Snapshot:
             )
             object_entries[logical_path] = entry
             write_reqs += item_write_reqs
+
         manifest.update(object_entries)
         manifest = cls._gather_manifest(manifest=manifest, pg=pg_wrapper)
 
@@ -392,7 +431,6 @@ class Snapshot:
         available_entries = get_available_entries(
             manifest=self.metadata.manifest, rank=rank
         )
-
         for key in global_keys:
             self._load_stateful(
                 rank=rank,
@@ -495,7 +533,6 @@ class Snapshot:
         storage = url_to_storage_plugin_in_event_loop(
             url_path=self.path, event_loop=event_loop
         )
-
         read_reqs = prepare_read(
             entry=manifest[unranked_path],
             obj_out=obj_out,
@@ -549,17 +586,16 @@ class Snapshot:
     ) -> List[str]:
         rank = pg.get_rank()
         world_size = pg.get_world_size()
-
         replicated_paths = []
         for path, val in flattened.items():
             if any(fnmatch.fnmatch(path, p) for p in replicated) and not isinstance(
                 val, ShardedTensor
             ):
                 replicated_paths.append(path)
-
         # pyre-ignore
         obj_list: List[List[str]] = [None] * world_size
         pg.all_gather_object(obj_list, replicated_paths)
+
         if rank == 0:
             # A path is only treated as replicated if:
             # (1) The path matches one of the patterns specified in `replicated`
@@ -572,23 +608,24 @@ class Snapshot:
             replicated_paths = list(
                 filter(lambda p: path_count[p] == world_size, replicated_paths)
             )
-
-            paths_partition = Snapshot._partition_replicated_paths(
-                replicated_paths, flattened, world_size
-            )
             replicated_paths_list = [replicated_paths]
         else:
-            paths_partition = None
             replicated_paths_list = [[]]
-
-        local_paths_list = [[]]
-        pg.scatter_object_list(local_paths_list, paths_partition, src=0)
         pg.broadcast_object_list(replicated_paths_list, src=0)
-        local_paths = local_paths_list[0]
         replicated_paths = replicated_paths_list[0]
 
+        if rank == 0:
+            all_partition_results = Snapshot._partition_replicated_paths(
+                replicated_paths, flattened, world_size
+            )
+        else:
+            all_partition_results = None
+        scatter_output_list = [None]
+        pg.scatter_object_list(scatter_output_list, all_partition_results, src=0)
+        partition_results = scatter_output_list[0]
+
         for path in replicated_paths:
-            if path not in local_paths:
+            if partition_results and path not in partition_results:
                 del flattened[path]
 
         return replicated_paths
@@ -836,7 +873,6 @@ path "{logical_path}" which was not available to rank {rank}.
                     manifest[path] = entry
             for logical_path, entry in manifest.items():
                 global_manifest[os.path.join(str(rank), logical_path)] = entry
-
         return global_manifest
 
 

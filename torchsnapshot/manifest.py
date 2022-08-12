@@ -258,4 +258,6 @@ def get_available_entries(manifest: Manifest, rank: int) -> Manifest:
 
 
 def is_replicated(entry: Entry) -> bool:
-    return isinstance(entry, (TensorEntry, ObjectEntry)) and entry.replicated
+    return (isinstance(entry, (TensorEntry, ObjectEntry)) and entry.replicated) or (
+        isinstance(entry, ChunkedTensorEntry) and entry.chunks[0].tensor.replicated
+    )

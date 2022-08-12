@@ -14,9 +14,10 @@ import math
 import os
 import sys
 from concurrent.futures import Executor
+from dataclasses import dataclass
 from functools import reduce
 from operator import mul
-from typing import Any, Callable, Generic, List, Optional, Tuple, TypeVar
+from typing import Any, Callable, Generic, List, Optional, Tuple, TypeVar, Union
 
 import torch
 from torch.distributed._shard.sharded_tensor import (
@@ -27,7 +28,15 @@ from torch.distributed._shard.sharded_tensor import (
 from torch.distributed._shard.sharding_spec import ChunkShardingSpec
 
 from .io_types import BufferConsumer, BufferStager, BufferType, ReadReq, WriteReq
-from .manifest import Entry, ObjectEntry, Shard, ShardedTensorEntry, TensorEntry
+from .manifest import (
+    ChunkedTensorEntry,
+    Entry,
+    ObjectEntry,
+    Shard,
+    ShardedTensorEntry,
+    TensorEntry,
+)
+
 from .serialization import (
     BUFFER_PROTOCOL_SUPPORTED_DTYPES,
     dtype_to_element_size,
@@ -45,6 +54,94 @@ from .torch_dist_checkpoint.metadata import (
     TensorReadRequest,
 )
 from .torch_dist_checkpoint.resharding import prepare_sharded_tensor_read
+
+
+@dataclass
+class Chunk:
+    offsets: List[int]
+    sizes: List[int]
+
+
+class ChunkedTensorIOPreparer:
+    DEFAULT_MAX_CHUNK_SIZE_BYTES: int = 512 * 1024 * 1024
+
+    @staticmethod
+    def chunk_tensor(
+        tensor: torch.Tensor,
+        max_chunk_sz_bytes: int = DEFAULT_MAX_CHUNK_SIZE_BYTES,
+        chunking_dim: int = 0,
+    ) -> List[Chunk]:
+        # for 0-d case, reshape to 1-d
+        if tensor.ndim == 0:
+            tensor = tensor.view(-1)
+
+        tensor_sz_bytes = tensor.numel() * tensor.element_size()
+        n_chunks = max(math.ceil(tensor_sz_bytes / max_chunk_sz_bytes), 1)
+        tensor_chunks = torch.chunk(tensor, chunks=n_chunks, dim=chunking_dim)
+
+        curr_offsets = [0] * tensor.ndim
+        chunking_instruction = []
+        for i in range(len(tensor_chunks)):
+            tensor_chunk_sizes = list(tensor_chunks[i].shape)
+            chunking_instruction.append(
+                Chunk(offsets=curr_offsets[:], sizes=tensor_chunk_sizes)
+            )
+            curr_offsets[chunking_dim] += tensor_chunk_sizes[chunking_dim]
+        return chunking_instruction
+
+    @staticmethod
+    def _get_subtensor_view(
+        tensor: torch.Tensor, chunk: Union[Shard, Chunk]
+    ) -> torch.Tensor:
+        # for 0-d case, reshape to 1-d
+        result = tensor.view(-1) if tensor.ndim == 0 else tensor
+
+        for d in range(len(chunk.sizes)):
+            result = result.narrow(d, chunk.offsets[d], chunk.sizes[d])
+        return result
+
+    @classmethod
+    def prepare_write(
+        cls, storage_path: str, tensor: torch.Tensor, chunking_instruction: List[Chunk]
+    ) -> Tuple[ChunkedTensorEntry, List[WriteReq]]:
+        write_reqs = []
+        chunks = []
+        for chunk in chunking_instruction:
+            suffix = "_".join(str(x) for x in chunk.offsets)
+            chunk_entry, chunk_write_reqs = TensorIOPreparer.prepare_write(
+                f"{storage_path}_{suffix}",
+                cls._get_subtensor_view(tensor, chunk),
+            )
+            chunks.append(
+                Shard(offsets=chunk.offsets, sizes=chunk.sizes, tensor=chunk_entry)
+            )
+            write_reqs += chunk_write_reqs
+        chunked_entry = ChunkedTensorEntry(
+            dtype=dtype_to_string(tensor.dtype),
+            shape=list(tensor.shape),
+            chunks=chunks,
+        )
+        return chunked_entry, write_reqs
+
+    @classmethod
+    def prepare_read(
+        cls,
+        entry: ChunkedTensorEntry,
+        tensor_out: Optional[torch.Tensor] = None,
+        buffer_size_limit_bytes: Optional[int] = None,
+    ) -> List[ReadReq]:
+        if tensor_out is None:
+            raise RuntimeError(
+                "Reading a Tensor without a runtime object is not yet supported."
+            )
+        read_reqs = []
+        for chunk in entry.chunks:
+            tensor_out_chunk = cls._get_subtensor_view(tensor_out, chunk)
+            chunk_read_reqs = TensorIOPreparer.prepare_read(
+                chunk.tensor, tensor_out_chunk, buffer_size_limit_bytes
+            )
+            read_reqs += chunk_read_reqs
+        return read_reqs
 
 
 class ShardedTensorIOPreparer:
@@ -65,9 +162,7 @@ class ShardedTensorIOPreparer:
             raise ValueError(
                 f"max_shard_sz_bytes must be a positive integer (got {max_shard_sz_bytes})."
             )
-        slice_sz = (
-            reduce(lambda x, y: x * y, sizes) // sizes[dim] * shard.element_size()
-        )
+        slice_sz = reduce(mul, sizes) // sizes[dim] * shard.element_size()
         chunk_length = max(math.floor(max_shard_sz_bytes / slice_sz), 1)
         n_chunks = math.ceil(sizes[dim] / chunk_length)
 
@@ -528,6 +623,10 @@ def prepare_read(
                 "Reading a ShardedTensor without a runtime object is not yet supported."
             )
         return ShardedTensorIOPreparer.prepare_read(entry, obj_out)
+    elif isinstance(entry, ChunkedTensorEntry):
+        return ChunkedTensorIOPreparer.prepare_read(
+            entry, obj_out, buffer_size_limit_bytes=buffer_size_limit_bytes
+        )
     elif isinstance(entry, TensorEntry):
         return TensorIOPreparer.prepare_read(
             entry, obj_out, buffer_size_limit_bytes=buffer_size_limit_bytes
