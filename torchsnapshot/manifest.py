@@ -69,12 +69,16 @@ class ChunkedTensorEntry(Entry):
     dtype: str
     shape: List[int]
     chunks: List[Shard]
+    replicated: bool
 
-    def __init__(self, dtype: str, shape: List[int], chunks: List[Shard]) -> None:
+    def __init__(
+        self, dtype: str, shape: List[int], chunks: List[Shard], replicated: bool
+    ) -> None:
         super().__init__(type="ChunkedTensor")
         self.dtype = dtype
         self.shape = shape
         self.chunks = chunks
+        self.replicated = replicated
 
 
 @dataclass
@@ -164,6 +168,7 @@ class SnapshotMetadata:
                 manifest[path] = ShardedTensorEntry(shards=shards)
             elif type_name == "ChunkedTensor":
                 dtype = entry["dtype"]
+                replicated = entry["replicated"]
                 chunks = [
                     Shard(
                         offsets=chunk["offsets"],
@@ -183,6 +188,7 @@ class SnapshotMetadata:
                     dtype=dtype,
                     shape=shape,
                     chunks=chunks,
+                    replicated=replicated,
                 )
 
             elif type_name == "object":
@@ -231,14 +237,7 @@ def get_available_entries(manifest: Manifest, rank: int) -> Manifest:
             local_manifest[local_path] = ShardedTensorEntry(
                 shards=[shard for entry in entries for shard in entry.shards]
             )
-        elif isinstance(entries[0], ChunkedTensorEntry):
-            if rank in group:
-                local_manifest[local_path] = group[rank]
-            # The current rank did not save the entry. Only make the entry
-            # available to the rank if the entry is replicated.
-            elif entries[0].chunks[0].tensor.replicated:
-                local_manifest[local_path] = entries[0]
-        elif isinstance(entries[0], (TensorEntry, ObjectEntry)):
+        elif isinstance(entries[0], (TensorEntry, ObjectEntry, ChunkedTensorEntry)):
             if rank in group:
                 local_manifest[local_path] = group[rank]
             # The current rank did not save the entry. Only make the entry
@@ -258,6 +257,7 @@ def get_available_entries(manifest: Manifest, rank: int) -> Manifest:
 
 
 def is_replicated(entry: Entry) -> bool:
-    return (isinstance(entry, (TensorEntry, ObjectEntry)) and entry.replicated) or (
-        isinstance(entry, ChunkedTensorEntry) and entry.chunks[0].tensor.replicated
+    return (
+        isinstance(entry, (TensorEntry, ObjectEntry, ChunkedTensorEntry))
+        and entry.replicated
     )

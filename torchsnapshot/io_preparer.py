@@ -120,6 +120,7 @@ class ChunkedTensorIOPreparer:
             dtype=dtype_to_string(tensor.dtype),
             shape=list(tensor.shape),
             chunks=chunks,
+            replicated=False,
         )
         return chunked_entry, write_reqs
 

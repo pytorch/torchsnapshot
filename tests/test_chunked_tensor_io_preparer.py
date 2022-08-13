@@ -5,7 +5,6 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 import asyncio
-import os
 import tempfile
 import unittest
 from typing import List, Tuple
@@ -31,12 +30,6 @@ from torchsnapshot.test_utils import (
 
 
 class ChunkedTensorIOPreparerTest(unittest.TestCase):
-    def setUp(self) -> None:
-        os.environ["TORCHSNAPSHOT_ENABLE_CHUNKING"] = "True"
-
-    def tearDown(self) -> None:
-        del os.environ["TORCHSNAPSHOT_ENABLE_CHUNKING"]
-
     # tests for chunk_tensor method
     def _test_chunk_tensor_helper(
         self,
@@ -168,6 +161,7 @@ class ChunkedTensorIOPreparerTest(unittest.TestCase):
                 dtype=str(global_tensor.dtype),
                 shape=list(global_tensor.shape),
                 chunks=expected_chunks,
+                replicated=replicated,
             ),
         )
 
@@ -190,6 +184,7 @@ class ChunkedTensorIOPreparerTest(unittest.TestCase):
         entry, write_reqs = ChunkedTensorIOPreparer.prepare_write(
             storage_path, global_tensor, chunking_instruction=chunking_instruction
         )
+        entry.replicated = replicated  # need to set entry's replicated field
         expected = [
             [
                 (global_tensor[0:4, :], [0, 0], [4, 10]),
@@ -220,7 +215,6 @@ class ChunkedTensorIOPreparerTest(unittest.TestCase):
         tensor using a buffer_size_limit_bytes that would lead to chunked read.
         Finally verify that src tensor equals to dst tensor.
         """
-        # self.assertFalse(torch.allclose(src, dst))
         with tempfile.TemporaryDirectory() as path:
             storage = FSStoragePlugin(root=path)
             entry, write_reqs = ChunkedTensorIOPreparer.prepare_write(

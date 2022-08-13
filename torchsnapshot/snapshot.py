@@ -348,34 +348,30 @@ class Snapshot:
         object_entries: Dict[str, Entry] = {}
         write_reqs: List[WriteReq] = []
 
-        enable_chunking = os.getenv("TORCHSNAPSHOT_ENABLE_CHUNKING") is not None
+        chunking_instructions = {}
+        chunk_write_reqs: Dict[str, List[WriteReq]] = {}
+        for logical_path, obj in flattened.items():
+            if isinstance(obj, ShardedTensor) or not isinstance(obj, torch.Tensor):
+                continue
+            chunking_instruction = ChunkedTensorIOPreparer.chunk_tensor(obj)
+            chunking_instructions[logical_path] = chunking_instruction
+            chunk_is_replicated = logical_path in replicated_paths
+            entry, cwrs = ChunkedTensorIOPreparer.prepare_write(
+                storage_path=get_storage_path(
+                    obj,
+                    logical_path,
+                    pg_wrapper.get_rank(),
+                    replicated=chunk_is_replicated,
+                ),
+                tensor=obj,
+                chunking_instruction=chunking_instructions[logical_path],
+            )
+            entry.replicated = chunk_is_replicated
+            object_entries[logical_path] = entry
+            chunk_write_reqs[logical_path] = cwrs
 
-        if enable_chunking:
-            chunking_instructions = {}
-            chunk_write_reqs: Dict[str, List[WriteReq]] = {}
-            for logical_path, obj in flattened.items():
-                if isinstance(obj, ShardedTensor) or not isinstance(obj, torch.Tensor):
-                    continue
-                chunking_instruction = ChunkedTensorIOPreparer.chunk_tensor(obj)
-                chunking_instructions[logical_path] = chunking_instruction
-                chunk_is_replicated = logical_path in replicated_paths
-                entry, cwrs = ChunkedTensorIOPreparer.prepare_write(
-                    storage_path=get_storage_path(
-                        obj,
-                        logical_path,
-                        pg_wrapper.get_rank(),
-                        replicated=chunk_is_replicated,
-                    ),
-                    tensor=obj,
-                    chunking_instruction=chunking_instructions[logical_path],
-                )
-                for chunk in entry.chunks:
-                    chunk.tensor.replicated = chunk_is_replicated
-                object_entries[logical_path] = entry
-                chunk_write_reqs[logical_path] = cwrs
-
-                # Add chunk write reqs to write reqs
-                write_reqs.extend(cwrs)
+            # Add chunk write reqs to write reqs
+            write_reqs.extend(cwrs)
 
         for logical_path, obj in flattened.items():
             if logical_path in object_entries:
@@ -627,7 +623,6 @@ class Snapshot:
         for path in replicated_paths:
             if partition_results and path not in partition_results:
                 del flattened[path]
-
         return replicated_paths
 
     @classmethod
@@ -762,7 +757,6 @@ path "{logical_path}" which was not available to rank {rank}.
                     f"Rank {rank} specified replicated paths: {set(global_replicated[rank])} "
                     f"different from replicated paths verified across all ranks: {set(replicated)}"
                 )
-
         return obj_list[0], replicated
 
     @staticmethod

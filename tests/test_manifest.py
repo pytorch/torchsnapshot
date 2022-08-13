@@ -95,7 +95,7 @@ _MANIFEST = {
                     serializer="torch_save",
                     dtype="float32",
                     shape=[5, 10],
-                    replicated=True,
+                    replicated=False,
                 ),
             ),
             Shard(
@@ -106,10 +106,11 @@ _MANIFEST = {
                     serializer="torch_save",
                     dtype="float32",
                     shape=[2, 10],
-                    replicated=True,
+                    replicated=False,
                 ),
             ),
         ],
+        replicated=True,
     ),
     "1/foo/qux_chunked": ChunkedTensorEntry(
         dtype="float32",
@@ -138,6 +139,7 @@ _MANIFEST = {
                 ),
             ),
         ],
+        replicated=True,
     ),
 }
 
@@ -216,7 +218,7 @@ class ManifestTest(unittest.TestCase):
                             serializer="torch_save",
                             dtype="float32",
                             shape=[5, 10],
-                            replicated=True,
+                            replicated=False,
                         ),
                     ),
                     Shard(
@@ -227,10 +229,11 @@ class ManifestTest(unittest.TestCase):
                             serializer="torch_save",
                             dtype="float32",
                             shape=[2, 10],
-                            replicated=True,
+                            replicated=False,
                         ),
                     ),
                 ],
+                replicated=True,
             ),
         }
         self.assertDictEqual(available_entries, expected_available_entries)
@@ -282,7 +285,7 @@ class ManifestTest(unittest.TestCase):
                             serializer="torch_save",
                             dtype="float32",
                             shape=[5, 10],
-                            replicated=True,
+                            replicated=False,
                         ),
                     ),
                     Shard(
@@ -293,10 +296,11 @@ class ManifestTest(unittest.TestCase):
                             serializer="torch_save",
                             dtype="float32",
                             shape=[2, 10],
-                            replicated=True,
+                            replicated=False,
                         ),
                     ),
                 ],
+                replicated=True,
             ),
         }
         self.assertDictEqual(available_entries, expected_available_entries)
