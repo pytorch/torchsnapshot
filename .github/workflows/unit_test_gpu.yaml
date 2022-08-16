@@ -65,6 +65,7 @@ jobs:
         run: |
           sudo yum install lshw -y
           sudo lshw -C display
+          sudo yum update -y
       - name: nvcc check
         run: |
           nvcc --version
