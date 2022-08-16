@@ -5,119 +5,131 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+
 import unittest
+from typing import Dict, List, Tuple
 
-from typing import List
-
-import torch
 from torchsnapshot import Snapshot
+from torchsnapshot.io_preparer import Chunk
+
+_CHUNKING_INSTRUCTION_T = Dict[str, List[Chunk]]
 
 
 class PartitionReplicatedPathsTest(unittest.TestCase):
     @staticmethod
-    def _check_all_elements_of_list_equal(
-        expected: List[List[str]], actual: List[List[str]]
-    ) -> bool:
-        return all(set(a) == set(b) for a, b in zip(expected, actual))
+    def _check_all_elements_of_partition_equal(
+        expected: List[Tuple[_CHUNKING_INSTRUCTION_T, List[str]]],
+        actual: List[Tuple[_CHUNKING_INSTRUCTION_T, List[str]]],
+    ) -> None:
+        tc = unittest.TestCase()
+        tc.maxDiff = None
+        tc.assertListEqual(expected, actual)
 
-    def test_more_paths_than_ranks(self) -> None:
-        replicated_paths = [
-            "/tmp/foo",
-            "/tmp/bar",
-            "/tmp/quaz",
-        ]
-        flattened = {
-            replicated_paths[0]: torch.zeros(1000),
-            replicated_paths[1]: torch.zeros(500),
-            replicated_paths[2]: torch.zeros(200),
+    def test_more_paths_and_ranks(self) -> None:
+        chunking_instructions = {
+            "/tmp/foo": [Chunk(offsets=[0], sizes=[9], dtype="torch.float32")],
+            "/tmp/bar": [Chunk(offsets=[0], sizes=[10], dtype="torch.float32")],
+            "/tmp/quaz": [Chunk(offsets=[0], sizes=[995], dtype="torch.float32")],
+            "/tmp/foofoo": [Chunk(offsets=[0], sizes=[999], dtype="torch.float32")],
+            "/tmp/barbar": [Chunk(offsets=[0], sizes=[1000], dtype="torch.float32")],
         }
-        world_size = 2
-
-        paths_partition = Snapshot._partition_replicated_paths(
-            replicated_paths,
-            flattened,
-            world_size,
+        partition_results = Snapshot._partition_replicated_paths(
+            list(chunking_instructions.keys()),
+            chunking_instructions,
+            world_size=3,
         )
-
-        expected_paths_partition = [
-            [replicated_paths[0]],
-            [replicated_paths[1], replicated_paths[2]],
+        expected_chunked_results: List[_CHUNKING_INSTRUCTION_T] = [
+            {"/tmp/barbar": [Chunk(offsets=[0], sizes=[1000], dtype="torch.float32")]},
+            {
+                "/tmp/foofoo": [Chunk(offsets=[0], sizes=[999], dtype="torch.float32")],
+                "/tmp/foo": [Chunk(offsets=[0], sizes=[9], dtype="torch.float32")],
+            },
+            {
+                "/tmp/quaz": [Chunk(offsets=[0], sizes=[995], dtype="torch.float32")],
+                "/tmp/bar": [Chunk(offsets=[0], sizes=[10], dtype="torch.float32")],
+            },
         ]
-        self.assertTrue(
-            PartitionReplicatedPathsTest._check_all_elements_of_list_equal(
-                expected=expected_paths_partition, actual=paths_partition
-            )
+        expected_nonchunked_results: List[List[str]] = [[], [], []]
+        PartitionReplicatedPathsTest._check_all_elements_of_partition_equal(
+            list(zip(expected_chunked_results, expected_nonchunked_results)),
+            partition_results,
         )
 
     def test_equal_number_of_paths_and_ranks(self) -> None:
-        replicated_paths = [
-            "/tmp/foo",
-            "/tmp/bar",
-            "/tmp/quaz",
-            "/tmp/foofoo",
-            "/tmp/barbar",
-        ]
-
-        flattened = {
-            replicated_paths[0]: torch.zeros(9),
-            replicated_paths[1]: torch.zeros(10),
-            replicated_paths[2]: torch.zeros(995),
-            replicated_paths[3]: torch.zeros(999),
-            replicated_paths[4]: torch.zeros(1000),
+        # check multiple chunks corresponding to a path
+        chunking_instructions = {
+            "/tmp/foo": [Chunk(offsets=[0], sizes=[500], dtype="torch.float32")],
+            "/tmp/bar": [
+                Chunk(offsets=[0], sizes=[1000], dtype="torch.float32"),
+                Chunk(offsets=[1000], sizes=[200], dtype="torch.float32"),
+            ],
         }
-
-        world_size = 5
-
-        paths_partition = Snapshot._partition_replicated_paths(
-            replicated_paths,
-            flattened,
-            world_size,
+        partition_results = Snapshot._partition_replicated_paths(
+            list(chunking_instructions.keys()),
+            chunking_instructions,
+            world_size=2,
         )
-        expected_paths_partition = [
-            [replicated_paths[4]],
-            [replicated_paths[3]],
-            [replicated_paths[2]],
-            [replicated_paths[1]],
-            [replicated_paths[0]],
+        expected_chunked_results: List[_CHUNKING_INSTRUCTION_T] = [
+            {"/tmp/bar": [Chunk(offsets=[0], sizes=[1000], dtype="torch.float32")]},
+            {
+                "/tmp/foo": [Chunk(offsets=[0], sizes=[500], dtype="torch.float32")],
+                "/tmp/bar": [Chunk(offsets=[1000], sizes=[200], dtype="torch.float32")],
+            },
         ]
-
-        self.assertTrue(
-            PartitionReplicatedPathsTest._check_all_elements_of_list_equal(
-                expected=expected_paths_partition, actual=paths_partition
-            )
+        expected_nonchunked_results: List[List[str]] = [[], [], []]
+        PartitionReplicatedPathsTest._check_all_elements_of_partition_equal(
+            list(zip(expected_chunked_results, expected_nonchunked_results)),
+            partition_results,
         )
 
     def test_more_ranks_than_paths(self) -> None:
+        # check combination of chunked and nonchunkable paths
         replicated_paths = [
-            "/tmp/foo",
-            "/tmp/bar",
-            "/tmp/quaz",
+            "/tmp/foo_chunked",
+            "/tmp/bar_nonchunked",
+            "/tmp/quaz_nonchunked",
         ]
-
-        flattened = {
-            replicated_paths[0]: torch.zeros(100),
-            replicated_paths[1]: torch.zeros(50),
-            replicated_paths[2]: torch.zeros(1000),
+        chunking_instructions = {
+            "/tmp/foo_chunked": [
+                Chunk(offsets=[0, 0], sizes=[10, 100], dtype="torch.float32"),
+                Chunk(offsets=[10, 0], sizes=[5, 100], dtype="torch.float32"),
+                Chunk(offsets=[15, 0], sizes=[2, 100], dtype="torch.float32"),
+            ]
         }
-
-        world_size = 6
-
-        paths_partition = Snapshot._partition_replicated_paths(
+        partition_results = Snapshot._partition_replicated_paths(
             replicated_paths,
-            flattened,
-            world_size,
+            chunking_instructions,
+            world_size=5,
         )
-        expected_paths_partition = [
-            [replicated_paths[2]],
-            [replicated_paths[0]],
-            [replicated_paths[1]],
-            [],
-            [],
-            [],
+        expected_chunked_results: List[_CHUNKING_INSTRUCTION_T] = [
+            {
+                "/tmp/foo_chunked": [
+                    Chunk(offsets=[0, 0], sizes=[10, 100], dtype="torch.float32")
+                ]
+            },
+            {
+                "/tmp/foo_chunked": [
+                    Chunk(offsets=[10, 0], sizes=[5, 100], dtype="torch.float32")
+                ]
+            },
+            {
+                "/tmp/foo_chunked": [
+                    Chunk(offsets=[15, 0], sizes=[2, 100], dtype="torch.float32")
+                ]
+            },
+            {},
+            {},
+            {},
         ]
+        expected_nonchunked_results = (
+            ["/tmp/bar_nonchunked"],
+            ["/tmp/quaz_nonchunked"],
+            [],
+            [],
+            [],
+        )
 
-        self.assertTrue(
-            PartitionReplicatedPathsTest._check_all_elements_of_list_equal(
-                expected=expected_paths_partition, actual=paths_partition
-            )
+        PartitionReplicatedPathsTest._check_all_elements_of_partition_equal(
+            list(zip(expected_chunked_results, expected_nonchunked_results)),
+            partition_results,
         )

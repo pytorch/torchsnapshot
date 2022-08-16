@@ -49,13 +49,13 @@ class ChunkedTensorIOPreparerTest(unittest.TestCase):
     def test_chunk_tensor_0d(self) -> None:
         tensor = torch.tensor(0)
         max_chunk_sz_bytes = 100
-        expected_chunks = [Chunk(offsets=[0], sizes=[1])]
+        expected_chunks = [Chunk(offsets=[0], sizes=[1], dtype=str(tensor.dtype))]
         self._test_chunk_tensor_helper(expected_chunks, tensor, max_chunk_sz_bytes)
 
     def test_chunk_tensor_0_elements(self) -> None:
         tensor = torch.tensor([])
         max_chunk_sz_bytes = 100
-        expected_chunks = [Chunk(offsets=[0], sizes=[0])]
+        expected_chunks = [Chunk(offsets=[0], sizes=[0], dtype=str(tensor.dtype))]
         self._test_chunk_tensor_helper(expected_chunks, tensor, max_chunk_sz_bytes)
 
     def test_chunk_tensor_div_by_elem_size(self) -> None:
@@ -63,9 +63,9 @@ class ChunkedTensorIOPreparerTest(unittest.TestCase):
         self.assertTrue(tensor.is_contiguous())
         max_chunk_sz_bytes = 30 * tensor.element_size()
         expected_chunks = [
-            Chunk(offsets=[0, 0], sizes=[3, 10]),
-            Chunk(offsets=[3, 0], sizes=[3, 10]),
-            Chunk(offsets=[6, 0], sizes=[1, 10]),
+            Chunk(offsets=[0, 0], sizes=[3, 10], dtype=str(tensor.dtype)),
+            Chunk(offsets=[3, 0], sizes=[3, 10], dtype=str(tensor.dtype)),
+            Chunk(offsets=[6, 0], sizes=[1, 10], dtype=str(tensor.dtype)),
         ]
         self._test_chunk_tensor_helper(expected_chunks, tensor, max_chunk_sz_bytes)
 
@@ -74,8 +74,8 @@ class ChunkedTensorIOPreparerTest(unittest.TestCase):
         self.assertTrue(tensor.is_contiguous())
         max_chunk_sz_bytes = 180
         expected_chunks = [
-            Chunk(offsets=[0, 0], sizes=[4, 10]),
-            Chunk(offsets=[4, 0], sizes=[3, 10]),
+            Chunk(offsets=[0, 0], sizes=[4, 10], dtype=str(tensor.dtype)),
+            Chunk(offsets=[4, 0], sizes=[3, 10], dtype=str(tensor.dtype)),
         ]
         self._test_chunk_tensor_helper(expected_chunks, tensor, max_chunk_sz_bytes)
 
@@ -84,11 +84,11 @@ class ChunkedTensorIOPreparerTest(unittest.TestCase):
         non_contig_tensor = tensor[:, :10]  # (10,10)
         self.assertFalse(non_contig_tensor.is_contiguous())
         expected_chunks = [
-            Chunk(offsets=[0, 0], sizes=[2, 10]),
-            Chunk(offsets=[2, 0], sizes=[2, 10]),
-            Chunk(offsets=[4, 0], sizes=[2, 10]),
-            Chunk(offsets=[6, 0], sizes=[2, 10]),
-            Chunk(offsets=[8, 0], sizes=[2, 10]),
+            Chunk(offsets=[0, 0], sizes=[2, 10], dtype=str(tensor.dtype)),
+            Chunk(offsets=[2, 0], sizes=[2, 10], dtype=str(tensor.dtype)),
+            Chunk(offsets=[4, 0], sizes=[2, 10], dtype=str(tensor.dtype)),
+            Chunk(offsets=[6, 0], sizes=[2, 10], dtype=str(tensor.dtype)),
+            Chunk(offsets=[8, 0], sizes=[2, 10], dtype=str(tensor.dtype)),
         ]
         max_chunk_sz_bytes = 21 * tensor.element_size()
         self._test_chunk_tensor_helper(
@@ -99,8 +99,8 @@ class ChunkedTensorIOPreparerTest(unittest.TestCase):
         tensor = torch.randn(6, 4, 2).transpose(1, 2)
         self.assertFalse(tensor.is_contiguous())
         expected_chunks = [
-            Chunk(offsets=[0, 0, 0], sizes=[3, 2, 4]),
-            Chunk(offsets=[3, 0, 0], sizes=[3, 2, 4]),
+            Chunk(offsets=[0, 0, 0], sizes=[3, 2, 4], dtype=str(tensor.dtype)),
+            Chunk(offsets=[3, 0, 0], sizes=[3, 2, 4], dtype=str(tensor.dtype)),
         ]
         max_chunk_sz_bytes = 24 * tensor.element_size()
         self._test_chunk_tensor_helper(expected_chunks, tensor, max_chunk_sz_bytes)
@@ -170,8 +170,8 @@ class ChunkedTensorIOPreparerTest(unittest.TestCase):
         global_tensor = torch.rand((7, 10))
         replicated = True
         chunking_instruction = [
-            Chunk(offsets=[0, 0], sizes=[4, 10]),
-            Chunk(offsets=[4, 0], sizes=[3, 10]),
+            Chunk(offsets=[0, 0], sizes=[4, 10], dtype=str(global_tensor.dtype)),
+            Chunk(offsets=[4, 0], sizes=[3, 10], dtype=str(global_tensor.dtype)),
         ]
 
         dist.init_process_group(backend="gloo")
@@ -255,8 +255,8 @@ class ChunkedTensorIOPreparerTest(unittest.TestCase):
             bar = torch.rand(2000, 2000)
 
         chunking_instruction = [
-            Chunk(offsets=[0, 0], sizes=[1000, 2000]),
-            Chunk(offsets=[1000, 0], sizes=[1000, 2000]),
+            Chunk(offsets=[0, 0], sizes=[1000, 2000], dtype=str(foo.dtype)),
+            Chunk(offsets=[1000, 0], sizes=[1000, 2000], dtype=str(foo.dtype)),
         ]
         self.assertFalse(torch.allclose(foo, bar))
         await self._test_chunked_read_helper(
