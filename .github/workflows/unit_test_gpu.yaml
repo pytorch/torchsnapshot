@@ -22,20 +22,20 @@ jobs:
           miniconda-version: "latest"
           activate-environment: test
           python-version: ${{ matrix.python-version }}
-      - name: Install CUDA 11.3
-        shell: bash -l {0}
-        run: |
-          yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm || true
-          sudo yum-config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel7/x86_64/cuda-rhel7.repo
-          sudo yum clean expire-cache
-          sudo yum install -y nvidia-driver-latest-dkms
-          sudo yum install -y cuda-11-3
-          sudo yum install -y cuda-drivers
-          sudo yum install -y libcudnn8-devel
-      - name: setup Path
-        run: |
-          echo /usr/local/cuda-11.3/bin >> $GITHUB_PATH
-          echo /usr/local/bin >> $GITHUB_PATH
+      # - name: Install CUDA 11.3
+      #   shell: bash -l {0}
+      #   run: |
+      #     yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm || true
+      #     sudo yum-config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel7/x86_64/cuda-rhel7.repo
+      #     sudo yum clean expire-cache
+      #     sudo yum install -y nvidia-driver-latest-dkms
+      #     sudo yum install -y cuda-11-3
+      #     sudo yum install -y cuda-drivers
+      #     sudo yum install -y libcudnn8-devel
+      # - name: setup Path
+      #   run: |
+      #     echo /usr/local/cuda-11.3/bin >> $GITHUB_PATH
+      #     echo /usr/local/bin >> $GITHUB_PATH
       - name: Check ldd --version
         run: ldd --version
       - name: check cpu info
@@ -64,7 +64,7 @@ jobs:
         run: |
           sudo yum install lshw -y
           sudo lshw -C display
-          sudo yum update -y
+          # sudo yum update -y
       - name: Install dependencies
         shell: bash -l {0}
         run: |
