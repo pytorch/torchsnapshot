@@ -46,6 +46,7 @@ jobs:
         run: |
           set -eux
           conda activate test
+          nvidia-smi
           pytest --cov=. --cov-report xml tests -vv
       - name: Upload Coverage to Codecov
         uses: codecov/codecov-action@v2
