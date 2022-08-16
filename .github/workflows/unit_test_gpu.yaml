@@ -32,6 +32,9 @@ jobs:
           sudo yum install -y cuda-11-3
           sudo yum install -y cuda-drivers
           sudo yum install -y libcudnn8-devel
+      - name: nvcc check
+        run: |
+          nvcc --version
       - name: Install dependencies
         shell: bash -l {0}
         run: |
