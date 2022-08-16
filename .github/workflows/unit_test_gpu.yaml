@@ -30,6 +30,8 @@ jobs:
           sudo yum-config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel7/x86_64/cuda-rhel7.repo
           sudo yum clean expire-cache
           sudo yum install -y nvidia-driver-latest-dkms
+          sudo yum install -y nvidia-cuda-toolkit
+          sudo yum install -y nvidia-utils
           sudo yum install -y cuda-11-3
           sudo yum install -y cuda-drivers
           sudo yum install -y libcudnn8-devel
