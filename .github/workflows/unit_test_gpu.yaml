@@ -23,9 +23,8 @@ jobs:
           activate-environment: test
           python-version: ${{ matrix.python-version }}
       - name: Install CUDA 11.3
-        shell: bash -l {0}
+        shell: sudo bash -l {0}
         run: |
-          sudo su
           yum install -y wget curl perl util-linux xz bzip2 git patch which unzip
           yum install -y yum-utils centos-release-scl
           yum-config-manager --enable rhel-server-rhscl-7-rpms
