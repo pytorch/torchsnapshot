@@ -25,6 +25,7 @@ jobs:
       - name: Install CUDA 11.3
         shell: bash -l {0}
         run: |
+          sudo su
           yum install -y wget curl perl util-linux xz bzip2 git patch which unzip
           yum install -y yum-utils centos-release-scl
           yum-config-manager --enable rhel-server-rhscl-7-rpms
@@ -41,7 +42,6 @@ jobs:
 
           yum install -y autoconf aclocal automake make sudo
           rm -rf /usr/local/cuda-*
-
 
           echo "Installing CUDA 11.3 and CuDNN 8.3"
           rm -rf /usr/local/cuda-11.3 /usr/local/cuda
