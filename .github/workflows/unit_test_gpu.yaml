@@ -22,20 +22,45 @@ jobs:
           miniconda-version: "latest"
           activate-environment: test
           python-version: ${{ matrix.python-version }}
-      # - name: Install CUDA 11.3
-      #   shell: bash -l {0}
-      #   run: |
-      #     yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm || true
-      #     sudo yum-config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel7/x86_64/cuda-rhel7.repo
-      #     sudo yum clean expire-cache
-      #     sudo yum install -y nvidia-driver-latest-dkms
-      #     sudo yum install -y cuda-11-3
-      #     sudo yum install -y cuda-drivers
-      #     sudo yum install -y libcudnn8-devel
-      # - name: setup Path
-      #   run: |
-      #     echo /usr/local/cuda-11.3/bin >> $GITHUB_PATH
-      #     echo /usr/local/bin >> $GITHUB_PATH
+      - name: Install CUDA 11.3
+        shell: bash -l {0}
+        run: |
+          yum install -y wget curl perl util-linux xz bzip2 git patch which unzip
+          yum install -y yum-utils centos-release-scl
+          yum-config-manager --enable rhel-server-rhscl-7-rpms
+          yum install -y devtoolset-9-gcc devtoolset-9-gcc-c++ devtoolset-9-gcc-gfortran devtoolset-9-binutils
+          # EPEL for cmake
+          wget http://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm && \
+              rpm -ivh epel-release-latest-7.noarch.rpm && \
+              rm -f epel-release-latest-7.noarch.rpm
+          # cmake
+          yum install -y cmake3 && \
+              ln -s /usr/bin/cmake3 /usr/bin/cmake
+          ENV PATH=/opt/rh/devtoolset-9/root/usr/bin:$PATH
+          ENV LD_LIBRARY_PATH=/opt/rh/devtoolset-9/root/usr/lib64:/opt/rh/devtoolset-9/root/usr/lib:$LD_LIBRARY_PATH
+
+          yum install -y autoconf aclocal automake make sudo
+          rm -rf /usr/local/cuda-*
+
+
+          echo "Installing CUDA 11.3 and CuDNN 8.3"
+          rm -rf /usr/local/cuda-11.3 /usr/local/cuda
+          # install CUDA 11.3.1 in the same container
+          wget -q https://developer.download.nvidia.com/compute/cuda/11.3.1/local_installers/cuda_11.3.1_465.19.01_linux.run
+          chmod +x cuda_11.3.1_465.19.01_linux.run
+          ./cuda_11.3.1_465.19.01_linux.run --toolkit --silent
+          rm -f cuda_11.3.1_465.19.01_linux.run
+          rm -f /usr/local/cuda && ln -s /usr/local/cuda-11.3 /usr/local/cuda
+
+          # cuDNN license: https://developer.nvidia.com/cudnn/license_agreement
+          mkdir tmp_cudnn && cd tmp_cudnn
+          wget -q https://developer.download.nvidia.com/compute/redist/cudnn/v8.3.2/local_installers/11.5/cudnn-linux-x86_64-8.3.2.44_cuda11.5-archive.tar.xz -O cudnn-linux-x86_64-8.3.2.44_cuda11.5-archive.tar.xz
+          tar xf cudnn-linux-x86_64-8.3.2.44_cuda11.5-archive.tar.xz
+          cp -a cudnn-linux-x86_64-8.3.2.44_cuda11.5-archive/include/* /usr/local/cuda/include/
+          cp -a cudnn-linux-x86_64-8.3.2.44_cuda11.5-archive/lib/* /usr/local/cuda/lib64/
+          cd ..
+          rm -rf tmp_cudnn
+          ldconfig
       - name: Check ldd --version
         run: ldd --version
       - name: check cpu info
