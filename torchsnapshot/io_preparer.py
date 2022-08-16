@@ -60,6 +60,7 @@ from .torch_dist_checkpoint.resharding import prepare_sharded_tensor_read
 class Chunk:
     offsets: List[int]
     sizes: List[int]
+    dtype: str
 
 
 class ChunkedTensorIOPreparer:
@@ -84,7 +85,11 @@ class ChunkedTensorIOPreparer:
         for i in range(len(tensor_chunks)):
             tensor_chunk_sizes = list(tensor_chunks[i].shape)
             chunking_instruction.append(
-                Chunk(offsets=curr_offsets[:], sizes=tensor_chunk_sizes)
+                Chunk(
+                    offsets=curr_offsets[:],
+                    sizes=tensor_chunk_sizes,
+                    dtype=str(tensor.dtype),
+                )
             )
             curr_offsets[chunking_dim] += tensor_chunk_sizes[chunking_dim]
         return chunking_instruction
