@@ -10,7 +10,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [linux.8xlarge.nvidia.gpu]
+        os: [linux.p3.8xlarge.nvidia.gpu]
         python-version: [3.8]
         cuda-tag: ["cu11"]
     steps:
