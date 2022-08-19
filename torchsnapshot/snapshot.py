@@ -903,7 +903,7 @@ path "{logical_path}" which was not available to rank {rank}.
                             "unless the entry is ChunkedTensorEntry."
                         )
                     # Merge chunks across manifests
-                    replicated_entries[path].extend(entry.chunks)
+                    replicated_entries[path].chunks.extend(entry.chunks)
                 else:
                     replicated_entries[path] = entry
 
