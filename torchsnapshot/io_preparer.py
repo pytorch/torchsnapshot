@@ -190,6 +190,7 @@ class ShardedTensorIOPreparer:
         cls,
         storage_path: str,
         obj: ShardedTensor,
+        quantize: Optional[Tuple[int]] = None,
     ) -> Tuple[ShardedTensorEntry, List[WriteReq]]:
         shards = []
         write_reqs = []
@@ -210,6 +211,10 @@ class ShardedTensorIOPreparer:
 
             for tensor, offsets, sizes in subdivided:
                 suffix = "_".join(str(i) for i in offsets)
+                # TODO: replace with config
+                print('quantized', quantize)
+                if quantize:
+                  tensor = torch.quantize_per_tensor(tensor, *quantize, dtype=torch.qint8)
                 entry, tensor_write_reqs = TensorIOPreparer.prepare_write(
                     storage_path=f"{storage_path}_{suffix}", tensor=tensor
                 )
@@ -280,6 +285,8 @@ class ShardedTensorIOPreparer:
 
 @torch.jit.script
 def tensor_copy(dst: torch.Tensor, src: torch.Tensor) -> None:
+    if src.dtype != torch.float32:
+      src = torch.dequantize(src)
     dst.detach().copy_(src)  # pragma: no cover
 
 
@@ -307,6 +314,7 @@ class ShardedTensorBufferConsumer(BufferConsumer):
             ), f"The {req.storage_key} src/dst size does not match."
 
             if executor is not None:
+                print('consumer', req.tensor.shape, req.tensor.dtype, view_to_copy)
                 await asyncio.get_running_loop().run_in_executor(
                     executor, tensor_copy, req.tensor, view_to_copy
                 )
@@ -399,6 +407,7 @@ class TensorBufferConsumer(BufferConsumer):
     ) -> None:
         loaded = self.deserialize_tensor(buf=buf, entry=self.entry)
         if executor is not None:
+            print('consumer', self.tensor.shape, self.tensor.dtype)
             await asyncio.get_running_loop().run_in_executor(
                 executor, tensor_copy, self.tensor, loaded
             )
@@ -581,6 +590,7 @@ def prepare_write(
     logical_path: str,
     rank: int,
     replicated: bool,
+    quantize: Optional[Tuple[int]] = None,
 ) -> Tuple[Entry, List[WriteReq]]:
     """
     Prepare write for an object.
@@ -597,7 +607,7 @@ def prepare_write(
     """
     storage_path = get_storage_path(obj, logical_path, rank, replicated)
     if isinstance(obj, ShardedTensor):
-        return ShardedTensorIOPreparer.prepare_write(storage_path, obj)
+        return ShardedTensorIOPreparer.prepare_write(storage_path, obj, quantize)
     elif isinstance(obj, torch.Tensor):
         entry, obj_write_req = TensorIOPreparer.prepare_write(storage_path, obj)
     else:

@@ -176,6 +176,7 @@ class Snapshot:
         app_state: AppState,
         pg: Optional[dist.ProcessGroup] = None,
         replicated: Optional[List[str]] = None,
+        quantize: Optional[Tuple[int]] = None,
     ) -> "Snapshot":
         """
         Take a snapshot from the program state.
@@ -210,6 +211,7 @@ class Snapshot:
             pg_wrapper=PGWrapper(pg),
             storage=storage,
             event_loop=event_loop,
+            quantize=quantize,
         )
         pending_io_work.sync_complete(event_loop=event_loop)
 
@@ -235,6 +237,7 @@ class Snapshot:
         app_state: AppState,
         pg: Optional[dist.ProcessGroup] = None,
         replicated: Optional[List[str]] = None,
+        quantize: Optional[Tuple[int]] = None,
     ) -> "PendingSnapshot":
         """
         Asynchronously take a snapshot from the program state.
@@ -277,6 +280,7 @@ class Snapshot:
             pg_wrapper=PGWrapper(pg),
             storage=storage,
             event_loop=event_loop,
+            quantize=quantize,
         )
         # PendingSnapshot is responsible for closing `storage` and `event_loop`
         return PendingSnapshot(
@@ -297,6 +301,7 @@ class Snapshot:
         pg_wrapper: PGWrapper,
         storage: StoragePlugin,
         event_loop: asyncio.AbstractEventLoop,
+        quantize: Optional[Tuple[int]] = None,
     ) -> Tuple[PendingIOWork, SnapshotMetadata]:
         # TODO: validate app_state
 
@@ -386,6 +391,7 @@ class Snapshot:
                 logical_path=logical_path,
                 rank=pg_wrapper.get_rank(),
                 replicated=logical_path in replicated_set,
+                quantize=quantize,
             )
             object_entries[logical_path] = entry
             write_reqs.extend(item_write_reqs)
