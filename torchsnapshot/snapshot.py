@@ -198,7 +198,10 @@ class Snapshot:
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(pg=pg)
         path, replicated = cls._coalesce_path_and_replicated(
-            path=path, pg_wrapper=pg_wrapper, app_state=app_state, replicated=replicated
+            path=path,
+            pg_wrapper=pg_wrapper,
+            app_state=app_state,
+            replicated=replicated or [],
         )
         storage = url_to_storage_plugin_in_event_loop(
             url_path=path, event_loop=event_loop
@@ -265,7 +268,10 @@ class Snapshot:
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(pg=pg)
         path, replicated = cls._coalesce_path_and_replicated(
-            path=path, pg_wrapper=pg_wrapper, app_state=app_state, replicated=replicated
+            path=path,
+            pg_wrapper=pg_wrapper,
+            app_state=app_state,
+            replicated=replicated or [],
         )
         storage = url_to_storage_plugin_in_event_loop(
             url_path=path, event_loop=event_loop
@@ -719,8 +725,8 @@ path "{logical_path}" which was not available to rank {rank}.
         path: str,
         pg_wrapper: PGWrapper,
         app_state: AppState,
-        replicated: Optional[List[str]],
-    ) -> Tuple[str, Optional[List[str]]]:
+        replicated: List[str],
+    ) -> Tuple[str, List[str]]:
 
         rank = pg_wrapper.get_rank()
 
@@ -736,18 +742,17 @@ path "{logical_path}" which was not available to rank {rank}.
             )
 
         # coalesce replicated
-        if replicated is not None:
-            replicated = cls._infer_replicated(replicated, app_state)
-            # pyre-ignore[9]
-            global_replicated: List[List[str]] = [None] * pg_wrapper.get_world_size()
-            pg_wrapper.all_gather_object(global_replicated, replicated)
+        replicated = cls._infer_replicated(replicated, app_state)
+        # pyre-ignore[9]
+        global_replicated: List[List[str]] = [None] * pg_wrapper.get_world_size()
+        pg_wrapper.all_gather_object(global_replicated, replicated)
 
-            replicated = cls._coalesce_replicated(replicated, global_replicated)
-            if set(global_replicated[rank]) != set(replicated):
-                logger.warning(
-                    f"Rank {rank} specified replicated paths: {set(global_replicated[rank])} "
-                    f"different from replicated paths verified across all ranks: {set(replicated)}"
-                )
+        replicated = cls._coalesce_replicated(replicated, global_replicated)
+        if set(global_replicated[rank]) != set(replicated):
+            logger.warning(
+                f"Rank {rank} specified replicated paths: {set(global_replicated[rank])} "
+                f"different from replicated paths verified across all ranks: {set(replicated)}"
+            )
         return obj_list[0], replicated
 
     @classmethod
