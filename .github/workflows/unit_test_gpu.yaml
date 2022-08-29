@@ -61,7 +61,7 @@ jobs:
           pip install --pre torch -f https://download.pytorch.org/whl/nightly/cu113/torch_nightly.html
           pip install -r requirements.txt
           pip install -r dev-requirements.txt
-          pip install -e ".[dev]"
+          pip install --no-build-isolation -e ".[dev]"
       - name: Run unit tests with coverage
         shell: bash -l {0}
         run: |
