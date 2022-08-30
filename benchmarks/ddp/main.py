@@ -39,7 +39,7 @@ if __name__ == "__main__":
     parser.add_argument("--num-params", type=int, default=200)
     args = parser.parse_args()
 
-    local_rank = int(os.environ["RANK"]) % 8
+    local_rank = int(os.environ["LOCAL_RANK"])
     device = torch.device(f"cuda:{local_rank}")
     torch.cuda.set_device(device)
     dist.init_process_group(backend="nccl")
