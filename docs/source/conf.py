@@ -71,3 +71,5 @@ html_static_path = ["_static"]
 intersphinx_mapping = {
     "torch": ("https://pytorch.org/docs/stable/", None),
 }
+
+add_module_names = False
