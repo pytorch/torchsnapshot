@@ -99,7 +99,7 @@ class ChunkedTensorIOPreparer:
         tensor: torch.Tensor, chunk: Union[Shard, Chunk]
     ) -> torch.Tensor:
         # for 0-d case, reshape to 1-d
-        result = tensor.view(-1) if tensor.ndim == 0 else tensor
+        result = tensor.view(-1) if tensor.ndim == 0 else tensor_chunk_sizes
 
         for d in range(len(chunk.sizes)):
             result = result.narrow(d, chunk.offsets[d], chunk.sizes[d])
@@ -190,7 +190,7 @@ class ShardedTensorIOPreparer:
         cls,
         storage_path: str,
         obj: ShardedTensor,
-        quantize: Optional[Tuple[int]] = None,
+        custom_tensor_prepare_func: Callable,
     ) -> Tuple[ShardedTensorEntry, List[WriteReq]]:
         shards = []
         write_reqs = []
@@ -211,12 +211,9 @@ class ShardedTensorIOPreparer:
 
             for tensor, offsets, sizes in subdivided:
                 suffix = "_".join(str(i) for i in offsets)
-                # TODO: replace with config
-                print('quantized', quantize)
-                if quantize:
-                  tensor = torch.quantize_per_tensor(tensor, *quantize, dtype=torch.qint8)
                 entry, tensor_write_reqs = TensorIOPreparer.prepare_write(
-                    storage_path=f"{storage_path}_{suffix}", tensor=tensor
+                    storage_path=f"{storage_path}_{suffix}", tensor=tensor,
+                    custom_tensor_prepare_func=custom_tensor_prepare_func
                 )
                 write_reqs += tensor_write_reqs
 
@@ -285,7 +282,7 @@ class ShardedTensorIOPreparer:
 
 @torch.jit.script
 def tensor_copy(dst: torch.Tensor, src: torch.Tensor) -> None:
-    if src.dtype != torch.float32:
+    if src.dtype == torch.qint8:
       src = torch.dequantize(src)
     dst.detach().copy_(src)  # pragma: no cover
 
@@ -338,11 +335,14 @@ def tensor_to_cpu(tensor: torch.Tensor) -> torch.Tensor:
 
 
 class TensorBufferStager(BufferStager):
-    def __init__(self, tensor: torch.Tensor, entry: TensorEntry) -> None:
+    def __init__(self, tensor: torch.Tensor, entry: TensorEntry,
+    custom_tensor_prepare_func: Callable) -> None:
         self.tensor = tensor
         self.entry = entry
+        self.custom_tensor_prepare_func = custom_tensor_prepare_func
 
     async def stage_buffer(self, executor: Optional[Executor] = None) -> BufferType:
+        self.tensor = self.custom_tensor_prepare_func(self.entry.location, self.tensor, tracing=False)
         if self.tensor.is_cuda:
             # It would be nice to copy from GPU via DMA. However, it is very
             # difficult to figure out the safe amount of page-locked memory
@@ -425,24 +425,31 @@ class TensorBufferConsumer(BufferConsumer):
             raise ValueError(f"Unrecognized serializer: {self.entry.serializer}.")
 
 
+
 class TensorIOPreparer:
     @staticmethod
     def prepare_write(
-        storage_path: str, tensor: torch.Tensor
+        storage_path: str, tensor: torch.Tensor,
+        custom_tensor_prepare_func: Callable,
     ) -> Tuple[TensorEntry, List[WriteReq]]:
-        if tensor.dtype in BUFFER_PROTOCOL_SUPPORTED_DTYPES:
+
+        proc_tensor = custom_tensor_prepare_func(storage_path, tensor, tracing=True)
+
+        if proc_tensor.dtype in BUFFER_PROTOCOL_SUPPORTED_DTYPES:
             serializer = Serializer.BUFFER_PROTOCOL.value
         else:
             serializer = Serializer.TORCH_SAVE.value
 
+
         entry = TensorEntry(
             location=storage_path,
             serializer=serializer,
-            dtype=dtype_to_string(tensor.dtype),
-            shape=list(tensor.shape),
+            dtype=dtype_to_string(proc_tensor.dtype),
+            shape=list(proc_tensor.shape),
             replicated=False,
         )
-        buffer_stager = TensorBufferStager(tensor=tensor, entry=entry)
+        # stage the actual tensor, not processed tensor
+        buffer_stager = TensorBufferStager(tensor=tensor, entry=entry, custom_tensor_prepare_func=custom_tensor_prepare_func)
         return entry, [WriteReq(path=storage_path, buffer_stager=buffer_stager)]
 
     @classmethod
@@ -590,7 +597,7 @@ def prepare_write(
     logical_path: str,
     rank: int,
     replicated: bool,
-    quantize: Optional[Tuple[int]] = None,
+    custom_tensor_prepare_func: Callable,
 ) -> Tuple[Entry, List[WriteReq]]:
     """
     Prepare write for an object.
@@ -607,11 +614,11 @@ def prepare_write(
     """
     storage_path = get_storage_path(obj, logical_path, rank, replicated)
     if isinstance(obj, ShardedTensor):
-        return ShardedTensorIOPreparer.prepare_write(storage_path, obj, quantize)
+        return ShardedTensorIOPreparer.prepare_write(storage_path, obj, custom_tensor_prepare_func)
     elif isinstance(obj, torch.Tensor):
-        entry, obj_write_req = TensorIOPreparer.prepare_write(storage_path, obj)
+        entry, obj_write_req = TensorIOPreparer.prepare_write(storage_path, obj, custom_tensor_prepare_func)
     else:
-        entry, obj_write_req = ObjectIOPreparer.prepare_write(storage_path, obj)
+        entry, obj_write_req = ObjectIOPreparer.prepare_write(storage_path, obj, custom_tensor_prepare_func)
 
     entry.replicated = replicated
     return entry, obj_write_req
