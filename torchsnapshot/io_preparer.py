@@ -69,7 +69,6 @@ class ChunkedTensorIOPreparer:
     @staticmethod
     def chunk_tensor(
         tensor: torch.Tensor,
-        max_chunk_sz_bytes: int = DEFAULT_MAX_CHUNK_SIZE_BYTES,
         chunking_dim: int = 0,
     ) -> List[Chunk]:
         # for 0-d case, reshape to 1-d
@@ -77,7 +76,9 @@ class ChunkedTensorIOPreparer:
             tensor = tensor.view(-1)
 
         tensor_sz_bytes = tensor.numel() * tensor.element_size()
-        n_chunks = max(math.ceil(tensor_sz_bytes / max_chunk_sz_bytes), 1)
+        n_chunks = math.ceil(
+            tensor_sz_bytes / ChunkedTensorIOPreparer.DEFAULT_MAX_CHUNK_SIZE_BYTES
+        )
         tensor_chunks = torch.chunk(tensor, chunks=n_chunks, dim=chunking_dim)
 
         curr_offsets = [0] * tensor.ndim
