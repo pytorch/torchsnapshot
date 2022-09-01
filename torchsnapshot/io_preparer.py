@@ -282,8 +282,6 @@ class ShardedTensorIOPreparer:
 
 @torch.jit.script
 def tensor_copy(dst: torch.Tensor, src: torch.Tensor) -> None:
-    if src.dtype == torch.qint8:
-      src = torch.dequantize(src)
     dst.detach().copy_(src)  # pragma: no cover
 
 
