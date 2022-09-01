@@ -32,7 +32,7 @@
   <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
-    <link rel="next" title="RNGState" href="torchsnapshot.rngstate.html" />
+    <link rel="next" title="Utilities" href="utilities.html" />
     <link rel="prev" title="Welcome to the TorchSnapshot documentation!" href="index.html" />
   <!-- Google Analytics -->
   
@@ -225,8 +225,7 @@
               <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
 <ul class="current">
 <li class="toctree-l1 current"><a class="current reference internal" href="#">Snapshot</a></li>
-<li class="toctree-l1"><a class="reference internal" href="torchsnapshot.rngstate.html">RNGState</a></li>
-<li class="toctree-l1"><a class="reference internal" href="torchsnapshot.statedict.html">StateDict</a></li>
+<li class="toctree-l1"><a class="reference internal" href="utilities.html">Utilities</a></li>
 </ul>
 
             
@@ -273,7 +272,7 @@
       <li class="pytorch-breadcrumbs-aside">
         
             
-            <a href="_sources/torchsnapshot.snapshot.rst.txt" rel="nofollow"><img src="_static/images/view-page-source-icon.svg"></a>
+            <a href="_sources/snapshot.rst.txt" rel="nofollow"><img src="_static/images/view-page-source-icon.svg"></a>
           
         
       </li>
@@ -301,9 +300,79 @@
               
   <section id="snapshot">
 <h1>Snapshot<a class="headerlink" href="#snapshot" title="Permalink to this heading">¶</a></h1>
+<p><a class="reference internal" href="#torchsnapshot.Snapshot" title="torchsnapshot.Snapshot"><code class="xref py py-class docutils literal notranslate"><span class="pre">Snapshot</span></code></a> is the core API of TorchSnapshot. The class represents application state persisted in storage. A user can take a snapshot of an application via <a class="reference internal" href="#torchsnapshot.Snapshot.take" title="torchsnapshot.Snapshot.take"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Snapshot.take()</span></code></a> (a.k.a saving a checkpoint), or restore the state of an application from a snapshot via <a class="reference internal" href="#torchsnapshot.Snapshot.restore" title="torchsnapshot.Snapshot.restore"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Snapshot.restore()</span></code></a> (a.k.a loading a checkpoint).</p>
+<section id="describing-the-application-state">
+<span id="app-state"></span><h2>Describing the application state<a class="headerlink" href="#describing-the-application-state" title="Permalink to this heading">¶</a></h2>
+<p>Before using <a class="reference internal" href="#torchsnapshot.Snapshot" title="torchsnapshot.Snapshot"><code class="xref py py-class docutils literal notranslate"><span class="pre">Snapshot</span></code></a> to save or restore application state, the user needs to <strong>describe the application state</strong>. This is done by creating a dictionary that contains all <strong>stateful objects</strong> that the user wishes to capture as application state:</p>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">app_state</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;model&quot;</span><span class="p">:</span> <span class="n">model</span><span class="p">,</span> <span class="s2">&quot;optimizer&quot;</span><span class="p">:</span> <span class="n">optimizer</span><span class="p">}</span>
+</pre></div>
+</div>
+<p>Any object that exposes <code class="docutils literal notranslate"><span class="pre">.state_dict()</span></code> and <code class="docutils literal notranslate"><span class="pre">.load_state_dict()</span></code> are considered <strong>stateful objects</strong>. Common PyTorch objects such as <a class="reference external" href="https://pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module" title="(in PyTorch v1.12)"><code class="xref py py-class docutils literal notranslate"><span class="pre">Module</span></code></a>, <a class="reference external" href="https://pytorch.org/docs/stable/optim.html#torch.optim.Optimizer" title="(in PyTorch v1.12)"><code class="xref py py-class docutils literal notranslate"><span class="pre">Optimizer</span></code></a>, and LR Schedulers all qualify as <strong>stateful objects</strong> and can be captured directly. Objects that don’t meet this requirement can be captured via <a class="reference internal" href="utilities.html#torchsnapshot.StateDict" title="torchsnapshot.StateDict"><code class="xref py py-class docutils literal notranslate"><span class="pre">StateDict</span></code></a>:</p>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">torchsnapshot</span> <span class="kn">import</span> <span class="n">StateDict</span>
+
+<span class="n">extra_state</span> <span class="o">=</span> <span class="n">StateDict</span><span class="p">(</span><span class="n">iterations</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">app_state</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;model&quot;</span><span class="p">:</span> <span class="n">model</span><span class="p">,</span> <span class="s2">&quot;optimizer&quot;</span><span class="p">:</span> <span class="n">optimizer</span><span class="p">,</span> <span class="s2">&quot;extra_state&quot;</span><span class="p">:</span> <span class="n">extra_state</span><span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="taking-a-snapshot">
+<h2>Taking a snapshot<a class="headerlink" href="#taking-a-snapshot" title="Permalink to this heading">¶</a></h2>
+<p>Once the <a class="reference internal" href="#app-state"><span class="std std-ref">application state</span></a> is described, the user can take a snapshot of the application via <a class="reference internal" href="#torchsnapshot.Snapshot.take" title="torchsnapshot.Snapshot.take"><code class="xref py py-func docutils literal notranslate"><span class="pre">Snapshot.take()</span></code></a>. <a class="reference internal" href="#torchsnapshot.Snapshot.take" title="torchsnapshot.Snapshot.take"><code class="xref py py-func docutils literal notranslate"><span class="pre">Snapshot.take()</span></code></a> persists the application state to the user specified path and returns a <a class="reference internal" href="#torchsnapshot.Snapshot" title="torchsnapshot.Snapshot"><code class="xref py py-class docutils literal notranslate"><span class="pre">Snapshot</span></code></a> object, which is a reference to the snapshot.</p>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">torchsnapshot</span> <span class="kn">import</span> <span class="n">Snapshot</span>
+
+<span class="n">snapshot</span> <span class="o">=</span> <span class="n">Snapshot</span><span class="o">.</span><span class="n">take</span><span class="p">(</span><span class="n">path</span><span class="o">=</span><span class="s2">&quot;/path/to/my/snapshot&quot;</span><span class="p">,</span> <span class="n">app_state</span><span class="o">=</span><span class="n">app_state</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>The user specified path can optionally be prepended with a URI prefix. By default, the prefix is <code class="docutils literal notranslate"><span class="pre">fs://</span></code>, which suggests that the path is a file system location. TorchSnapshot also provides performant and reliable integration with commonly used cloud object storages. A storage backend can be selected by prepending the corresponding URI prefix (e.g. <code class="docutils literal notranslate"><span class="pre">s3://</span></code> for S3, <code class="docutils literal notranslate"><span class="pre">gs://</span></code> for Google Cloud Storage).</p>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">snapshot</span> <span class="o">=</span> <span class="n">Snapshot</span><span class="o">.</span><span class="n">take</span><span class="p">(</span>
+    <span class="n">path</span><span class="o">=</span><span class="s2">&quot;s3://bucket/path/to/my/snapshot&quot;</span><span class="p">,</span>
+    <span class="n">app_state</span><span class="o">=</span><span class="n">app_state</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Do not move GPU tensors to CPU before saving them with TorchSnapshot. TorchSnapshot implements various optimizations for increasing the throughput and decreasing the host memory usage of GPU-to-storage transfers. Moving GPU tensors to CPU manually will lower the throughput and increase the chance of “out of memory” issues.</p>
+</div>
+</section>
+<section id="restoring-from-a-snapshot">
+<h2>Restoring from a snapshot<a class="headerlink" href="#restoring-from-a-snapshot" title="Permalink to this heading">¶</a></h2>
+<p>To restore from a snapshot, the user first need to obtain a reference to the snapshot. As seen previously, in the process where the snapshot is taken, a reference to the snapshot is returned by <a class="reference internal" href="#torchsnapshot.Snapshot.take" title="torchsnapshot.Snapshot.take"><code class="xref py py-func docutils literal notranslate"><span class="pre">Snapshot.take()</span></code></a>. In another process (which is more common for resumption), a reference can be obtained by creating a <a class="reference internal" href="#torchsnapshot.Snapshot" title="torchsnapshot.Snapshot"><code class="xref py py-class docutils literal notranslate"><span class="pre">Snapshot</span></code></a> object with the snapshot path:</p>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">torchsnapshot</span> <span class="kn">import</span> <span class="n">Snapshot</span>
+
+<span class="n">snapshot</span> <span class="o">=</span> <span class="n">Snapshot</span><span class="p">(</span><span class="n">path</span><span class="o">=</span><span class="s2">&quot;/path/to/my/snapshot&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>To restore the <a class="reference internal" href="#app-state"><span class="std std-ref">application state</span></a> from the snapshot, invoke <a class="reference internal" href="#torchsnapshot.Snapshot.restore" title="torchsnapshot.Snapshot.restore"><code class="xref py py-func docutils literal notranslate"><span class="pre">Snapshot.restore()</span></code></a> with the application state:</p>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">snapshot</span><span class="o">.</span><span class="n">restore</span><span class="p">(</span><span class="n">app_state</span><span class="o">=</span><span class="n">app_state</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p><a class="reference internal" href="#torchsnapshot.Snapshot.restore" title="torchsnapshot.Snapshot.restore"><code class="xref py py-func docutils literal notranslate"><span class="pre">Snapshot.restore()</span></code></a> restores stateful objects in-place to avoid creating unneccessary intermediate copies of the state.</p>
+</div>
+</section>
+<section id="distributed-snapshot">
+<h2>Distributed snapshot<a class="headerlink" href="#distributed-snapshot" title="Permalink to this heading">¶</a></h2>
+<p>TODO</p>
+</section>
+<section id="elasticity">
+<h2>Elasticity<a class="headerlink" href="#elasticity" title="Permalink to this heading">¶</a></h2>
+<p>TODO</p>
+</section>
+<section id="reproducibility">
+<h2>Reproducibility<a class="headerlink" href="#reproducibility" title="Permalink to this heading">¶</a></h2>
+<p>TODO</p>
+</section>
+<section id="taking-a-snapshot-asynchronously">
+<h2>Taking a snapshot asynchronously<a class="headerlink" href="#taking-a-snapshot-asynchronously" title="Permalink to this heading">¶</a></h2>
+<p>TODO</p>
+</section>
+<section id="api-reference">
+<h2>API Reference<a class="headerlink" href="#api-reference" title="Permalink to this heading">¶</a></h2>
 <dl class="py class">
 <dt class="sig sig-object py" id="torchsnapshot.Snapshot">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">torchsnapshot.</span></span><span class="sig-name descname"><span class="pre">Snapshot</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pg</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">ProcessGroup</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#torchsnapshot.Snapshot" title="Permalink to this definition">¶</a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">Snapshot</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pg</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">ProcessGroup</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#torchsnapshot.Snapshot" title="Permalink to this definition">¶</a></dt>
 <dd><p>Snapshot represents the persisted program state at one point in time.</p>
 <p>Basic usage:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Define the program state</span>
@@ -493,6 +562,7 @@ are ignored.</p></li>
 </dd></dl>
 
 </section>
+</section>
 
 
              </article>
@@ -502,7 +572,7 @@ are ignored.</p></li>
   
     <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
       
-        <a href="torchsnapshot.rngstate.html" class="btn btn-neutral float-right" title="RNGState" accesskey="n" rel="next">Next <img src="_static/images/chevron-right-orange.svg" class="next-page"></a>
+        <a href="utilities.html" class="btn btn-neutral float-right" title="Utilities" accesskey="n" rel="next">Next <img src="_static/images/chevron-right-orange.svg" class="next-page"></a>
       
       
         <a href="index.html" class="btn btn-neutral" title="Welcome to the TorchSnapshot documentation!" accesskey="p" rel="prev"><img src="_static/images/chevron-right-orange.svg" class="previous-page"> Previous</a>
@@ -537,7 +607,17 @@ are ignored.</p></li>
           <div class="pytorch-right-menu" id="pytorch-right-menu">
             <div class="pytorch-side-scroll" id="pytorch-side-scroll-right">
               <ul>
-<li><a class="reference internal" href="#">Snapshot</a></li>
+<li><a class="reference internal" href="#">Snapshot</a><ul>
+<li><a class="reference internal" href="#describing-the-application-state">Describing the application state</a></li>
+<li><a class="reference internal" href="#taking-a-snapshot">Taking a snapshot</a></li>
+<li><a class="reference internal" href="#restoring-from-a-snapshot">Restoring from a snapshot</a></li>
+<li><a class="reference internal" href="#distributed-snapshot">Distributed snapshot</a></li>
+<li><a class="reference internal" href="#elasticity">Elasticity</a></li>
+<li><a class="reference internal" href="#reproducibility">Reproducibility</a></li>
+<li><a class="reference internal" href="#taking-a-snapshot-asynchronously">Taking a snapshot asynchronously</a></li>
+<li><a class="reference internal" href="#api-reference">API Reference</a></li>
+</ul>
+</li>
 </ul>
 
             </div>

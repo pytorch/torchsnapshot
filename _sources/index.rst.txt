@@ -5,19 +5,6 @@ TorchSnapshot is a PyTorch library for adding fault tolerance to large-scale PyT
 
 `Installation instructions <https://github.com/pytorch/torchsnapshot#readme>`_
 
-Examples
---------
-
-* `Simple example <https://github.com/pytorch/torchsnapshot/blob/main/examples/simple_example.py>`_
-* `Using TorchSnapshot with DistributedDataParallel (DDP) <https://github.com/pytorch/torchsnapshot/blob/main/examples/ddp_example.py>`_
-* `Using TorchSnapshot with TorchRec <https://github.com/pytorch/torchsnapshot/blob/main/examples/torchrec_example.py>`_
-
-
-Tutorial
---------
-
-Under construction.
-
 
 TorchSnapshot API
 -----------------
@@ -26,13 +13,12 @@ TorchSnapshot API
    :maxdepth: 2
    :caption: Contents:
 
-   torchsnapshot.snapshot.rst
-   torchsnapshot.rngstate.rst
-   torchsnapshot.statedict.rst
+   snapshot.rst
+   utilities.rst
 
-Indices and tables
-==================
+Examples
+--------
 
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
+* `Simple example <https://github.com/pytorch/torchsnapshot/blob/main/examples/simple_example.py>`_
+* `Using TorchSnapshot with DistributedDataParallel (DDP) <https://github.com/pytorch/torchsnapshot/blob/main/examples/ddp_example.py>`_
+* `Using TorchSnapshot with TorchRec <https://github.com/pytorch/torchsnapshot/blob/main/examples/torchrec_example.py>`_

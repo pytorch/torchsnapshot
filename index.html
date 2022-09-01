@@ -32,7 +32,7 @@
   <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
-    <link rel="next" title="Snapshot" href="torchsnapshot.snapshot.html" />
+    <link rel="next" title="Snapshot" href="snapshot.html" />
   <!-- Google Analytics -->
   
   <!-- End Google Analytics -->
@@ -223,9 +223,8 @@
             
               <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="torchsnapshot.snapshot.html">Snapshot</a></li>
-<li class="toctree-l1"><a class="reference internal" href="torchsnapshot.rngstate.html">RNGState</a></li>
-<li class="toctree-l1"><a class="reference internal" href="torchsnapshot.statedict.html">StateDict</a></li>
+<li class="toctree-l1"><a class="reference internal" href="snapshot.html">Snapshot</a></li>
+<li class="toctree-l1"><a class="reference internal" href="utilities.html">Utilities</a></li>
 </ul>
 
             
@@ -302,6 +301,30 @@
 <h1>Welcome to the TorchSnapshot documentation!<a class="headerlink" href="#welcome-to-the-torchsnapshot-documentation" title="Permalink to this heading">¶</a></h1>
 <p>TorchSnapshot is a PyTorch library for adding fault tolerance to large-scale PyTorch distributed training workloads.</p>
 <p><a class="reference external" href="https://github.com/pytorch/torchsnapshot#readme">Installation instructions</a></p>
+<section id="torchsnapshot-api">
+<h2>TorchSnapshot API<a class="headerlink" href="#torchsnapshot-api" title="Permalink to this heading">¶</a></h2>
+<div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="snapshot.html">Snapshot</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="snapshot.html#describing-the-application-state">Describing the application state</a></li>
+<li class="toctree-l2"><a class="reference internal" href="snapshot.html#taking-a-snapshot">Taking a snapshot</a></li>
+<li class="toctree-l2"><a class="reference internal" href="snapshot.html#restoring-from-a-snapshot">Restoring from a snapshot</a></li>
+<li class="toctree-l2"><a class="reference internal" href="snapshot.html#distributed-snapshot">Distributed snapshot</a></li>
+<li class="toctree-l2"><a class="reference internal" href="snapshot.html#elasticity">Elasticity</a></li>
+<li class="toctree-l2"><a class="reference internal" href="snapshot.html#reproducibility">Reproducibility</a></li>
+<li class="toctree-l2"><a class="reference internal" href="snapshot.html#taking-a-snapshot-asynchronously">Taking a snapshot asynchronously</a></li>
+<li class="toctree-l2"><a class="reference internal" href="snapshot.html#api-reference">API Reference</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="utilities.html">Utilities</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="utilities.html#statedict">StateDict</a></li>
+<li class="toctree-l2"><a class="reference internal" href="utilities.html#rngstate">RNGState</a></li>
+</ul>
+</li>
+</ul>
+</div>
+</section>
 <section id="examples">
 <h2>Examples<a class="headerlink" href="#examples" title="Permalink to this heading">¶</a></h2>
 <ul class="simple">
@@ -310,29 +333,6 @@
 <li><p><a class="reference external" href="https://github.com/pytorch/torchsnapshot/blob/main/examples/torchrec_example.py">Using TorchSnapshot with TorchRec</a></p></li>
 </ul>
 </section>
-<section id="tutorial">
-<h2>Tutorial<a class="headerlink" href="#tutorial" title="Permalink to this heading">¶</a></h2>
-<p>Under construction.</p>
-</section>
-<section id="torchsnapshot-api">
-<h2>TorchSnapshot API<a class="headerlink" href="#torchsnapshot-api" title="Permalink to this heading">¶</a></h2>
-<div class="toctree-wrapper compound">
-<p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="torchsnapshot.snapshot.html">Snapshot</a></li>
-<li class="toctree-l1"><a class="reference internal" href="torchsnapshot.rngstate.html">RNGState</a></li>
-<li class="toctree-l1"><a class="reference internal" href="torchsnapshot.statedict.html">StateDict</a></li>
-</ul>
-</div>
-</section>
-</section>
-<section id="indices-and-tables">
-<h1>Indices and tables<a class="headerlink" href="#indices-and-tables" title="Permalink to this heading">¶</a></h1>
-<ul class="simple">
-<li><p><a class="reference internal" href="genindex.html"><span class="std std-ref">Index</span></a></p></li>
-<li><p><a class="reference internal" href="py-modindex.html"><span class="std std-ref">Module Index</span></a></p></li>
-<li><p><a class="reference internal" href="search.html"><span class="std std-ref">Search Page</span></a></p></li>
-</ul>
 </section>
 
 
@@ -343,7 +343,7 @@
   
     <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
       
-        <a href="torchsnapshot.snapshot.html" class="btn btn-neutral float-right" title="Snapshot" accesskey="n" rel="next">Next <img src="_static/images/chevron-right-orange.svg" class="next-page"></a>
+        <a href="snapshot.html" class="btn btn-neutral float-right" title="Snapshot" accesskey="n" rel="next">Next <img src="_static/images/chevron-right-orange.svg" class="next-page"></a>
       
       
     </div>
@@ -377,12 +377,10 @@
             <div class="pytorch-side-scroll" id="pytorch-side-scroll-right">
               <ul>
 <li><a class="reference internal" href="#">Welcome to the TorchSnapshot documentation!</a><ul>
-<li><a class="reference internal" href="#examples">Examples</a></li>
-<li><a class="reference internal" href="#tutorial">Tutorial</a></li>
 <li><a class="reference internal" href="#torchsnapshot-api">TorchSnapshot API</a></li>
+<li><a class="reference internal" href="#examples">Examples</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#indices-and-tables">Indices and tables</a></li>
 </ul>
 
             </div>

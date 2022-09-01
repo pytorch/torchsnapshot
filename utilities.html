@@ -10,7 +10,7 @@
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   
-  <title>StateDict &mdash; TorchSnapshot 0.0.3 documentation</title>
+  <title>Utilities &mdash; TorchSnapshot 0.0.3 documentation</title>
   
 
   
@@ -32,7 +32,7 @@
   <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
-    <link rel="prev" title="RNGState" href="torchsnapshot.rngstate.html" />
+    <link rel="prev" title="Snapshot" href="snapshot.html" />
   <!-- Google Analytics -->
   
   <!-- End Google Analytics -->
@@ -223,9 +223,8 @@
             
               <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
 <ul class="current">
-<li class="toctree-l1"><a class="reference internal" href="torchsnapshot.snapshot.html">Snapshot</a></li>
-<li class="toctree-l1"><a class="reference internal" href="torchsnapshot.rngstate.html">RNGState</a></li>
-<li class="toctree-l1 current"><a class="current reference internal" href="#">StateDict</a></li>
+<li class="toctree-l1"><a class="reference internal" href="snapshot.html">Snapshot</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Utilities</a></li>
 </ul>
 
             
@@ -266,13 +265,13 @@
       </li>
 
         
-      <li>StateDict</li>
+      <li>Utilities</li>
     
     
       <li class="pytorch-breadcrumbs-aside">
         
             
-            <a href="_sources/torchsnapshot.statedict.rst.txt" rel="nofollow"><img src="_static/images/view-page-source-icon.svg"></a>
+            <a href="_sources/utilities.rst.txt" rel="nofollow"><img src="_static/images/view-page-source-icon.svg"></a>
           
         
       </li>
@@ -298,11 +297,13 @@
             <div role="main" class="main-content" itemscope="itemscope" itemtype="http://schema.org/Article">
              <article itemprop="articleBody" id="pytorch-article" class="pytorch-article">
               
-  <section id="statedict">
-<h1>StateDict<a class="headerlink" href="#statedict" title="Permalink to this heading">¶</a></h1>
+  <section id="utilities">
+<h1>Utilities<a class="headerlink" href="#utilities" title="Permalink to this heading">¶</a></h1>
+<section id="statedict">
+<h2>StateDict<a class="headerlink" href="#statedict" title="Permalink to this heading">¶</a></h2>
 <dl class="py class">
 <dt class="sig sig-object py" id="torchsnapshot.StateDict">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">torchsnapshot.</span></span><span class="sig-name descname"><span class="pre">StateDict</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dict</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">/</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#torchsnapshot.StateDict" title="Permalink to this definition">¶</a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">StateDict</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dict</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">/</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#torchsnapshot.StateDict" title="Permalink to this definition">¶</a></dt>
 <dd><p>A dict that implements the Stateful protocol. It is handy for capturing
 stateful objects that do not already implement the Stateful protocol or
 can’t implement the protocol (i.e. primitive types).</p>
@@ -335,6 +336,40 @@ can’t implement the protocol (i.e. primitive types).</p>
 </dd></dl>
 
 </section>
+<section id="rngstate">
+<h2>RNGState<a class="headerlink" href="#rngstate" title="Permalink to this heading">¶</a></h2>
+<dl class="py class">
+<dt class="sig sig-object py" id="torchsnapshot.RNGState">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">RNGState</span></span><a class="headerlink" href="#torchsnapshot.RNGState" title="Permalink to this definition">¶</a></dt>
+<dd><p>When captured in app state, it is guaranteed that rng states will be the
+same after <code class="docutils literal notranslate"><span class="pre">Snapshot.take</span></code> and <code class="docutils literal notranslate"><span class="pre">Snapshot.restore</span></code>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">app_state</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;rng_state&quot;</span><span class="p">:</span> <span class="n">RNGState</span><span class="p">(),</span>
+<span class="p">}</span>
+<span class="n">snapshot</span> <span class="o">=</span> <span class="n">Snapshot</span><span class="o">.</span><span class="n">take</span><span class="p">(</span><span class="s2">&quot;foo/bar&quot;</span><span class="p">,</span> <span class="n">app_state</span><span class="p">,</span> <span class="n">backend</span><span class="o">=...</span><span class="p">)</span>
+<span class="n">after_take</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+<span class="n">snapshot</span><span class="o">.</span><span class="n">restore</span><span class="p">(</span><span class="n">app_state</span><span class="p">)</span>
+<span class="n">after_restore</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+<span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">after_take</span><span class="p">,</span> <span class="n">after_restore</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>TODO augment this to capture rng states other than torch.get_rng_state().</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="torchsnapshot.RNGState.load_state_dict">
+<span class="sig-name descname"><span class="pre">load_state_dict</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">state_dict</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v1.12)"><span class="pre">Tensor</span></a><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#torchsnapshot.RNGState.load_state_dict" title="Permalink to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="torchsnapshot.RNGState.state_dict">
+<span class="sig-name descname"><span class="pre">state_dict</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v1.12)"><span class="pre">Tensor</span></a><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#torchsnapshot.RNGState.state_dict" title="Permalink to this definition">¶</a></dt>
+<dd></dd></dl>
+
+</dd></dl>
+
+</section>
+</section>
 
 
              </article>
@@ -345,7 +380,7 @@ can’t implement the protocol (i.e. primitive types).</p>
     <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
       
       
-        <a href="torchsnapshot.rngstate.html" class="btn btn-neutral" title="RNGState" accesskey="p" rel="prev"><img src="_static/images/chevron-right-orange.svg" class="previous-page"> Previous</a>
+        <a href="snapshot.html" class="btn btn-neutral" title="Snapshot" accesskey="p" rel="prev"><img src="_static/images/chevron-right-orange.svg" class="previous-page"> Previous</a>
       
     </div>
   
@@ -377,7 +412,11 @@ can’t implement the protocol (i.e. primitive types).</p>
           <div class="pytorch-right-menu" id="pytorch-right-menu">
             <div class="pytorch-side-scroll" id="pytorch-side-scroll-right">
               <ul>
-<li><a class="reference internal" href="#">StateDict</a></li>
+<li><a class="reference internal" href="#">Utilities</a><ul>
+<li><a class="reference internal" href="#statedict">StateDict</a></li>
+<li><a class="reference internal" href="#rngstate">RNGState</a></li>
+</ul>
+</li>
 </ul>
 
             </div>
