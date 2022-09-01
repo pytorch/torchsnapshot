@@ -195,6 +195,8 @@ class Snapshot:
             The newly taken snapshot.
         """
         torch._C._log_api_usage_once("torchsnapshot.Snapshot.take")
+        cls._validate_app_state(app_state)
+
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(pg=pg)
         path, replicated = cls._coalesce_path_and_replicated(
@@ -265,6 +267,8 @@ class Snapshot:
             invoked.
         """
         torch._C._log_api_usage_once("torchsnapshot.Snapshot.async_take")
+        cls._validate_app_state(app_state)
+
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(pg=pg)
         path, replicated = cls._coalesce_path_and_replicated(
@@ -304,8 +308,6 @@ class Snapshot:
         storage: StoragePlugin,
         event_loop: asyncio.AbstractEventLoop,
     ) -> Tuple[PendingIOWork, SnapshotMetadata]:
-        # TODO: validate app_state
-
         app_state = app_state.copy()
         rng_state_item = cls._pop_rng_state(app_state=app_state)
         rng_state_dict = None
@@ -422,6 +424,8 @@ class Snapshot:
             app_state: The program state to restore from the snapshot.
         """
         torch._C._log_api_usage_once("torchsnapshot.Snapshot.restore")
+        self._validate_app_state(app_state)
+
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(self.pg)
         rank = pg_wrapper.get_rank()
@@ -621,6 +625,16 @@ class Snapshot:
         pg.broadcast_object_list(replicated_paths_list, src=0)
         replicated_paths = replicated_paths_list[0]
         return replicated_paths
+
+    @staticmethod
+    def _validate_app_state(app_state: AppState) -> None:
+        # performs runtime typechecking that all values are Stateful
+        for key, value in app_state.items():
+            if not isinstance(value, Stateful):
+                value_type = type(value)
+                raise TypeError(
+                    f"Expected Stateful in app_state for key {key}, got {value_type}."
+                )
 
     @classmethod
     def _load_stateful(
