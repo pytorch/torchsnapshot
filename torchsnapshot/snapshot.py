@@ -348,9 +348,7 @@ class Snapshot:
         # function won't affect the RNG state or execute application code.
         if rng_state_item is not None:
             _, stateful = rng_state_item
-            rng_state_dict = stateful.load_state_dict(
-                cast(Dict[str, Any], rng_state_dict)  # pyre-ignore[33]
-            )
+            stateful.load_state_dict(cast(Dict[str, torch.Tensor], rng_state_dict))
 
         replicated_paths = cls._calculate_replicated_entries(
             flattened, replicated, pg_wrapper
