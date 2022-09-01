@@ -342,10 +342,8 @@ def sync_execute_write_reqs(
     storage: StoragePlugin,
     memory_budget_bytes: int,
     rank: int,
-    event_loop: Optional[asyncio.AbstractEventLoop] = None,
+    event_loop: asyncio.AbstractEventLoop,
 ) -> PendingIOWork:
-    if event_loop is None:
-        event_loop = asyncio.new_event_loop()
     return event_loop.run_until_complete(
         execute_write_reqs(
             write_reqs=write_reqs,
