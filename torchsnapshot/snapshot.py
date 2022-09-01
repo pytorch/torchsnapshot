@@ -176,7 +176,7 @@ class Snapshot:
         app_state: AppState,
         pg: Optional[dist.ProcessGroup] = None,
         replicated: Optional[List[str]] = None,
-        custom_tensor_prepare_func: Optional[Callable[[str, torch.Tensor, bool], torch.Tensor]] = None,
+        _custom_tensor_prepare_func: Optional[Callable[[str, torch.Tensor, bool], torch.Tensor]] = None,
     ) -> "Snapshot":
         """
         Take a snapshot from the program state.
@@ -198,8 +198,8 @@ class Snapshot:
         torch._C._log_api_usage_once("torchsnapshot.Snapshot.take")
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(pg=pg)
-        if not custom_tensor_prepare_func:
-            custom_tensor_prepare_func = lambda path, tensor, tracing : tensor
+        if not _custom_tensor_prepare_func:
+            _custom_tensor_prepare_func = lambda path, tensor, tracing : tensor
 
 
         path, replicated = cls._coalesce_path_and_replicated(
@@ -215,7 +215,7 @@ class Snapshot:
             pg_wrapper=PGWrapper(pg),
             storage=storage,
             event_loop=event_loop,
-            custom_tensor_prepare_func=custom_tensor_prepare_func,
+            _custom_tensor_prepare_func=custom_tensor_prepare_func,
         )
         pending_io_work.sync_complete(event_loop=event_loop)
 
@@ -241,7 +241,7 @@ class Snapshot:
         app_state: AppState,
         pg: Optional[dist.ProcessGroup] = None,
         replicated: Optional[List[str]] = None,
-        custom_tensor_prepare_func: Optional[Callable[[str, torch.Tensor, bool], torch.Tensor]] = None,
+        _custom_tensor_prepare_func: Optional[Callable[[str, torch.Tensor, bool], torch.Tensor]] = None,
     ) -> "PendingSnapshot":
         """
         Asynchronously take a snapshot from the program state.
@@ -278,8 +278,8 @@ class Snapshot:
             url_path=path, event_loop=event_loop
         )
 
-        if not custom_tensor_prepare_func:
-            custom_tensor_prepare_func = lambda path, tensor, tracing : tensor
+        if not _custom_tensor_prepare_func:
+            _custom_tensor_prepare_func = lambda path, tensor, tracing : tensor
 
         pending_io_work, metadata = cls._take_impl(
             path=path,
@@ -288,7 +288,7 @@ class Snapshot:
             pg_wrapper=PGWrapper(pg),
             storage=storage,
             event_loop=event_loop,
-            custom_tensor_prepare_func=custom_tensor_prepare_func,
+            _custom_tensor_prepare_func=custom_tensor_prepare_func,
         )
         # PendingSnapshot is responsible for closing `storage` and `event_loop`
         return PendingSnapshot(
@@ -309,7 +309,7 @@ class Snapshot:
         pg_wrapper: PGWrapper,
         storage: StoragePlugin,
         event_loop: asyncio.AbstractEventLoop,
-        custom_tensor_prepare_func: Optional[Callable[[str, torch.Tensor, bool], torch.Tensor]] = None,
+        _custom_tensor_prepare_func: Optional[Callable[[str, torch.Tensor, bool], torch.Tensor]] = None,
     ) -> Tuple[PendingIOWork, SnapshotMetadata]:
         # TODO: validate app_state
 
@@ -399,7 +399,7 @@ class Snapshot:
                 logical_path=logical_path,
                 rank=pg_wrapper.get_rank(),
                 replicated=logical_path in replicated_set,
-                custom_tensor_prepare_func=custom_tensor_prepare_func,
+                _custom_tensor_prepare_func=custom_tensor_prepare_func,
             )
             object_entries[logical_path] = entry
             write_reqs.extend(item_write_reqs)

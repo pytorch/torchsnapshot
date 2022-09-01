@@ -190,7 +190,7 @@ class ShardedTensorIOPreparer:
         cls,
         storage_path: str,
         obj: ShardedTensor,
-        custom_tensor_prepare_func: Callable[[str, torch.Tensor, bool], torch.Tensor],
+        _custom_tensor_prepare_func: Callable[[str, torch.Tensor, bool], torch.Tensor],
     ) -> Tuple[ShardedTensorEntry, List[WriteReq]]:
         shards = []
         write_reqs = []
@@ -213,7 +213,7 @@ class ShardedTensorIOPreparer:
                 suffix = "_".join(str(i) for i in offsets)
                 entry, tensor_write_reqs = TensorIOPreparer.prepare_write(
                     storage_path=f"{storage_path}_{suffix}", tensor=tensor,
-                    custom_tensor_prepare_func=custom_tensor_prepare_func
+                    _custom_tensor_prepare_func=custom_tensor_prepare_func
                 )
                 write_reqs += tensor_write_reqs
 
@@ -336,13 +336,13 @@ def tensor_to_cpu(tensor: torch.Tensor) -> torch.Tensor:
 
 class TensorBufferStager(BufferStager):
     def __init__(self, tensor: torch.Tensor, entry: TensorEntry,
-    custom_tensor_prepare_func: Callable[[str, torch.Tensor, bool], torch.Tensor]) -> None:
+    _custom_tensor_prepare_func: Callable[[str, torch.Tensor, bool], torch.Tensor]) -> None:
         self.tensor = tensor
         self.entry = entry
-        self.custom_tensor_prepare_func = custom_tensor_prepare_func
+        self._custom_tensor_prepare_func = custom_tensor_prepare_func
 
     async def stage_buffer(self, executor: Optional[Executor] = None) -> BufferType:
-        self.tensor = self.custom_tensor_prepare_func(self.entry.location, self.tensor, tracing=False)
+        self.tensor = self._custom_tensor_prepare_func(self.entry.location, self.tensor, tracing=False)
         if self.tensor.is_cuda:
             # It would be nice to copy from GPU via DMA. However, it is very
             # difficult to figure out the safe amount of page-locked memory
@@ -430,10 +430,10 @@ class TensorIOPreparer:
     @staticmethod
     def prepare_write(
         storage_path: str, tensor: torch.Tensor,
-        custom_tensor_prepare_func: Callable[[str, torch.Tensor, bool], torch.Tensor],
+        _custom_tensor_prepare_func: Callable[[str, torch.Tensor, bool], torch.Tensor],
     ) -> Tuple[TensorEntry, List[WriteReq]]:
 
-        proc_tensor = custom_tensor_prepare_func(storage_path, tensor, tracing=True)
+        proc_tensor = _custom_tensor_prepare_func(storage_path, tensor, tracing=True)
 
         if proc_tensor.dtype in BUFFER_PROTOCOL_SUPPORTED_DTYPES:
             serializer = Serializer.BUFFER_PROTOCOL.value
@@ -449,7 +449,7 @@ class TensorIOPreparer:
             replicated=False,
         )
         # stage the actual tensor, not processed tensor
-        buffer_stager = TensorBufferStager(tensor=tensor, entry=entry, custom_tensor_prepare_func=custom_tensor_prepare_func)
+        buffer_stager = TensorBufferStager(tensor=tensor, entry=entry, _custom_tensor_prepare_func=custom_tensor_prepare_func)
         return entry, [WriteReq(path=storage_path, buffer_stager=buffer_stager)]
 
     @classmethod
@@ -597,7 +597,7 @@ def prepare_write(
     logical_path: str,
     rank: int,
     replicated: bool,
-    custom_tensor_prepare_func: Callable[[str, torch.Tensor, bool], torch.Tensor],
+    _custom_tensor_prepare_func: Callable[[str, torch.Tensor, bool], torch.Tensor],
 ) -> Tuple[Entry, List[WriteReq]]:
     """
     Prepare write for an object.
@@ -614,11 +614,11 @@ def prepare_write(
     """
     storage_path = get_storage_path(obj, logical_path, rank, replicated)
     if isinstance(obj, ShardedTensor):
-        return ShardedTensorIOPreparer.prepare_write(storage_path, obj, custom_tensor_prepare_func)
+        return ShardedTensorIOPreparer.prepare_write(storage_path, obj, _custom_tensor_prepare_func)
     elif isinstance(obj, torch.Tensor):
-        entry, obj_write_req = TensorIOPreparer.prepare_write(storage_path, obj, custom_tensor_prepare_func)
+        entry, obj_write_req = TensorIOPreparer.prepare_write(storage_path, obj, _custom_tensor_prepare_func)
     else:
-        entry, obj_write_req = ObjectIOPreparer.prepare_write(storage_path, obj, custom_tensor_prepare_func)
+        entry, obj_write_req = ObjectIOPreparer.prepare_write(storage_path, obj, _custom_tensor_prepare_func)
 
     entry.replicated = replicated
     return entry, obj_write_req
