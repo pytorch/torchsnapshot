@@ -176,7 +176,7 @@ class Snapshot:
         app_state: AppState,
         pg: Optional[dist.ProcessGroup] = None,
         replicated: Optional[List[str]] = None,
-        custom_tensor_prepare_func: Optional[Callable] = None,
+        custom_tensor_prepare_func: Optional[Callable[[str, torch.Tensor, bool], torch.Tensor]] = None,
     ) -> "Snapshot":
         """
         Take a snapshot from the program state.
@@ -241,7 +241,7 @@ class Snapshot:
         app_state: AppState,
         pg: Optional[dist.ProcessGroup] = None,
         replicated: Optional[List[str]] = None,
-        custom_tensor_prepare_func: Optional[Callable] = None,
+        custom_tensor_prepare_func: Optional[Callable[[str, torch.Tensor, bool], torch.Tensor]] = None,
     ) -> "PendingSnapshot":
         """
         Asynchronously take a snapshot from the program state.
@@ -309,7 +309,7 @@ class Snapshot:
         pg_wrapper: PGWrapper,
         storage: StoragePlugin,
         event_loop: asyncio.AbstractEventLoop,
-        custom_tensor_prepare_func: Callable,
+        custom_tensor_prepare_func: Optional[Callable[[str, torch.Tensor, bool], torch.Tensor]] = None,
     ) -> Tuple[PendingIOWork, SnapshotMetadata]:
         # TODO: validate app_state
 

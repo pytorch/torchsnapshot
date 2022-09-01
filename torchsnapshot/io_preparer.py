@@ -190,7 +190,7 @@ class ShardedTensorIOPreparer:
         cls,
         storage_path: str,
         obj: ShardedTensor,
-        custom_tensor_prepare_func: Callable,
+        custom_tensor_prepare_func: Callable[[str, torch.Tensor, bool], torch.Tensor],
     ) -> Tuple[ShardedTensorEntry, List[WriteReq]]:
         shards = []
         write_reqs = []
@@ -336,7 +336,7 @@ def tensor_to_cpu(tensor: torch.Tensor) -> torch.Tensor:
 
 class TensorBufferStager(BufferStager):
     def __init__(self, tensor: torch.Tensor, entry: TensorEntry,
-    custom_tensor_prepare_func: Callable) -> None:
+    custom_tensor_prepare_func: Callable[[str, torch.Tensor, bool], torch.Tensor]) -> None:
         self.tensor = tensor
         self.entry = entry
         self.custom_tensor_prepare_func = custom_tensor_prepare_func
@@ -430,7 +430,7 @@ class TensorIOPreparer:
     @staticmethod
     def prepare_write(
         storage_path: str, tensor: torch.Tensor,
-        custom_tensor_prepare_func: Callable,
+        custom_tensor_prepare_func: Callable[[str, torch.Tensor, bool], torch.Tensor],
     ) -> Tuple[TensorEntry, List[WriteReq]]:
 
         proc_tensor = custom_tensor_prepare_func(storage_path, tensor, tracing=True)
@@ -597,7 +597,7 @@ def prepare_write(
     logical_path: str,
     rank: int,
     replicated: bool,
-    custom_tensor_prepare_func: Callable,
+    custom_tensor_prepare_func: Callable[[str, torch.Tensor, bool], torch.Tensor],
 ) -> Tuple[Entry, List[WriteReq]]:
     """
     Prepare write for an object.
