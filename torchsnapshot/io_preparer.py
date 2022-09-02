@@ -99,7 +99,7 @@ class ChunkedTensorIOPreparer:
         tensor: torch.Tensor, chunk: Union[Shard, Chunk]
     ) -> torch.Tensor:
         # for 0-d case, reshape to 1-d
-        result = tensor.view(-1) if tensor.ndim == 0 else tensor_chunk_sizes
+        result = tensor.view(-1) if tensor.ndim == 0 else tensor
 
         for d in range(len(chunk.sizes)):
             result = result.narrow(d, chunk.offsets[d], chunk.sizes[d])
