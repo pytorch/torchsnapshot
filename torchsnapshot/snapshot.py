@@ -215,7 +215,7 @@ class Snapshot:
             pg_wrapper=PGWrapper(pg),
             storage=storage,
             event_loop=event_loop,
-            _custom_tensor_prepare_func=custom_tensor_prepare_func,
+            _custom_tensor_prepare_func=_custom_tensor_prepare_func,
         )
         pending_io_work.sync_complete(event_loop=event_loop)
 
@@ -288,7 +288,7 @@ class Snapshot:
             pg_wrapper=PGWrapper(pg),
             storage=storage,
             event_loop=event_loop,
-            _custom_tensor_prepare_func=custom_tensor_prepare_func,
+            _custom_tensor_prepare_func=_custom_tensor_prepare_func,
         )
         # PendingSnapshot is responsible for closing `storage` and `event_loop`
         return PendingSnapshot(

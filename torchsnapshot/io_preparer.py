@@ -446,7 +446,7 @@ class TensorIOPreparer:
             replicated=False,
         )
         # stage the actual tensor, not processed tensor
-        buffer_stager = TensorBufferStager(tensor=tensor, entry=entry, _custom_tensor_prepare_func=custom_tensor_prepare_func)
+        buffer_stager = TensorBufferStager(tensor=tensor, entry=entry, _custom_tensor_prepare_func=_custom_tensor_prepare_func)
         return entry, [WriteReq(path=storage_path, buffer_stager=buffer_stager)]
 
     @classmethod
