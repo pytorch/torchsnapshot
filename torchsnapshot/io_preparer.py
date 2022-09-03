@@ -213,7 +213,7 @@ class ShardedTensorIOPreparer:
                 suffix = "_".join(str(i) for i in offsets)
                 entry, tensor_write_reqs = TensorIOPreparer.prepare_write(
                     storage_path=f"{storage_path}_{suffix}", tensor=tensor,
-                    _custom_tensor_prepare_func=custom_tensor_prepare_func
+                    _custom_tensor_prepare_func=_custom_tensor_prepare_func
                 )
                 write_reqs += tensor_write_reqs
 
