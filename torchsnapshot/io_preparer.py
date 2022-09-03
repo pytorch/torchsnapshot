@@ -405,7 +405,6 @@ class TensorBufferConsumer(BufferConsumer):
     ) -> None:
         loaded = self.deserialize_tensor(buf=buf, entry=self.entry)
         if executor is not None:
-            print('consumer', self.tensor.shape, self.tensor.dtype)
             await asyncio.get_running_loop().run_in_executor(
                 executor, tensor_copy, self.tensor, loaded
             )

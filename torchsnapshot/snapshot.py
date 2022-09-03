@@ -399,7 +399,7 @@ class Snapshot:
                 logical_path=logical_path,
                 rank=pg_wrapper.get_rank(),
                 replicated=logical_path in replicated_set,
-                _custom_tensor_prepare_func=custom_tensor_prepare_func,
+                _custom_tensor_prepare_func=_custom_tensor_prepare_func,
             )
             object_entries[logical_path] = entry
             write_reqs.extend(item_write_reqs)
