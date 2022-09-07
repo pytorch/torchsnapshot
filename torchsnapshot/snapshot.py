@@ -386,6 +386,7 @@ class Snapshot:
                     pg_wrapper.get_rank(),
                     logical_path in replicated_set,
                 ),
+                _custom_tensor_prepare_func=_custom_tensor_prepare_func,
                 tensor=flattened[logical_path],
                 chunking_instruction=chunking_instructions[logical_path],
             )
