@@ -11,6 +11,7 @@ import itertools
 import os
 from collections import OrderedDict
 from typing import Any, Dict, Tuple
+from urllib.parse import unquote
 
 from .manifest import DictEntry, ListEntry, Manifest, OrderedDictEntry
 
@@ -59,7 +60,8 @@ def flatten(obj: Any, prefix: str = "") -> Tuple[Manifest, Dict[str, Any]]:
         else:
             manifest[prefix] = OrderedDictEntry(keys=list(obj.keys()))
         for key, elem in obj.items():
-            path = os.path.join(prefix, str(key))
+            filename = _key_to_filename(str(key))
+            path = os.path.join(prefix, str(filename))
             m, f = flatten(elem, path)
             manifest.update(m)
             flattened.update(f)
@@ -69,7 +71,9 @@ def flatten(obj: Any, prefix: str = "") -> Tuple[Manifest, Dict[str, Any]]:
 
 
 # pyre-ignore[3]: Return annotation cannot be `Any`
-def inflate(manifest: Manifest, flattened: Dict[str, Any], prefix: str = "") -> Any:
+def inflate(
+    manifest: Manifest, flattened: Dict[str, Any], prefix: str = ""
+) -> Dict[Any, Any]:
     """
     The reverse operation of func::`flatten`.
 
@@ -116,7 +120,7 @@ def inflate(manifest: Manifest, flattened: Dict[str, Any], prefix: str = "") -> 
         if type(container) == list:
             container.append(val)
         elif type(container) in (dict, OrderedDict):
-            key = tokens[-1]
+            key = _filename_to_key(tokens[-1])
             if key in container:
                 container[key] = val
             elif _check_int(key):
@@ -149,3 +153,13 @@ def _check_int(s: str) -> bool:
         return s[1:].isdigit()
     else:
         return False
+
+
+def _key_to_filename(s: str) -> str:
+    s = s.replace("%", "%25")
+    s = s.replace("/", "%2F")
+    return s
+
+
+def _filename_to_key(s: str) -> str:
+    return unquote(s)
