@@ -337,7 +337,7 @@ class TensorBufferStager(BufferStager):
     _custom_tensor_prepare_func: Callable[[str, torch.Tensor, bool], torch.Tensor]) -> None:
         self.tensor = tensor
         self.entry = entry
-        self._custom_tensor_prepare_func = custom_tensor_prepare_func
+        self._custom_tensor_prepare_func = _custom_tensor_prepare_func
 
     async def stage_buffer(self, executor: Optional[Executor] = None) -> BufferType:
         self.tensor = self._custom_tensor_prepare_func(self.entry.location, self.tensor, tracing=False)
