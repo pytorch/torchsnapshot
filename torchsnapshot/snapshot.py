@@ -657,6 +657,9 @@ class Snapshot:
         mnfst, flattened = flatten(state_dict, prefix=stateful_key)
         del state_dict
 
+        #breakpoint()
+        print('flattened', flattened)
+        print('available_entries', available_entries)
         read_reqs: List[ReadReq] = []
         for logical_path, obj in flattened.items():
             if logical_path not in available_entries:

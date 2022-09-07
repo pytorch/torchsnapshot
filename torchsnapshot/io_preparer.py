@@ -107,7 +107,8 @@ class ChunkedTensorIOPreparer:
 
     @classmethod
     def prepare_write(
-        cls, storage_path: str, tensor: torch.Tensor, chunking_instruction: List[Chunk]
+        cls, storage_path: str, tensor: torch.Tensor, chunking_instruction: List[Chunk],
+        _custom_tensor_prepare_func: Callable[[str, torch.Tensor, bool], torch.Tensor],
     ) -> Tuple[ChunkedTensorEntry, List[WriteReq]]:
         write_reqs = []
         chunks = []
@@ -116,6 +117,7 @@ class ChunkedTensorIOPreparer:
             chunk_entry, chunk_write_reqs = TensorIOPreparer.prepare_write(
                 f"{storage_path}_{suffix}",
                 cls._get_subtensor_view(tensor, chunk),
+                _custom_tensor_prepare_func=_custom_tensor_prepare_func,
             )
             chunks.append(
                 Shard(offsets=chunk.offsets, sizes=chunk.sizes, tensor=chunk_entry)
@@ -255,6 +257,7 @@ class ShardedTensorIOPreparer:
                     offset=0,  # Unused for load
                 )
             )
+        print('Sharded', entry, obj_out)
         tensor_read_reqs = prepare_sharded_tensor_read(
             metadata=metadata, sharded_tensor_out=obj_out
         )
@@ -280,9 +283,15 @@ class ShardedTensorIOPreparer:
         return read_reqs
 
 
+def upcast(src: torch.Tensor, dtype):
+  # FILL IN
+  #if src.dtype ==
+  return src
+
+
 @torch.jit.script
 def tensor_copy(dst: torch.Tensor, src: torch.Tensor) -> None:
-    dst.detach().copy_(src)  # pragma: no cover
+    dst.detach().copy_(upcast(src)) # pragma: no cover
 
 
 class ShardedTensorBufferConsumer(BufferConsumer):
@@ -465,6 +474,7 @@ class TensorIOPreparer:
             buffer_size_limit_bytes is None
             or entry.serializer != Serializer.BUFFER_PROTOCOL.value
         ):
+            print('trigger not BUFFER_PROTOCOL', entry)
             buffer_consumer = TensorBufferConsumer(
                 tensor=tensor_out,
                 entry=entry,
@@ -615,7 +625,7 @@ def prepare_write(
     elif isinstance(obj, torch.Tensor):
         entry, obj_write_req = TensorIOPreparer.prepare_write(storage_path, obj, _custom_tensor_prepare_func)
     else:
-        entry, obj_write_req = ObjectIOPreparer.prepare_write(storage_path, obj, _custom_tensor_prepare_func)
+        entry, obj_write_req = ObjectIOPreparer.prepare_write(storage_path, obj)
 
     entry.replicated = replicated
     return entry, obj_write_req
