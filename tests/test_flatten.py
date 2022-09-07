@@ -23,7 +23,9 @@ _OBJ = {
         3,
         {"qux": 4, "quxx": [5, OrderedDict(quuz=6, corge=[7, 8, 9])]},
     ],
+    "x/y": {"%a/b": 10},
 }
+
 _EXPECTED_MANIFEST = {
     "": DictEntry(keys=["foo", "bar", "baz"]),
     "baz": ListEntry(),
@@ -32,6 +34,17 @@ _EXPECTED_MANIFEST = {
     "baz/2/quxx/1": OrderedDictEntry(keys=["quuz", "corge"]),
     "baz/2/quxx/1/corge": ListEntry(),
 }
+
+_EXPECTED_MANIFEST = {
+    "": DictEntry(keys=["foo", "bar", "baz", "x/y"]),
+    "baz": ListEntry(),
+    "baz/2": DictEntry(keys=["qux", "quxx"]),
+    "baz/2/quxx": ListEntry(),
+    "baz/2/quxx/1": OrderedDictEntry(keys=["quuz", "corge"]),
+    "baz/2/quxx/1/corge": ListEntry(),
+    "x%2Fy": DictEntry(keys=["%a/b"]),
+}
+
 _EXPECTED_FLATTENED = {
     "foo": 0,
     "bar": 1,
@@ -43,6 +56,7 @@ _EXPECTED_FLATTENED = {
     "baz/2/quxx/1/corge/0": 7,
     "baz/2/quxx/1/corge/1": 8,
     "baz/2/quxx/1/corge/2": 9,
+    "x%2Fy/%25a%2Fb": 10,
 }
 
 
@@ -52,6 +66,8 @@ class FlattenTest(unittest.TestCase):
 
     def test_flatten(self) -> None:
         manifest, flattened = flatten(obj=_OBJ)
+        print(manifest)
+        print(flattened)
         self.assertDictEqual(manifest, _EXPECTED_MANIFEST)
         self.assertDictEqual(flattened, _EXPECTED_FLATTENED)
 

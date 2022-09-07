@@ -20,8 +20,24 @@ class SnapshotTest(unittest.TestCase):
         self.maxDiff = None
 
     def test_state_dict(self) -> None:
-        foo = torchsnapshot.StateDict(a=torch.rand(40, 40), b=torch.rand(40, 40), c=42)
-        bar = torchsnapshot.StateDict(a=torch.rand(40, 40), b=torch.rand(40, 40), c=43)
+        foo = torchsnapshot.StateDict(
+            {
+                "a": torch.rand(40, 40),
+                "b": torch.rand(40, 40),
+                "c": 42,
+                "d/e": 43,
+                "[@x]->&y^": {"(z)": 44},
+            },
+        )
+        bar = torchsnapshot.StateDict(
+            {
+                "a": torch.rand(40, 40),
+                "b": torch.rand(40, 40),
+                "c": 42,
+                "d/e": 43,
+                "[@x]->&y^": {"(z)": 44},
+            },
+        )
         self.assertFalse(check_state_dict_eq(foo.state_dict(), bar.state_dict()))
         self.assertTrue(type(foo.state_dict()) == dict)
 
