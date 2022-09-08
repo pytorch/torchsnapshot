@@ -21,14 +21,13 @@ from datetime import timedelta
 from functools import reduce
 from operator import mul
 from threading import Thread
-from typing import Any, cast, Dict, List, Optional, Tuple, TypeVar
+from typing import Any, Callable, cast, Dict, List, Optional, Tuple, TypeVar
 
 import numpy as np
 import torch
 import torch.distributed as dist
 from torch.distributed._shard.sharded_tensor import ShardedTensor
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torchsnapshot.io_preparer import Chunk
 from torchsnapshot.manifest import ChunkedTensorEntry
 from torchsnapshot.serialization import dtype_to_element_size, string_to_dtype
 
@@ -36,6 +35,8 @@ from .dist_store import get_or_create_store, LinearBarrier
 
 from .flatten import flatten, inflate
 from .io_preparer import (
+    _identity_tensor_prepare_func,
+    Chunk,
     ChunkedTensorIOPreparer,
     get_storage_path,
     ObjectBufferConsumer,
@@ -176,6 +177,9 @@ class Snapshot:
         app_state: AppState,
         pg: Optional[dist.ProcessGroup] = None,
         replicated: Optional[List[str]] = None,
+        _custom_tensor_prepare_func: Optional[
+            Callable[[str, torch.Tensor, bool], torch.Tensor]
+        ] = None,
     ) -> "Snapshot":
         """
         Take a snapshot from the program state.
@@ -199,6 +203,7 @@ class Snapshot:
 
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(pg=pg)
+
         path, replicated = cls._coalesce_path_and_replicated(
             path=path,
             pg_wrapper=pg_wrapper,
@@ -215,6 +220,7 @@ class Snapshot:
             pg_wrapper=PGWrapper(pg),
             storage=storage,
             event_loop=event_loop,
+            _custom_tensor_prepare_func=_custom_tensor_prepare_func,
         )
         pending_io_work.sync_complete(event_loop=event_loop)
 
@@ -240,6 +246,9 @@ class Snapshot:
         app_state: AppState,
         pg: Optional[dist.ProcessGroup] = None,
         replicated: Optional[List[str]] = None,
+        _custom_tensor_prepare_func: Optional[
+            Callable[[str, torch.Tensor, bool], torch.Tensor]
+        ] = None,
     ) -> "PendingSnapshot":
         """
         Asynchronously take a snapshot from the program state.
@@ -280,6 +289,7 @@ class Snapshot:
         storage = url_to_storage_plugin_in_event_loop(
             url_path=path, event_loop=event_loop
         )
+
         pending_io_work, metadata = cls._take_impl(
             path=path,
             app_state=app_state,
@@ -287,6 +297,7 @@ class Snapshot:
             pg_wrapper=PGWrapper(pg),
             storage=storage,
             event_loop=event_loop,
+            _custom_tensor_prepare_func=_custom_tensor_prepare_func,
         )
         # PendingSnapshot is responsible for closing `storage` and `event_loop`
         return PendingSnapshot(
@@ -307,10 +318,16 @@ class Snapshot:
         pg_wrapper: PGWrapper,
         storage: StoragePlugin,
         event_loop: asyncio.AbstractEventLoop,
+        _custom_tensor_prepare_func: Optional[
+            Callable[[str, torch.Tensor, bool], torch.Tensor]
+        ] = None,
     ) -> Tuple[PendingIOWork, SnapshotMetadata]:
         app_state = app_state.copy()
         rng_state_item = cls._pop_rng_state(app_state=app_state)
         rng_state_dict = None
+
+        if not _custom_tensor_prepare_func:
+            _custom_tensor_prepare_func = _identity_tensor_prepare_func
 
         manifest: Manifest = {}
         flattened: Dict[str, Any] = {}
@@ -381,6 +398,9 @@ class Snapshot:
                 ),
                 tensor=flattened[logical_path],
                 chunking_instruction=chunking_instructions[logical_path],
+                _tensor_prepare_func=functools.partial(
+                    _custom_tensor_prepare_func, logical_path
+                ),
             )
             entry.replicated = logical_path in replicated_set
             object_entries[logical_path] = entry
@@ -392,6 +412,9 @@ class Snapshot:
                 logical_path=logical_path,
                 rank=pg_wrapper.get_rank(),
                 replicated=logical_path in replicated_set,
+                _tensor_prepare_func=functools.partial(
+                    _custom_tensor_prepare_func, logical_path
+                ),
             )
             object_entries[logical_path] = entry
             write_reqs.extend(item_write_reqs)

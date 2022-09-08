@@ -177,3 +177,35 @@ class TensorIOPreparerTest(unittest.TestCase):
         foo = torch.rand(1009, 1009)
         bar = torch.rand(1009, 1009)
         await self._test_chunked_read_helper(src=foo, dst=bar)
+
+    @async_test
+    async def test_custom_tensor_prepare_func(self) -> None:
+        foo = torch.rand(2000, 2000)
+        entry, write_reqs = TensorIOPreparer.prepare_write(
+            storage_path="src", tensor=foo
+        )
+        self.assertEqual(entry.dtype, "torch.float32")
+        self.assertEqual(entry.shape, [2000, 2000])
+
+        def quantize(tensor: torch.Tensor, tracing: bool) -> torch.Tensor:
+            return torch.quantize_per_tensor(tensor, 0.1, 10, torch.qint8)
+
+        bar = torch.rand(2000, 2000)
+        entry, write_reqs = TensorIOPreparer.prepare_write(
+            storage_path="src",
+            tensor=bar,
+            _tensor_prepare_func=quantize,
+        )
+        self.assertEqual(entry.dtype, "torch.qint8")
+        self.assertEqual(entry.shape, [2000, 2000])
+
+        def view(tensor: torch.Tensor, tracing: bool) -> torch.Tensor:
+            return tensor[:1000, :1000]
+
+        bar = torch.rand(2000, 2000)
+        with self.assertRaises(RuntimeError):
+            entry, write_reqs = TensorIOPreparer.prepare_write(
+                storage_path="src",
+                tensor=bar,
+                _tensor_prepare_func=view,
+            )
