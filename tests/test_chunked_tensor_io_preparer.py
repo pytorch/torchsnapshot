@@ -37,9 +37,9 @@ class ChunkedTensorIOPreparerTest(unittest.TestCase):
         tensor_to_chunk: torch.Tensor,
         max_chunk_sz_bytes: int,
     ) -> None:
+        ChunkedTensorIOPreparer.DEFAULT_MAX_CHUNK_SIZE_BYTES = max_chunk_sz_bytes
         actual_chunks = ChunkedTensorIOPreparer.chunk_tensor(
             tensor=tensor_to_chunk,
-            max_chunk_sz_bytes=max_chunk_sz_bytes,
         )
         self.assertEqual(len(expected_chunks), len(actual_chunks))
         for i in range(len(expected_chunks)):
@@ -50,12 +50,6 @@ class ChunkedTensorIOPreparerTest(unittest.TestCase):
         tensor = torch.tensor(0)
         max_chunk_sz_bytes = 100
         expected_chunks = [Chunk(offsets=[0], sizes=[1], dtype=str(tensor.dtype))]
-        self._test_chunk_tensor_helper(expected_chunks, tensor, max_chunk_sz_bytes)
-
-    def test_chunk_tensor_0_elements(self) -> None:
-        tensor = torch.tensor([])
-        max_chunk_sz_bytes = 100
-        expected_chunks = [Chunk(offsets=[0], sizes=[0], dtype=str(tensor.dtype))]
         self._test_chunk_tensor_helper(expected_chunks, tensor, max_chunk_sz_bytes)
 
     def test_chunk_tensor_div_by_elem_size(self) -> None:
@@ -269,70 +263,26 @@ class ChunkedTensorIOPreparerTest(unittest.TestCase):
         )
 
     @staticmethod
-    def _worker_only_ddp_all_replicated(path: str) -> None:
+    def _worker_write_read_with_small_chunk_size(path: str) -> None:
         dist.init_process_group(backend="gloo")
-        foo = DDP(torch.nn.Linear(4, 3))
-        bar = DDP(torch.nn.Linear(4, 3))
-        app_state: AppState = {"ddp": foo}
+        ddp_foo = DDP(torch.nn.Linear(4, 3))
+        ddp_bar = DDP(torch.nn.Linear(4, 3))
+        nonddp_foo = torch.nn.Linear(16, 1)
+        nonddp_bar = torch.nn.Linear(16, 1)
+        app_state: AppState = {"ddp": ddp_foo, "nonddp": nonddp_foo}
+        ChunkedTensorIOPreparer.DEFAULT_MAX_CHUNK_SIZE_BYTES = 4
         snapshot = torchsnapshot.Snapshot.take(
             path=path,
             app_state=app_state,
-            replicated=["**"],
         )
-        snapshot.restore({"ddp": bar})
+        snapshot.restore({"ddp": ddp_bar, "nonddp": nonddp_bar})
         tc = unittest.TestCase()
-        assert_state_dict_eq(tc, foo.state_dict(), bar.state_dict())
+        assert_state_dict_eq(tc, ddp_foo.state_dict(), ddp_bar.state_dict())
+        assert_state_dict_eq(tc, nonddp_foo.state_dict(), nonddp_bar.state_dict())
 
-    def test_only_ddp_all_replicated(self) -> None:
-        lc = get_pet_launch_config(nproc=2)
-        with tempfile.TemporaryDirectory() as path:
-            pet.elastic_launch(lc, entrypoint=self._worker_only_ddp_all_replicated)(
-                path
-            )
-
-    @staticmethod
-    def _worker_only_nonddp_all_replicated(path: str) -> None:
-        dist.init_process_group(backend="gloo")
-        foo = torch.nn.Linear(4, 3)
-        bar = torch.nn.Linear(4, 3)
-        app_state: AppState = {"nonddp": foo}
-        snapshot = torchsnapshot.Snapshot.take(
-            path=path,
-            app_state=app_state,
-            replicated=["**"],
-        )
-        snapshot.restore({"nonddp": bar})
-        tc = unittest.TestCase()
-        assert_state_dict_eq(tc, foo.state_dict(), bar.state_dict())
-
-    def test_only_nonddp_all_replicated(self) -> None:
-        lc = get_pet_launch_config(nproc=2)
-        with tempfile.TemporaryDirectory() as path:
-            pet.elastic_launch(lc, entrypoint=self._worker_only_ddp_all_replicated)(
-                path
-            )
-
-    @staticmethod
-    def _worker_both_ddp_and_nonddp_all_replicated(path: str) -> None:
-        dist.init_process_group(backend="gloo")
-        foo_ddp = DDP(torch.nn.Linear(4, 3))
-        foo_nonddp = torch.nn.Linear(3, 2)
-        bar_ddp = DDP(torch.nn.Linear(4, 3))
-        bar_nonddp = torch.nn.Linear(3, 2)
-        app_state: AppState = {"ddp": foo_ddp, "nonddp": foo_nonddp}
-        snapshot = torchsnapshot.Snapshot.take(
-            path=path,
-            app_state=app_state,
-            replicated=["**"],
-        )
-        snapshot.restore({"ddp": bar_ddp, "nonddp": bar_nonddp})
-        tc = unittest.TestCase()
-        assert_state_dict_eq(tc, foo_ddp.state_dict(), bar_ddp.state_dict())
-        assert_state_dict_eq(tc, foo_nonddp.state_dict(), foo_nonddp.state_dict())
-
-    def test_both_ddp_and_nonddp_all_replicated(self) -> None:
+    def test_write_read_with_small_chunk_size(self) -> None:
         lc = get_pet_launch_config(nproc=2)
         with tempfile.TemporaryDirectory() as path:
             pet.elastic_launch(
-                lc, entrypoint=self._worker_both_ddp_and_nonddp_all_replicated
+                lc, entrypoint=self._worker_write_read_with_small_chunk_size
             )(path)

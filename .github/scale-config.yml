@@ -4,7 +4,7 @@ runner_types:
     os: linux
     max_available: 200
     disk_size: 150
-  linux.8xlarge.nvidia.gpu:
+  linux.p3.8xlarge.nvidia.gpu:
     instance_type: p3.8xlarge
     os: linux
     max_available: 10

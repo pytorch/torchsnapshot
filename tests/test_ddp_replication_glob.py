@@ -8,7 +8,7 @@
 import os
 import tempfile
 import unittest
-from typing import List
+from typing import List, Optional
 
 import torch
 import torch.distributed as dist
@@ -38,7 +38,7 @@ class ReplicationDDPGlobTest(unittest.TestCase):
     def _test_helper(
         self,
         nproc: int,
-        replication_globs: List[List[str]],
+        replication_globs: List[Optional[List[str]]],
         expected_replicated_paths: List[str],
     ) -> None:
         """
@@ -56,19 +56,22 @@ class ReplicationDDPGlobTest(unittest.TestCase):
         self.assertSetEqual(set(replicated_paths), set(expected_replicated_paths))
 
     def test_only_ddp_replicated(self) -> None:
-        replication_globs = [[], []]
-        expected_replicated_paths = [
+        expected_replicated_paths: List[str] = [
             "0/ddp/module.weight",
             "0/ddp/module.bias",
             "1/ddp/module.weight",
             "1/ddp/module.bias",
         ]
 
+        replication_globs: List[Optional[List[str]]] = [[], []]
+        self._test_helper(2, replication_globs, expected_replicated_paths)
+
+        replication_globs: List[Optional[List[str]]] = [None, None]
         self._test_helper(2, replication_globs, expected_replicated_paths)
 
     def test_all_replicated(self) -> None:
-        replication_globs = [["**"], ["**"]]
-        expected_replicated_paths = [
+        replication_globs: List[Optional[List[str]]] = [["**"], ["**"]]
+        expected_replicated_paths: List[str] = [
             "0/ddp/module.weight",
             "0/ddp/module.bias",
             "1/ddp/module.weight",

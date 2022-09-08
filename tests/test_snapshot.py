@@ -11,6 +11,7 @@ import unittest
 
 import torch
 import torchsnapshot
+from torchsnapshot import Snapshot
 from torchsnapshot.test_utils import assert_state_dict_eq, check_state_dict_eq
 
 
@@ -19,8 +20,24 @@ class SnapshotTest(unittest.TestCase):
         self.maxDiff = None
 
     def test_state_dict(self) -> None:
-        foo = torchsnapshot.StateDict(a=torch.rand(40, 40), b=torch.rand(40, 40), c=42)
-        bar = torchsnapshot.StateDict(a=torch.rand(40, 40), b=torch.rand(40, 40), c=43)
+        foo = torchsnapshot.StateDict(
+            {
+                "a": torch.rand(40, 40),
+                "b": torch.rand(40, 40),
+                "c": 42,
+                "d/e": 43,
+                "[@x]->&y^%": {"(z)": 44},
+            },
+        )
+        bar = torchsnapshot.StateDict(
+            {
+                "a": torch.rand(40, 40),
+                "b": torch.rand(40, 40),
+                "c": 42,
+                "d/e": 43,
+                "[@x]->&y^%": {"(z)": 44},
+            },
+        )
         self.assertFalse(check_state_dict_eq(foo.state_dict(), bar.state_dict()))
         self.assertTrue(type(foo.state_dict()) == dict)
 
@@ -72,3 +89,13 @@ class SnapshotTest(unittest.TestCase):
             snapshot.restore({"optim": optim})
 
         assert_state_dict_eq(self, optim.state_dict(), expected)
+
+    def test_invalid_app_state(self) -> None:
+        not_stateful = 1
+        app_state = {"optim": not_stateful}
+
+        with tempfile.TemporaryDirectory() as path:
+            self.assertRaises(TypeError, torchsnapshot.Snapshot.take, path, app_state)
+
+            snapshot = Snapshot(path)
+            self.assertRaises(TypeError, snapshot.restore, app_state)

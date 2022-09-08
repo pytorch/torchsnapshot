@@ -28,7 +28,6 @@ import torch
 import torch.distributed as dist
 from torch.distributed._shard.sharded_tensor import ShardedTensor
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torchsnapshot.io_preparer import Chunk
 from torchsnapshot.manifest import ChunkedTensorEntry
 from torchsnapshot.serialization import dtype_to_element_size, string_to_dtype
 
@@ -36,6 +35,8 @@ from .dist_store import get_or_create_store, LinearBarrier
 
 from .flatten import flatten, inflate
 from .io_preparer import (
+    _identity_tensor_prepare_func,
+    Chunk,
     ChunkedTensorIOPreparer,
     get_storage_path,
     ObjectBufferConsumer,
@@ -176,7 +177,9 @@ class Snapshot:
         app_state: AppState,
         pg: Optional[dist.ProcessGroup] = None,
         replicated: Optional[List[str]] = None,
-        _custom_tensor_prepare_func: Optional[Callable[[str, torch.Tensor, bool], torch.Tensor]] = None,
+        _custom_tensor_prepare_func: Optional[
+            Callable[[str, torch.Tensor, bool], torch.Tensor]
+        ] = None,
     ) -> "Snapshot":
         """
         Take a snapshot from the program state.
@@ -196,14 +199,16 @@ class Snapshot:
             The newly taken snapshot.
         """
         torch._C._log_api_usage_once("torchsnapshot.Snapshot.take")
+        cls._validate_app_state(app_state)
+
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(pg=pg)
-        if not _custom_tensor_prepare_func:
-            _custom_tensor_prepare_func = lambda path, tensor, tracing : tensor
-
 
         path, replicated = cls._coalesce_path_and_replicated(
-            path=path, pg_wrapper=pg_wrapper, app_state=app_state, replicated=replicated
+            path=path,
+            pg_wrapper=pg_wrapper,
+            app_state=app_state,
+            replicated=replicated or [],
         )
         storage = url_to_storage_plugin_in_event_loop(
             url_path=path, event_loop=event_loop
@@ -241,7 +246,9 @@ class Snapshot:
         app_state: AppState,
         pg: Optional[dist.ProcessGroup] = None,
         replicated: Optional[List[str]] = None,
-        _custom_tensor_prepare_func: Optional[Callable[[str, torch.Tensor, bool], torch.Tensor]] = None,
+        _custom_tensor_prepare_func: Optional[
+            Callable[[str, torch.Tensor, bool], torch.Tensor]
+        ] = None,
     ) -> "PendingSnapshot":
         """
         Asynchronously take a snapshot from the program state.
@@ -269,17 +276,19 @@ class Snapshot:
             invoked.
         """
         torch._C._log_api_usage_once("torchsnapshot.Snapshot.async_take")
+        cls._validate_app_state(app_state)
+
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(pg=pg)
         path, replicated = cls._coalesce_path_and_replicated(
-            path=path, pg_wrapper=pg_wrapper, app_state=app_state, replicated=replicated
+            path=path,
+            pg_wrapper=pg_wrapper,
+            app_state=app_state,
+            replicated=replicated or [],
         )
         storage = url_to_storage_plugin_in_event_loop(
             url_path=path, event_loop=event_loop
         )
-
-        if not _custom_tensor_prepare_func:
-            _custom_tensor_prepare_func = lambda path, tensor, tracing : tensor
 
         pending_io_work, metadata = cls._take_impl(
             path=path,
@@ -309,13 +318,16 @@ class Snapshot:
         pg_wrapper: PGWrapper,
         storage: StoragePlugin,
         event_loop: asyncio.AbstractEventLoop,
-        _custom_tensor_prepare_func: Optional[Callable[[str, torch.Tensor, bool], torch.Tensor]] = None,
+        _custom_tensor_prepare_func: Optional[
+            Callable[[str, torch.Tensor, bool], torch.Tensor]
+        ] = None,
     ) -> Tuple[PendingIOWork, SnapshotMetadata]:
-        # TODO: validate app_state
-
         app_state = app_state.copy()
         rng_state_item = cls._pop_rng_state(app_state=app_state)
         rng_state_dict = None
+
+        if not _custom_tensor_prepare_func:
+            _custom_tensor_prepare_func = _identity_tensor_prepare_func
 
         manifest: Manifest = {}
         flattened: Dict[str, Any] = {}
@@ -355,9 +367,7 @@ class Snapshot:
         # function won't affect the RNG state or execute application code.
         if rng_state_item is not None:
             _, stateful = rng_state_item
-            rng_state_dict = stateful.load_state_dict(
-                cast(Dict[str, Any], rng_state_dict)  # pyre-ignore[33]
-            )
+            stateful.load_state_dict(cast(Dict[str, torch.Tensor], rng_state_dict))
 
         replicated_paths = cls._calculate_replicated_entries(
             flattened, replicated, pg_wrapper
@@ -389,6 +399,9 @@ class Snapshot:
                 _custom_tensor_prepare_func=_custom_tensor_prepare_func,
                 tensor=flattened[logical_path],
                 chunking_instruction=chunking_instructions[logical_path],
+                _tensor_prepare_func=functools.partial(
+                    _custom_tensor_prepare_func, logical_path
+                ),
             )
             entry.replicated = logical_path in replicated_set
             object_entries[logical_path] = entry
@@ -400,7 +413,9 @@ class Snapshot:
                 logical_path=logical_path,
                 rank=pg_wrapper.get_rank(),
                 replicated=logical_path in replicated_set,
-                _custom_tensor_prepare_func=_custom_tensor_prepare_func,
+                _tensor_prepare_func=functools.partial(
+                    _custom_tensor_prepare_func, logical_path
+                ),
             )
             object_entries[logical_path] = entry
             write_reqs.extend(item_write_reqs)
@@ -431,6 +446,8 @@ class Snapshot:
             app_state: The program state to restore from the snapshot.
         """
         torch._C._log_api_usage_once("torchsnapshot.Snapshot.restore")
+        self._validate_app_state(app_state)
+
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(self.pg)
         rank = pg_wrapper.get_rank()
@@ -631,6 +648,16 @@ class Snapshot:
         replicated_paths = replicated_paths_list[0]
         return replicated_paths
 
+    @staticmethod
+    def _validate_app_state(app_state: AppState) -> None:
+        # performs runtime typechecking that all values are Stateful
+        for key, value in app_state.items():
+            if not isinstance(value, Stateful):
+                value_type = type(value)
+                raise TypeError(
+                    f"Expected Stateful in app_state for key {key}, got {value_type}."
+                )
+
     @classmethod
     def _load_stateful(
         cls,
@@ -737,8 +764,8 @@ path "{logical_path}" which was not available to rank {rank}.
         path: str,
         pg_wrapper: PGWrapper,
         app_state: AppState,
-        replicated: Optional[List[str]],
-    ) -> Tuple[str, Optional[List[str]]]:
+        replicated: List[str],
+    ) -> Tuple[str, List[str]]:
 
         rank = pg_wrapper.get_rank()
 
@@ -754,18 +781,17 @@ path "{logical_path}" which was not available to rank {rank}.
             )
 
         # coalesce replicated
-        if replicated is not None:
-            replicated = cls._infer_replicated(replicated, app_state)
-            # pyre-ignore[9]
-            global_replicated: List[List[str]] = [None] * pg_wrapper.get_world_size()
-            pg_wrapper.all_gather_object(global_replicated, replicated)
+        replicated = cls._infer_replicated(replicated, app_state)
+        # pyre-ignore[9]
+        global_replicated: List[List[str]] = [None] * pg_wrapper.get_world_size()
+        pg_wrapper.all_gather_object(global_replicated, replicated)
 
-            replicated = cls._coalesce_replicated(replicated, global_replicated)
-            if set(global_replicated[rank]) != set(replicated):
-                logger.warning(
-                    f"Rank {rank} specified replicated paths: {set(global_replicated[rank])} "
-                    f"different from replicated paths verified across all ranks: {set(replicated)}"
-                )
+        replicated = cls._coalesce_replicated(replicated, global_replicated)
+        if set(global_replicated[rank]) != set(replicated):
+            logger.warning(
+                f"Rank {rank} specified replicated paths: {set(global_replicated[rank])} "
+                f"different from replicated paths verified across all ranks: {set(replicated)}"
+            )
         return obj_list[0], replicated
 
     @classmethod
@@ -921,7 +947,7 @@ path "{logical_path}" which was not available to rank {rank}.
                             "unless the entry is ChunkedTensorEntry."
                         )
                     # Merge chunks across manifests
-                    replicated_entries[path].extend(entry.chunks)
+                    replicated_entries[path].chunks.extend(entry.chunks)
                 else:
                     replicated_entries[path] = entry
 
