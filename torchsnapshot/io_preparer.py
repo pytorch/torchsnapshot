@@ -11,6 +11,7 @@ import asyncio
 import copy
 import functools
 import io
+import logging
 import math
 import os
 import sys
@@ -22,6 +23,7 @@ from typing import Any, Callable, Generic, List, Optional, Tuple, TypeVar, Union
 
 import torch
 from torch.distributed._shard.sharded_tensor import (
+    Shard as ShardedTensorShard,
     ShardedTensor,
     ShardedTensorMetadata,
     ShardMetadata,
@@ -55,6 +57,8 @@ from .torch_dist_checkpoint.metadata import (
     TensorReadRequest,
 )
 from .torch_dist_checkpoint.resharding import prepare_sharded_tensor_read
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -237,17 +241,56 @@ class ShardedTensorIOPreparer:
                 )
         return ShardedTensorEntry(shards=shards), write_reqs
 
+    @staticmethod
+    def _get_global_shape(entry: ShardedTensorEntry) -> List[int]:
+        # TODO: the global dtype and shape should be tracked in the metadata
+        global_shape = [0] * len(entry.shards[0].sizes)
+        for shard in entry.shards:
+            for dim in range(len(shard.offsets)):
+                if shard.offsets[dim] + shard.sizes[dim] > global_shape[dim]:
+                    global_shape[dim] = shard.offsets[dim] + shard.sizes[dim]
+        return global_shape
+
+    @staticmethod
+    def _validate_shape(global_shape: List[int], obj_out: torch.Tensor) -> None:
+        if isinstance(obj_out, ShardedTensor):
+            out_shape = list(obj_out.metadata().size)
+        else:
+            out_shape = list(obj_out.shape)
+        if out_shape != global_shape:
+            logger.warn(
+                "The shape of obj_out ({out_shape}) is different from the "
+                "shape of the persisted sharded tensor ({global_shape}). "
+                "Only the overlapping part will be loaded. "
+            )
+
     @classmethod
     def prepare_read(
         cls,
         entry: ShardedTensorEntry,
-        obj_out: Optional[ShardedTensor] = None,
+        obj_out: Optional[torch.Tensor] = None,
     ) -> List[ReadReq]:
         if obj_out is None:
             # TODO: support loading sharded tensor without obj_out
             raise RuntimeError(
                 "Reading a ShardedTensor without a runtime object is not yet supported."
             )
+
+        global_shape = cls._get_global_shape(entry=entry)
+        cls._validate_shape(global_shape=global_shape, obj_out=obj_out)
+        if isinstance(obj_out, ShardedTensor):
+            local_shards_out = obj_out.local_shards()
+        else:
+            local_shards_out = [
+                ShardedTensorShard(
+                    tensor=obj_out,
+                    metadata=ShardMetadata(
+                        shard_offsets=[0] * len(obj_out.shape),
+                        shard_sizes=list(obj_out.shape),
+                        placement="cpu",  # Unused for load
+                    ),
+                )
+            ]
 
         metadata = ExtendedTensorMetadata(
             tensor_metadata=ShardedTensorMetadata(),  # Unused for load
@@ -267,7 +310,7 @@ class ShardedTensorIOPreparer:
                 )
             )
         tensor_read_reqs = prepare_sharded_tensor_read(
-            metadata=metadata, sharded_tensor_out=obj_out
+            metadata=metadata, local_shards_out=local_shards_out
         )
         locations_to_load = {twr.storage_key for twr in tensor_read_reqs}
 

@@ -525,8 +525,9 @@ class Snapshot:
         "sharded".
 
         If the persisted object is a sharded tensor, `obj_out` must be
-        supplied. `read_object` will correctly populate `obj_out`'s local
-        shards according to its sharding spec.
+        supplied. The supplied tensor can be either a tensor or sharded tensor.
+        `read_object` will correctly populate `obj_out`'s data according to
+        sharding spec.
 
         Args:
             path: The path to the persisted object.

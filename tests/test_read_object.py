@@ -74,3 +74,69 @@ class ReadObjectTest(unittest.TestCase):
     def test_read_sharded_tensor(self) -> None:
         lc = get_pet_launch_config(nproc=4)
         pet.elastic_launch(lc, entrypoint=self._test_read_sharded_tensor)()
+
+    @staticmethod
+    def _quantize(path: str, tensor: torch.Tensor, tracing: bool) -> torch.Tensor:
+        return torch.quantize_per_tensor(tensor, 0.1, 10, torch.qint8)
+
+    @classmethod
+    def _test_read_sharded_tensor_into_tensor(cls, quantized: bool) -> None:
+        tc = unittest.TestCase()
+        dist.init_process_group(backend="gloo")
+        torch.manual_seed(42 + dist.get_rank())
+
+        # pyre-ignore [28]
+        spec = ChunkShardingSpec(
+            dim=0,
+            placements=[f"rank:{rank}/cpu" for rank in range(dist.get_world_size())],
+        )
+        foo = sharded_tensor.empty(spec, 20_000, 128)
+        for shard in foo.local_shards():
+            torch.nn.init.uniform_(shard.tensor)
+
+        # Gather the sharded tensor for ease of comparison
+        if dist.get_rank() == 0:
+            foo_gathered = torch.empty(20_000, 128)
+            foo.gather(dst=0, out=foo_gathered)
+        else:
+            foo_gathered = torch.empty(42)
+            foo.gather(dst=0, out=None)
+
+        # Create a tensor into which the sharded tensor will be loaded
+        bar = torch.rand_like(foo_gathered)
+
+        if quantized:
+            foo_gathered = torch.quantize_per_tensor(
+                foo_gathered, 0.1, 10, torch.qint8
+            )
+            bar = torch.quantize_per_tensor(bar, 0.1, 10, torch.qint8)
+
+        # Control test: these two tensors should be different
+        tc.assertFalse(
+            torch.allclose(torch.dequantize(foo_gathered), torch.dequantize(bar))
+        )
+
+        with tempfile.TemporaryDirectory() as path:
+            _custom_tensor_prepare_func = cls._quantize if quantized else None
+            snapshot = torchsnapshot.Snapshot.take(
+                path=path,
+                app_state={"state": torchsnapshot.StateDict(foo=foo)},
+                _custom_tensor_prepare_func=_custom_tensor_prepare_func,
+            )
+            if dist.get_rank() == 0:
+                snapshot.read_object("0/state/foo", obj_out=bar)
+                tc.assertTrue(
+                    torch.allclose(
+                        torch.dequantize(foo_gathered), torch.dequantize(bar)
+                    )
+                )
+
+    def test_read_sharded_tensor_into_tensor(self) -> None:
+        lc = get_pet_launch_config(nproc=4)
+        pet.elastic_launch(lc, entrypoint=self._test_read_sharded_tensor_into_tensor)(
+            True  # quantize=True
+        )
+        lc = get_pet_launch_config(nproc=4)
+        pet.elastic_launch(lc, entrypoint=self._test_read_sharded_tensor_into_tensor)(
+            False  # quantized=False
+        )
