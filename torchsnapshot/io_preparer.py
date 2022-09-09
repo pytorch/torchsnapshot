@@ -293,15 +293,26 @@ class ShardedTensorIOPreparer:
         return read_reqs
 
 
-def upcast(src: torch.Tensor, dtype):
-  # FILL IN
-  #if src.dtype ==
-  return src
+@torch.jit.script
+def promote(src: torch.Tensor, dst_dtype: torch.dtype):
+  print(f'promoting {src.dtype} to {dst_dtype}')
+  if src.dtype == dst_dtype:
+    return src
+  q_types = [torch.qint8, torch.quint8, torch.qint32]
+
+  if dst_dtype in q_types:
+    raise Exception(f"{src.dtype} cannot be promoted to {dst_dtype}")
+  elif src.dtype in q_types:
+    # dequantize always returns fp32?
+    return torch.dequantize(src)
+  else:
+    return src.to(dst_dtype)
 
 
 @torch.jit.script
 def tensor_copy(dst: torch.Tensor, src: torch.Tensor) -> None:
-    dst.detach().copy_(upcast(src)) # pragma: no cover
+    print(f'promoting {src[0,0]} to {dst[0,0]}')
+    dst.detach().copy_(promote(src, dst.dtype)) # pragma: no cover
 
 
 class ShardedTensorBufferConsumer(BufferConsumer):
