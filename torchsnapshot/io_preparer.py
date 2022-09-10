@@ -490,6 +490,11 @@ class TensorIOPreparer:
         tensor_out: Optional[torch.Tensor] = None,
         buffer_size_limit_bytes: Optional[int] = None,
     ) -> List[ReadReq]:
+        # TODO: When the output tensor is a CPU tensor, we should directly load
+        # into its storage buffer. This is an important optimization because:
+        # - We eliminate an allocation and a copy
+        # - With the extra allocation, the I/O concurrency will be severely
+        # reduced by the scheduler in a memory constrained environment
         if tensor_out is None:
             raise RuntimeError(
                 "Reading a Tensor without a runtime object is not yet supported."

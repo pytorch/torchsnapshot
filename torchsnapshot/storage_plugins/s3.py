@@ -47,7 +47,17 @@ class S3StoragePlugin(StoragePlugin):
     async def read(self, read_io: ReadIO) -> None:
         async with self.session.create_client("s3") as client:
             key = os.path.join(self.root, read_io.path)
-            response = await client.get_object(Bucket=self.bucket, Key=key)
+            byte_range = read_io.byte_range
+            if byte_range is None:
+                response = await client.get_object(Bucket=self.bucket, Key=key)
+            else:
+                response = await client.get_object(
+                    Bucket=self.bucket,
+                    Key=key,
+                    # HTTP Byte Range is inclusive:
+                    # https://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.35
+                    Range=f"bytes={byte_range[0]}-{byte_range[1] - 1}",
+                )
             async with response["Body"] as stream:
                 read_io.buf = io.BytesIO(await stream.read())
 

@@ -10,6 +10,7 @@
 import io
 import logging
 import os
+import random
 import unittest
 import uuid
 
@@ -62,3 +63,20 @@ class S3StoragePluginTest(unittest.TestCase):
 
         await plugin.delete(path="tensor")
         await plugin.close()
+
+    @unittest.skipIf(os.environ.get("TORCHSNAPSHOT_ENABLE_AWS_TEST") is None, "")
+    @async_test
+    async def test_ranged_read(self) -> None:
+        path = f"{_TEST_BUCKET}/{uuid.uuid4()}"
+        logger.info(path)
+        plugin = S3StoragePlugin(root=path)
+
+        buf = bytes(random.getrandbits(8) for _ in range(2000))
+        write_io = WriteIO(path="rand_bytes", buf=memoryview(buf))
+
+        await plugin.write(write_io=write_io)
+
+        read_io = ReadIO(path="rand_bytes", byte_range=(100, 200))
+        await plugin.read(read_io=read_io)
+        self.assertEqual(len(read_io.buf.getvalue()), 100)
+        self.assertEqual(read_io.buf.getvalue(), buf[100:200])
