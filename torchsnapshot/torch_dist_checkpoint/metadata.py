@@ -57,39 +57,6 @@ class ExtendedTensorMetadata:
 
 
 @dataclass
-class Metadata:
-    # Metadata for the state dict.
-    # TODO, use pickle for this quick hack, must replace it with something else e.g. flatbuffer
-    # before serious use case,
-    state_dict_metadata: Dict[str, ExtendedTensorMetadata]
-
-    def __getstate__(self) -> bytes:
-        serialized = pickle.dumps(self.state_dict_metadata)
-        return serialized
-
-    def __setstate__(self, state: bytes) -> None:
-        self.state_dict_metadata = pickle.loads(state)
-
-
-@dataclass
-class BytesWriteRequest:
-    bytes: io.BytesIO
-    storage_key: str
-
-
-@dataclass
-class BytesReadRequest:
-    bytes: io.BytesIO
-    storage_key: str
-
-
-@dataclass
-class TensorWriteRequest:
-    tensor: torch.Tensor
-    storage_key: str
-
-
-@dataclass
 class TensorReadRequest:
     tensor: torch.Tensor
     storage_key: str
