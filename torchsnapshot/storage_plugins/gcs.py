@@ -175,6 +175,15 @@ class GCSStoragePlugin(StoragePlugin):
         blob_name = quote(
             os.path.join(self.root, read_io.path).encode("utf-8"), safe=b"~"
         )
+
+        byte_range = read_io.byte_range
+        if byte_range is None:
+            start = 0
+            end = None
+        else:
+            start = byte_range[0]
+            end = byte_range[1] - 1  # ChunkedDownload's end argument is inclusive
+
         # pyre-ignore
         download = ChunkedDownload(
             media_url=self.DOWNLOAD_URL_TEMPLATE.format(
@@ -183,6 +192,8 @@ class GCSStoragePlugin(StoragePlugin):
             ),
             chunk_size=_DEFAULT_CHUNK_SIZE_BYTE,
             stream=read_io.buf,
+            start=start,
+            end=end,
         )
         while not download.finished:
             await self.retry_strategy.await_with_retry(
