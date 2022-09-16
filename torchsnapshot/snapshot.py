@@ -28,7 +28,6 @@ import torch
 import torch.distributed as dist
 from torch.distributed._shard.sharded_tensor import ShardedTensor
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torchsnapshot.manifest import ChunkedTensorEntry
 from torchsnapshot.serialization import dtype_to_element_size, string_to_dtype
 
 from .dist_store import get_or_create_store, LinearBarrier
@@ -45,10 +44,12 @@ from .io_preparer import (
 )
 from .io_types import ReadIO, ReadReq, StoragePlugin, WriteIO, WriteReq
 from .manifest import (
+    ChunkedTensorEntry,
     Entry,
     get_available_entries,
     is_replicated,
     Manifest,
+    PrimitiveEntry,
     SnapshotMetadata,
 )
 from .pg_wrapper import PGWrapper
@@ -566,8 +567,11 @@ class Snapshot:
         storage = url_to_storage_plugin_in_event_loop(
             url_path=self.path, event_loop=event_loop
         )
+        entry = manifest[unranked_path]
+        if isinstance(entry, PrimitiveEntry):
+            return cast(T, entry.get_value())
         read_reqs = prepare_read(
-            entry=manifest[unranked_path],
+            entry=entry,
             obj_out=obj_out,
             # TODO: find a suitable buffer_size_limit_bytes to enable chunked
             # read even when memory_budget_bytes is not specified, as chunked
@@ -706,8 +710,13 @@ path "{logical_path}" which was not available to rank {rank}.
     - Coerce the missing entry into replicated on restore"""
                 )
 
+            entry = available_entries[logical_path]
+            if isinstance(entry, PrimitiveEntry):
+                # for primitive types, directly materialize from PrimitiveEntry
+                flattened[logical_path] = entry.get_value()
+                continue
             rrs = prepare_read(
-                entry=available_entries[logical_path],
+                entry=entry,
                 obj_out=obj,
             )
             for rr in rrs:

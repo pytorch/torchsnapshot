@@ -12,6 +12,7 @@ import unittest
 import torch
 import torchsnapshot
 from torchsnapshot import Snapshot
+from torchsnapshot.manifest import PrimitiveEntry
 from torchsnapshot.test_utils import assert_state_dict_eq, check_state_dict_eq
 
 
@@ -99,3 +100,29 @@ class SnapshotTest(unittest.TestCase):
 
             snapshot = Snapshot(path)
             self.assertRaises(TypeError, snapshot.restore, app_state)
+
+    def test_app_state_with_primitive_types(self) -> None:
+        state = torchsnapshot.StateDict(
+            int_key=100,
+            float_key=3.14,
+            str_key="some_string",
+            bool_key=True,
+            bytes_key=b"\x00\x10",
+        )
+        restored_state = torchsnapshot.StateDict(
+            int_key=None,
+            float_key=None,
+            str_key=None,
+            bool_key=None,
+            bytes_key=None,
+        )
+
+        with tempfile.TemporaryDirectory() as path:
+            snapshot = torchsnapshot.Snapshot.take(path, {"key": state})
+
+            assert isinstance(
+                snapshot.metadata.manifest["0/key/int_key"], PrimitiveEntry
+            )
+            snapshot.restore({"key": restored_state})
+
+            assert state == restored_state

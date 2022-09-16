@@ -35,6 +35,7 @@ from .manifest import (
     ChunkedTensorEntry,
     Entry,
     ObjectEntry,
+    PrimitiveEntry,
     Shard,
     ShardedTensorEntry,
     TensorEntry,
@@ -671,6 +672,20 @@ def get_storage_path(obj: Any, logical_path: str, rank: int, replicated: bool) -
         return os.path.join(str(rank), logical_path)
 
 
+class PrimitivePreparer:
+    @staticmethod
+    def should_inline(obj: Any) -> bool:
+        type_name = type(obj).__name__
+        if type_name not in PrimitiveEntry.supported_types():
+            return False
+        # TODO for long str/bytes, return False to fall back to ObjectEntry
+        return True
+
+    @staticmethod
+    def prepare_write(obj: Any) -> PrimitiveEntry:
+        return PrimitiveEntry.from_object(obj)
+
+
 def prepare_write(
     obj: Any,
     logical_path: str,
@@ -691,6 +706,11 @@ def prepare_write(
         The class::`Entry` describing the object, and a list of
         class::`WriteReq` for persisting the object.
     """
+    if PrimitivePreparer.should_inline(obj):
+        entry = PrimitivePreparer.prepare_write(obj)
+        entry.replicated = replicated
+        return entry, []
+
     storage_path = get_storage_path(obj, logical_path, rank, replicated)
     if isinstance(obj, ShardedTensor):
         return ShardedTensorIOPreparer.prepare_write(
@@ -739,5 +759,8 @@ def prepare_read(
         )
     elif isinstance(entry, ObjectEntry):
         return ObjectIOPreparer.prepare_read(entry, obj_out)
+    elif isinstance(entry, PrimitiveEntry):
+        # primitive types are stored inline in snapshot metadata
+        return []
     else:
         raise Exception(f"Unsupported entry type: {entry} ({entry.type}).")

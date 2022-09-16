@@ -5,8 +5,11 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+# pyre-ignore-all-errors[2]: Allow `Any` in type annotations
+
 from dataclasses import asdict, dataclass
-from typing import Dict, List, TypeVar, Union
+from enum import Enum
+from typing import Any, Dict, List, Optional, TypeVar, Union
 
 import yaml
 
@@ -122,6 +125,84 @@ class OrderedDictEntry(Entry):
         self.keys = keys
 
 
+class PrimitiveType(Enum):
+    INT = "int"
+    STR = "str"
+    BOOL = "bool"
+    BYTES = "bytes"
+    FLOAT = "float"
+
+
+@dataclass
+class PrimitiveEntry(Entry):
+    """
+    An Entry for certain primitive types that will be stored inline in metadata
+
+    type: name of builtin type.
+    serialized_value: value of the builtin type in serialized format.
+    readable: for ease of inspection for certain types
+    """
+
+    serialized_value: str
+    readable: Optional[str]
+    replicated: bool
+
+    def __init__(
+        self,
+        primitive_type: PrimitiveType,
+        serialized_value: str,
+        replicated: bool,
+        readable_value: Optional[str] = None,
+    ) -> None:
+        super().__init__(type=primitive_type.value)
+        self.serialized_value = serialized_value
+        self.replicated = replicated
+        self.readable = readable_value
+
+    def get_value(self) -> Union[int]:  # TODO add other types
+        if self.type == "int":
+            return int(self.serialized_value)
+        raise ValueError(
+            f"Unable to get deserialized value for {self.serialized_value}"
+        )
+
+    @classmethod
+    def supported_types(cls) -> List[str]:
+        # TODO add other types and cover all of PrimitiveType
+        return ["int"]
+
+    @classmethod
+    def _serialize(cls, type_name: str, obj: Any) -> str:
+        # TODO add other types
+        if type_name == "int":
+            return str(obj)
+        raise TypeError(f"Unsupported primitive obj of type {type_name}")
+
+    @classmethod
+    def from_object(cls, obj: Any) -> "PrimitiveEntry":
+        type_name = type(obj).__name__
+        try:
+            type_enum = PrimitiveType(type_name)
+            serialized_value = cls._serialize(type_name, obj)
+            return PrimitiveEntry(type_enum, serialized_value, False)
+        except ValueError:
+            raise TypeError(f"Unsupported primitive obj of type {type_name}")
+
+    @classmethod
+    def from_serialized(
+        cls,
+        type_name: str,
+        serialized_value: str,
+        replicated: bool,
+        readable: Optional[str],
+    ) -> "PrimitiveEntry":
+        try:
+            type_enum = PrimitiveType(type_name)
+            return PrimitiveEntry(type_enum, serialized_value, replicated)
+        except ValueError:
+            raise TypeError(f"Unsupported primitive obj of type {type_name}")
+
+
 T = TypeVar("T", bound=Entry)
 Manifest = Dict[str, T]
 
@@ -148,6 +229,8 @@ class SnapshotMetadata:
                 manifest[path] = DictEntry(**entry)
             elif type_name == "OrderedDict":
                 manifest[path] = OrderedDictEntry(**entry)
+            elif type_name in PrimitiveEntry.supported_types():
+                manifest[path] = PrimitiveEntry.from_serialized(type_name, **entry)
             elif type_name == "Tensor":
                 manifest[path] = TensorEntry(**entry)
             elif type_name == "ShardedTensor":
@@ -237,7 +320,9 @@ def get_available_entries(manifest: Manifest, rank: int) -> Manifest:
             local_manifest[local_path] = ShardedTensorEntry(
                 shards=[shard for entry in entries for shard in entry.shards]
             )
-        elif isinstance(entries[0], (TensorEntry, ObjectEntry, ChunkedTensorEntry)):
+        elif isinstance(
+            entries[0], (TensorEntry, ObjectEntry, ChunkedTensorEntry, PrimitiveEntry)
+        ):
             if rank in group:
                 local_manifest[local_path] = group[rank]
             # The current rank did not save the entry. Only make the entry
@@ -258,6 +343,8 @@ def get_available_entries(manifest: Manifest, rank: int) -> Manifest:
 
 def is_replicated(entry: Entry) -> bool:
     return (
-        isinstance(entry, (TensorEntry, ObjectEntry, ChunkedTensorEntry))
+        isinstance(
+            entry, (TensorEntry, ObjectEntry, ChunkedTensorEntry, PrimitiveEntry)
+        )
         and entry.replicated
     )
