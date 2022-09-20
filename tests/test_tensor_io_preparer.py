@@ -5,14 +5,16 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 import asyncio
+import functools
+import itertools
 import tempfile
 
 import unittest
-from typing import cast, List
+from typing import Callable, cast, List
 
 import torch
 
-from torchsnapshot.io_preparer import TensorIOPreparer
+from torchsnapshot.io_preparer import tensor_copy, TensorIOPreparer
 from torchsnapshot.io_types import ReadReq, WriteReq
 from torchsnapshot.scheduler import execute_read_reqs, execute_write_reqs
 from torchsnapshot.serialization import (
@@ -199,6 +201,7 @@ class TensorIOPreparerTest(unittest.TestCase):
         self.assertEqual(entry.dtype, "torch.qint8")
         self.assertEqual(entry.shape, [2000, 2000])
 
+        # Expect prepare_write to fail if _tensor_prepare_func changed the tensor size
         def view(tensor: torch.Tensor, tracing: bool) -> torch.Tensor:
             return tensor[:1000, :1000]
 
@@ -208,4 +211,146 @@ class TensorIOPreparerTest(unittest.TestCase):
                 storage_path="src",
                 tensor=bar,
                 _tensor_prepare_func=view,
+            )
+
+    def _verify_copy_from_float_to_float(
+        self,
+        dst_dtype: torch.dtype,
+        src_dtype: torch.dtype,
+    ) -> None:
+        """
+        Copy from a float tensor to a float tensor.
+        """
+        src = torch.rand(200, 200, dtype=src_dtype)
+        dst = torch.rand(200, 200, dtype=dst_dtype)
+        tensor_copy(dst, src)
+
+        # For verification purpose, cast the higher precision (lower
+        # resolution) tensor to the dtype of the other tensor
+        if torch.finfo(src_dtype).resolution < torch.finfo(dst_dtype).resolution:
+            self.assertTrue(torch.allclose(src.to(dtype=dst_dtype), dst))
+        else:
+            self.assertTrue(torch.allclose(src, dst.to(dtype=src_dtype)))
+
+    def _verify_copy_from_quantized_to_float(
+        self,
+        quantize_func: Callable[[torch.Tensor], torch.Tensor],
+    ) -> None:
+        """
+        Copy from a quantized tensor to a float tensor.
+        """
+        src = quantize_func(torch.rand(200, 200))
+        dst = torch.rand(200, 200)
+        tensor_copy(dst, src)
+        self.assertTrue(torch.allclose(src.dequantize(), dst))
+
+    def _verify_copy_from_float_to_quantized(
+        self,
+        quantize_func: Callable[[torch.Tensor], torch.Tensor],
+    ) -> None:
+        """
+        Copy from a float tensor to a quantized tensor.
+        """
+        src = torch.rand(200, 200)
+        dst = quantize_func(torch.rand(200, 200))
+        tensor_copy(dst, src)
+        self.assertTrue(
+            torch.allclose(quantize_func(src).dequantize(), dst.dequantize())
+        )
+
+    def _verify_copy_from_quantized_to_quantized(
+        self,
+        dst_quantize_func: Callable[[torch.Tensor], torch.Tensor],
+        src_quantize_func: Callable[[torch.Tensor], torch.Tensor],
+    ) -> None:
+        """
+        Copy from a quantized tensor to a quantized tensor.
+        """
+        src = src_quantize_func(torch.rand(200, 200))
+        dst = dst_quantize_func(torch.rand(200, 200))
+        tensor_copy(dst, src)
+        self.assertTrue(
+            torch.allclose(
+                dst_quantize_func(src.dequantize()).dequantize(), dst.dequantize()
+            )
+        )
+
+    def _verify_copy_from_quantized_to_quantized_view(
+        self,
+        dst_quantize_func: Callable[[torch.Tensor], torch.Tensor],
+        src_quantize_func: Callable[[torch.Tensor], torch.Tensor],
+    ) -> None:
+        """
+        Copy from a quantized tensor to a view of quantized tensor.
+        """
+        src_original = src_quantize_func(torch.rand(400, 400))
+        src_view = src_original[:200, :200]
+        dst = dst_quantize_func(torch.rand(200, 200))
+        tensor_copy(dst, src_view)
+        self.assertTrue(
+            torch.allclose(
+                dst_quantize_func(src_view.dequantize()).dequantize(), dst.dequantize()
+            )
+        )
+        self.assertTrue(
+            torch.allclose(
+                dst_quantize_func(src_original[:200, :200].dequantize()).dequantize(),
+                dst.dequantize(),
+            )
+        )
+
+    def test_tensor_copy(self) -> None:
+        """
+        Verify the behavior of tensor_copy in various situations.
+        """
+
+        float_dtypes = [torch.float16, torch.bfloat16, torch.float32, torch.float64]
+        for dst_dtype, src_dtype in itertools.product(float_dtypes, float_dtypes):
+            self._verify_copy_from_float_to_float(
+                dst_dtype=dst_dtype, src_dtype=src_dtype
+            )
+
+        def quantize_per_tensor(
+            dtype: torch.dtype, tensor: torch.Tensor
+        ) -> torch.Tensor:
+            return torch.quantize_per_tensor(tensor, 0.1, 10, dtype=dtype)
+
+        def quantize_per_channel(
+            dtype: torch.dtype, tensor: torch.Tensor
+        ) -> torch.Tensor:
+            scales = torch.arange(tensor.shape[0]).float() / 100
+            zero_points = torch.arange(tensor.shape[0]) % 128  # 128 is the upperbound
+            return torch.quantize_per_channel(
+                tensor, scales, zero_points, axis=0, dtype=dtype
+            )
+
+        for quantize_func, dtype in itertools.product(
+            [quantize_per_tensor, quantize_per_channel],
+            [torch.qint8, torch.quint8],
+        ):
+            self._verify_copy_from_quantized_to_float(
+                quantize_func=functools.partial(quantize_func, dtype)
+            )
+            self._verify_copy_from_float_to_quantized(
+                quantize_func=functools.partial(quantize_func, dtype)
+            )
+
+        for (
+            dst_quantize_func,
+            dst_dtype,
+            src_quantize_func,
+            src_dtype,
+        ) in itertools.product(
+            [quantize_per_tensor, quantize_per_channel],
+            [torch.qint8, torch.quint8],
+            [quantize_per_tensor, quantize_per_channel],
+            [torch.qint8, torch.quint8],
+        ):
+            self._verify_copy_from_quantized_to_quantized(
+                dst_quantize_func=functools.partial(dst_quantize_func, dst_dtype),
+                src_quantize_func=functools.partial(src_quantize_func, src_dtype),
+            )
+            self._verify_copy_from_quantized_to_quantized_view(
+                dst_quantize_func=functools.partial(dst_quantize_func, dst_dtype),
+                src_quantize_func=functools.partial(src_quantize_func, src_dtype),
             )
