@@ -117,12 +117,23 @@ class SnapshotTest(unittest.TestCase):
             bytes_key=None,
         )
 
+        def _assert_primitive_entry_with_type(
+            location_key: str, expected_type_name: str
+        ) -> None:
+            assert (
+                isinstance(snapshot.metadata.manifest[location_key], PrimitiveEntry)
+                and snapshot.metadata.manifest[location_key].type == expected_type_name
+            )
+
         with tempfile.TemporaryDirectory() as path:
             snapshot = torchsnapshot.Snapshot.take(path, {"key": state})
 
-            assert isinstance(
-                snapshot.metadata.manifest["0/key/int_key"], PrimitiveEntry
-            )
+            _assert_primitive_entry_with_type("0/key/int_key", "int")
+            _assert_primitive_entry_with_type("0/key/str_key", "str")
+            _assert_primitive_entry_with_type("0/key/bool_key", "bool")
+            _assert_primitive_entry_with_type("0/key/bytes_key", "bytes")
+            _assert_primitive_entry_with_type("0/key/float_key", "float")
+
             snapshot.restore({"key": restored_state})
 
             assert state == restored_state

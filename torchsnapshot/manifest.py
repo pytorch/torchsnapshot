@@ -7,6 +7,8 @@
 
 # pyre-ignore-all-errors[2]: Allow `Any` in type annotations
 
+import base64
+import struct
 from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, TypeVar, Union
@@ -159,24 +161,45 @@ class PrimitiveEntry(Entry):
         self.replicated = replicated
         self.readable = readable_value
 
-    def get_value(self) -> Union[int]:  # TODO add other types
+    def get_value(self) -> Union[int, str, bool, bytes, float]:
         if self.type == "int":
             return int(self.serialized_value)
+        elif self.type == "str":
+            return self.serialized_value
+        elif self.type == "bool":
+            if self.serialized_value not in ["True", "False"]:
+                raise RuntimeError(
+                    f"Unexpected serialized_value for bool type: {self.serialized_value}"
+                )
+            return self.serialized_value == "True"
+        elif self.type == "bytes":
+            return base64.b64decode(bytes(self.serialized_value, "utf-8"))
+        elif self.type == "float":
+            packed_bytes = base64.b64decode(bytes(self.serialized_value, "utf-8"))
+            return struct.unpack("d", packed_bytes)[0]
         raise ValueError(
             f"Unable to get deserialized value for {self.serialized_value}"
         )
 
     @classmethod
     def supported_types(cls) -> List[str]:
-        # TODO add other types and cover all of PrimitiveType
-        return ["int"]
+        return [t.value for t in PrimitiveType]
 
     @classmethod
     def _serialize(cls, type_name: str, obj: Any) -> str:
-        # TODO add other types
         if type_name == "int":
             return str(obj)
-        raise TypeError(f"Unsupported primitive obj of type {type_name}")
+        elif type_name == "str":
+            return str(obj)
+        elif type_name == "bool":
+            return str(obj)
+        elif type_name == "bytes":
+            return base64.b64encode(obj).decode("utf-8")
+        elif type_name == "float":
+            packed_bytes = struct.pack("d", float(obj))
+            return cls._serialize("bytes", packed_bytes)
+        else:
+            raise TypeError(f"Unsupported primitive obj of type {type_name}")
 
     @classmethod
     def from_object(cls, obj: Any) -> "PrimitiveEntry":
