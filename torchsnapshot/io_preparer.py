@@ -335,9 +335,54 @@ class ShardedTensorIOPreparer:
         return read_reqs
 
 
+def _q_params_equal(lhs: torch.Tensor, rhs: torch.Tensor) -> bool:
+    if lhs.qscheme() != rhs.qscheme():
+        return False
+    if lhs.qscheme() == torch.per_tensor_affine:
+        return (
+            lhs.q_scale() == rhs.q_scale() and lhs.q_zero_point() == rhs.q_zero_point()
+        )
+    elif lhs.qscheme() == torch.per_channel_affine:
+        return torch.allclose(
+            lhs.q_per_channel_scales(), lhs.q_per_channel_scales()
+        ) and torch.allclose(
+            lhs.q_per_channel_zero_points(), lhs.q_per_channel_zero_points()
+        )
+    else:
+        raise RuntimeError(f"Unrecognized qscheme {lhs.qscheme()}")
+
+
 @torch.jit.script
-def tensor_copy(dst: torch.Tensor, src: torch.Tensor) -> None:
+def _tensor_copy(dst: torch.Tensor, src: torch.Tensor) -> None:
     dst.detach().copy_(src)  # pragma: no cover
+
+
+@torch.jit.script
+def _tensor_dequantize(tensor: torch.Tensor) -> torch.Tensor:
+    return tensor.dequantize()  # pragma: no cover
+
+
+def tensor_copy(dst: torch.Tensor, src: torch.Tensor) -> None:
+    # When both dst and src are quantized tensors, .copy_() works as follows:
+    # - src storage -> dst storage
+    # - src qscheme -> dst qscheme
+    #
+    # We need to take special care when dst is a view of a larger tensor and
+    # the quantization schemes of src and dst are different, because the new
+    # qscheme will only be reflected on dest, which is a view object, but not
+    # on the original tensor. Directly calling .copy_() in this case will cause
+    # a region of the larger tensor's storage contain data that does not match
+    # the larger tensor's qscheme.
+
+    if src.is_quantized and (
+        not dst.is_quantized  # Copying from quantized Tensor to non-quantized Tensor is not allowed
+        or dst.qscheme() != src.qscheme()  # Quantized copy only works with same qscheme
+        or dst.dtype != src.dtype  # Quantized copy requires matching dtypes
+        or (dst._is_view() and not _q_params_equal(dst, src))  # See the top comment
+    ):
+        # TODO: tile the dequantize -> copy to reduce memory footprint
+        src = _tensor_dequantize(src)
+    _tensor_copy(dst, src)
 
 
 class ShardedTensorBufferConsumer(BufferConsumer):
@@ -368,7 +413,7 @@ class ShardedTensorBufferConsumer(BufferConsumer):
                     executor, tensor_copy, req.tensor, view_to_copy
                 )
             else:
-                req.tensor.copy_(view_to_copy)
+                tensor_copy(req.tensor, view_to_copy)
 
     def get_consuming_cost_bytes(self) -> int:
         tensor_sz_bytes = TensorIOPreparer.get_tensor_size_from_entry(self.entry)
@@ -469,7 +514,7 @@ class TensorBufferConsumer(BufferConsumer):
                 executor, tensor_copy, self.tensor, loaded
             )
         else:
-            self.tensor.copy_(loaded)
+            tensor_copy(self.tensor, loaded)
 
     def get_consuming_cost_bytes(self) -> int:
         tensor_sz_bytes = TensorIOPreparer.get_tensor_size_from_entry(self.entry)
