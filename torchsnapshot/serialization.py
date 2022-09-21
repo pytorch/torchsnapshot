@@ -5,8 +5,11 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+import functools
 import io
 import logging
+import operator
+import struct
 import warnings
 from enum import Enum
 from typing import Dict, List
@@ -123,6 +126,7 @@ def string_to_dtype(s: str) -> torch.dtype:
 class Serializer(Enum):
     TORCH_SAVE = "torch_save"
     BUFFER_PROTOCOL = "buffer_protocol"
+    PER_TENSOR_AFFINE_QTENSOR = "per_tensor_affine_qtensor"
 
 
 BUFFER_PROTOCOL_SUPPORTED_DTYPES: List[torch.dtype] = [
@@ -164,40 +168,30 @@ def tensor_as_memoryview(tensor: torch.Tensor) -> memoryview:
         # device to CPU. This is still more efficient than torch.save().
         tensor = tensor.contiguous()
     if tensor.dtype == torch.bfloat16:
-        return _bfloat16_tensor_to_memoryview(tensor)
+        return _tensor_as_memoryview_via_untyped_storage(tensor)
     return memoryview(tensor.numpy()).cast("b")
 
 
-def _bfloat16_tensor_to_memoryview(tensor: torch.Tensor) -> memoryview:
+def _tensor_as_memoryview_via_untyped_storage(tensor: torch.Tensor) -> memoryview:
     """
-    A specialization of func::`tensor_as_memoryview` for `bfloa16`.
+    Obtain the class::`memoryview` of a class::`torch.Tensor` via untyped storage.
 
-    Currently the memoryview of a tensor can only be obtained via its numpy
-    array representation. However, numpy doesn't support `bfloat16`, so
-    `bfloat16` tensor's can't be converted to a numpy array.
-
-    Since we only need the memoryview to avoid data copies, we can workaround
-    this limitation by reinterpret casting the `bfloat16` tensor to a `float16`
-    tensor.
+    This function can be used to obtain the memoryview of a tensor whose dtype
+    does not have an counterpart in numpy.
 
     Args:
-        tensor: The `bfloat16` tensor from which to obtain memoryview.
+        tensor: The tensor from which to obtain memoryview.
 
     Returns:
         The class::`memoryview` of the input tensor.
     """
-    if tensor.dtype != torch.bfloat16:
-        raise ValueError(
-            "The input tensor must have be of type torch.bfloat16 "
-            f"(got {tensor.dtype})."
-        )
     if hasattr(tensor.storage(), "_untyped"):
         # TODO: drop this once PyTorch 1.12 is no longer supported
         # https://github.com/pytorch/pytorch/pull/82438
         untyped_storage = tensor.storage()._untyped()
     else:
         untyped_storage = tensor.storage().untyped()
-    tensor = torch.empty(tensor.size(), dtype=torch.float16)
+    tensor = torch.empty((0))
     tensor.set_(untyped_storage)
     return memoryview(tensor.numpy()).cast("b")
 
@@ -221,3 +215,82 @@ def torch_save_as_bytes(tensor: torch.Tensor) -> bytes:
 
 def torch_load_from_bytes(buf: bytes) -> torch.Tensor:
     return torch.load(io.BytesIO(buf))
+
+
+def per_tensor_affine_qtensor_as_bytes(tensor: torch.Tensor) -> bytes:
+    """
+    Serialize a `per_tensor_affine` quantized tensor.
+
+    Binary format:
+
+    +----------------------------------+ 0 bytes
+    |          tensor storage          |
+    +----------------------------------+ nelement * element_size bytes
+    |    q_scale packed as C double    |
+    +----------------------------------+ nelement * element_size + 8 bytes
+    |q_zero_point packed as C long long|
+    +----------------------------------+ nelement * element_size + 16 bytes
+
+    On deserialization, nelement and element_size can be inferred from dtype
+    and shape which are stored separately.
+
+    Args:
+        tensor: The `per_tensor_affine` quantized tensor to serialize.
+
+    Returns:
+        The serialized tensor.
+    """
+    if not tensor.is_quantized or tensor.qscheme == torch.per_tensor_affine:
+        raise RuntimeError(
+            "per_tensor_affine_qtensor_as_bytes() only supports "
+            "per_tensor_affine quantized tensor."
+        )
+    buf = io.BytesIO()
+    buf.write(_tensor_as_memoryview_via_untyped_storage(tensor))
+    buf.write(struct.pack("d", tensor.q_scale()))
+    buf.write(struct.pack("q", tensor.q_zero_point()))
+    return buf.getvalue()
+
+
+def per_tensor_affine_qtensor_from_bytes(
+    buf: bytes, dtype: torch.dtype, shape: List[int]
+) -> torch.Tensor:
+    """
+    Deserialize a `per_tensor_affine` quantized tensor.
+
+    NOTE: this is a zero-copy deserialization, meaning that the deserialized
+    tensor directly uses the input buffer as its storage. The deserialized
+    tensor can only be used in read-only fashion.
+
+    Args:
+        buf: The serialized tensor.
+        dtype: The dtype of the serialized tensor.
+        shape: The shape of the serialized tensor.
+
+    Returns:
+        The deserialized tensor.
+    """
+    nelements = functools.reduce(operator.mul, shape, 1)
+    curr_stride = nelements
+    strides = []
+    for dim_sz in shape:
+        curr_stride //= dim_sz
+        strides.append(curr_stride)
+
+    data_sz_bytes = nelements * dtype_to_element_size(dtype)
+    data = buf[:data_sz_bytes]
+    scale = struct.unpack("d", buf[data_sz_bytes : data_sz_bytes + 8])[0]
+    zero_point = struct.unpack("q", buf[data_sz_bytes + 8 : data_sz_bytes + 16])[0]
+
+    # Assemble the deserialized tensor
+    qtensor = torch._empty_affine_quantized(
+        (0), scale=scale, zero_point=zero_point, dtype=dtype
+    )
+    storage = torch.FloatStorage.from_buffer(memoryview(data), byte_order="native")
+    if hasattr(storage, "_untyped"):
+        # TODO: drop this once PyTorch 1.12 is no longer supported
+        # https://github.com/pytorch/pytorch/pull/82438
+        qtensor.set_(storage._untyped(), 0, shape, strides)
+    else:
+        qtensor.set_(storage.untyped(), 0, shape, strides)
+    return qtensor
