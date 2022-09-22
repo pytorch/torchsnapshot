@@ -14,6 +14,8 @@ from torchsnapshot.serialization import (
     ALL_SUPPORTED_DTYPES,
     BUFFER_PROTOCOL_SUPPORTED_DTYPES,
     dtype_to_string,
+    per_channel_affine_qtensor_as_bytes,
+    per_channel_affine_qtensor_from_bytes,
     per_tensor_affine_qtensor_as_bytes,
     per_tensor_affine_qtensor_from_bytes,
     string_to_dtype,
@@ -59,7 +61,7 @@ class SerializationTest(unittest.TestCase):
             [(100, 100), (10, 11, 12), (10, 11, 12, 13)],
             [0.1, 0.2],
             [1, 10],
-            [torch.qint8, torch.quint8],
+            [torch.qint32, torch.qint8, torch.quint8],
         ):
             qtensor = torch.quantize_per_tensor(
                 torch.rand(shape), scale, zero_point, dtype=dtype
@@ -78,3 +80,41 @@ class SerializationTest(unittest.TestCase):
             self.assertTrue(
                 torch.allclose(qtensor.dequantize(), deserialized.dequantize())
             )
+
+    def test_per_channel_affine_qtensor(self) -> None:
+        for shape, dtype in itertools.product(
+            [(100, 100), (10, 11, 12), (10, 11, 12, 13)],
+            [torch.qint32, torch.qint8, torch.quint8],
+        ):
+            for axis in range(len(shape)):
+                qtensor = torch.quantize_per_channel(
+                    torch.rand(shape),
+                    torch.rand(shape[axis]),
+                    torch.randint(128, (shape[axis],)),
+                    axis=axis,
+                    dtype=dtype,
+                )
+                buf = per_channel_affine_qtensor_as_bytes(qtensor)
+                deserialized = per_channel_affine_qtensor_from_bytes(
+                    buf, dtype=dtype, shape=list(shape)
+                )
+                self.assertEqual(qtensor.dtype, deserialized.dtype)
+                self.assertTrue(qtensor.is_quantized)
+                self.assertTrue(deserialized.is_quantized)
+                self.assertEqual(qtensor.qscheme(), deserialized.qscheme())
+                self.assertTrue(
+                    torch.allclose(
+                        qtensor.q_per_channel_scales(),
+                        deserialized.q_per_channel_scales(),
+                    )
+                )
+                self.assertTrue(
+                    torch.allclose(
+                        qtensor.q_per_channel_zero_points(),
+                        deserialized.q_per_channel_zero_points(),
+                    )
+                )
+                self.assertEqual(qtensor.stride(), deserialized.stride())
+                self.assertTrue(
+                    torch.allclose(qtensor.dequantize(), deserialized.dequantize())
+                )

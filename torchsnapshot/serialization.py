@@ -294,3 +294,103 @@ def per_tensor_affine_qtensor_from_bytes(
     else:
         qtensor.set_(storage.untyped(), 0, shape, strides)
     return qtensor
+
+
+def per_channel_affine_qtensor_as_bytes(tensor: torch.Tensor) -> bytes:
+    """
+    Serialize a `per_channel_affine` quantized tensor.
+
+    Binary format:
+
+    +------------------------------------------+ 0 bytes
+    |             tensor storage               |
+    +------------------------------------------+ nelement * element_size bytes
+    |                  axis                    |
+    +------------------------------------------+ nelement * element_size + 8 bytes
+    |   q_per_channel_scales tensor storage    |
+    +------------------------------------------+ nelement * element_size + 8 + 8 * shape[axis] bytes
+    | q_per_channel_zero_points tensor storage |
+    +------------------------------------------+ nelement * element_size + 8 + 16 * shape[axis] bytes
+
+    On deserialization, nelement and element_size can be inferred from dtype
+    and shape which are stored separately.
+
+    Args:
+        tensor: The `per_channel_affine` quantized tensor to serialize.
+
+    Returns:
+        The serialized tensor.
+    """
+    if not tensor.is_quantized or tensor.qscheme == torch.per_channel_affine:
+        raise RuntimeError(
+            "per_channel_affine_qtensor_as_bytes() only supports "
+            "per_channel_affine quantized tensor."
+        )
+    buf = io.BytesIO()
+    buf.write(_tensor_as_memoryview_via_untyped_storage(tensor))
+    buf.write(struct.pack("q", tensor.q_per_channel_axis()))
+    buf.write(
+        tensor_as_memoryview(tensor.q_per_channel_scales().to(dtype=torch.float64))
+    )
+    buf.write(
+        tensor_as_memoryview(tensor.q_per_channel_zero_points().to(dtype=torch.int64))
+    )
+    return buf.getvalue()
+
+
+def per_channel_affine_qtensor_from_bytes(
+    buf: bytes, dtype: torch.dtype, shape: List[int]
+) -> torch.Tensor:
+    """
+    Deserialize a `per_channel_affine` quantized tensor.
+
+    NOTE: this is a zero-copy deserialization, meaning that the deserialized
+    tensor directly uses the input buffer as its storage. The deserialized
+    tensor can only be used in read-only fashion.
+
+    Args:
+        buf: The serialized tensor.
+        dtype: The dtype of the serialized tensor.
+        shape: The shape of the serialized tensor.
+
+    Returns:
+        The deserialized tensor.
+    """
+    nelements = functools.reduce(operator.mul, shape, 1)
+    curr_stride = nelements
+    strides = []
+    for dim_sz in shape:
+        curr_stride //= dim_sz
+        strides.append(curr_stride)
+
+    data_sz_bytes = nelements * dtype_to_element_size(dtype)
+    data = buf[:data_sz_bytes]
+    axis = struct.unpack("q", buf[data_sz_bytes : data_sz_bytes + 8])[0]
+
+    scales_data = buf[data_sz_bytes + 8 : data_sz_bytes + 8 + 8 * shape[axis]]
+    scales_tensor = tensor_from_memoryview(
+        mv=memoryview(scales_data), shape=[shape[axis]], dtype=torch.float64
+    )
+    zero_points_data = buf[
+        data_sz_bytes + 8 + 8 * shape[axis] : data_sz_bytes + 8 + 16 * shape[axis]
+    ]
+    zero_points_tensor = tensor_from_memoryview(
+        mv=memoryview(zero_points_data), shape=[shape[axis]], dtype=torch.int64
+    )
+
+    # Assemble the deserialized tensor
+    qtensor = torch._empty_per_channel_affine_quantized(
+        (0),
+        scales=scales_tensor,
+        zero_points=zero_points_tensor,
+        axis=axis,
+        dtype=dtype,
+    )
+    storage = torch.FloatStorage.from_buffer(memoryview(data), byte_order="native")
+    if hasattr(storage, "_untyped"):
+        # TODO: drop this once PyTorch 1.12 is no longer supported
+        # https://github.com/pytorch/pytorch/pull/82438
+        qtensor.set_(storage._untyped(), 0, shape, strides)
+    else:
+        qtensor.set_(storage.untyped(), 0, shape, strides)
+    return qtensor
