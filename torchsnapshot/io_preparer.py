@@ -11,10 +11,12 @@ import asyncio
 import copy
 import functools
 import io
+import itertools
 import logging
 import math
 import os
 import sys
+from collections import defaultdict
 from concurrent.futures import Executor
 from dataclasses import dataclass
 from functools import reduce
@@ -25,10 +27,12 @@ import torch
 from torch.distributed._shard.sharded_tensor import (
     Shard as ShardedTensorShard,
     ShardedTensor,
-    ShardedTensorMetadata,
     ShardMetadata,
 )
 from torch.distributed._shard.sharding_spec import ChunkShardingSpec
+from torch.distributed._shard.sharding_spec._internals import (
+    _check_shard_metadata_pair_overlap,
+)
 
 from .io_types import BufferConsumer, BufferStager, BufferType, ReadReq, WriteReq
 from .manifest import (
@@ -52,12 +56,6 @@ from .serialization import (
     torch_load_from_bytes,
     torch_save_as_bytes,
 )
-from .torch_dist_checkpoint.metadata import (
-    ExtendedTensorMetadata,
-    StorageMetadata,
-    TensorReadRequest,
-)
-from .torch_dist_checkpoint.resharding import prepare_sharded_tensor_read
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -198,6 +196,55 @@ class ShardedTensorIOPreparer:
             subdivided.append((sub_view, sub_offsets, sub_sizes))
         return subdivided
 
+    @staticmethod
+    def _shards_get_overlap_region_wrt_saved_tensor(
+        saved_shard: ShardMetadata, current_shard: ShardMetadata
+    ) -> List[Tuple[int, int, int, int]]:
+        """
+        Return the overlapping region between saved_shard and current_shard.
+        There returned list has the same number of elements as the tensor's dimension.
+        For each element, we produce a tuple with the following contents:
+            (dimension, `saved_shard` offset, `current_shard` offset, length)
+
+        Offsets are relative to each shard.
+        """
+        # TODO: This is copied from
+        # torch.distributed._shard.checkpoint.resharding._shards_get_overlap_region_wrt_saved_tensor
+        # which is not in PyTorch 1.11 yet. Remove this method and import it
+        # from PyTorch directly once we drop support for 1.11.
+        narrows = []
+        for dim, (
+            saved_shard_offset,
+            current_shard_offset,
+            saved_shard_size,
+            current_shard_size,
+        ) in enumerate(
+            zip(
+                saved_shard.shard_offsets,
+                current_shard.shard_offsets,
+                saved_shard.shard_sizes,
+                current_shard.shard_sizes,
+            )
+        ):
+            min_range_end = min(
+                saved_shard_offset + saved_shard_size,
+                current_shard_offset + current_shard_size,
+            )
+
+            length = min_range_end - max(current_shard_offset, saved_shard_offset)
+
+            if saved_shard_offset > current_shard_offset:
+                offset_for_saved_tensor = 0
+                offset_for_current_tensor = saved_shard_offset - current_shard_offset
+            else:
+                offset_for_saved_tensor = current_shard_offset - saved_shard_offset
+                offset_for_current_tensor = 0
+
+            narrows.append(
+                (dim, offset_for_saved_tensor, offset_for_current_tensor, length)
+            )
+        return narrows
+
     @classmethod
     def prepare_write(
         cls,
@@ -279,60 +326,80 @@ class ShardedTensorIOPreparer:
 
         global_shape = cls._get_global_shape(entry=entry)
         cls._validate_shape(global_shape=global_shape, obj_out=obj_out)
-        if isinstance(obj_out, ShardedTensor):
-            local_shards_out = obj_out.local_shards()
-        else:
-            local_shards_out = [
+
+        if type(obj_out) == ShardedTensor:
+            local_shards = obj_out.local_shards()
+        elif type(obj_out) == torch.Tensor:
+            local_shards = [
                 ShardedTensorShard(
                     tensor=obj_out,
                     metadata=ShardMetadata(
                         shard_offsets=[0] * len(obj_out.shape),
                         shard_sizes=list(obj_out.shape),
-                        placement="cpu",  # Unused for load
+                        placement="cpu",
                     ),
                 )
             ]
+        else:
+            raise RuntimeError(
+                f"obj_out must either be a Tensor or ShardedTensor (got {type(obj_out)})"
+            )
 
-        metadata = ExtendedTensorMetadata(
-            tensor_metadata=ShardedTensorMetadata(),  # Unused for load
-            storage_metadata=[],
-        )
-        for shard in entry.shards:
-            metadata.storage_metadata.append(
-                StorageMetadata(
-                    shard_metadata=ShardMetadata(
-                        shard_offsets=shard.offsets,
-                        shard_sizes=shard.sizes,
-                        placement="cpu",  # Unused for load
+        # For each persisted shard, find all its overlapping regions with the
+        # local shards
+        path_to_overlapping_regions = defaultdict(list)
+        for local_shard, shard in itertools.product(local_shards, entry.shards):
+            shard_md = ShardMetadata(
+                shard_offsets=shard.offsets,
+                shard_sizes=shard.sizes,
+                placement="cpu",
+            )
+            if not _check_shard_metadata_pair_overlap(local_shard.metadata, shard_md):
+                continue
+            path_to_overlapping_regions[shard.tensor.location].append(
+                _OverlappingRegion(
+                    dst_tensor=local_shard.tensor,
+                    overlap_region=cls._shards_get_overlap_region_wrt_saved_tensor(
+                        saved_shard=shard_md,
+                        current_shard=local_shard.metadata,
                     ),
-                    storage_key=shard.tensor.location,
-                    length=0,  # Unused for load
-                    offset=0,  # Unused for load
                 )
             )
-        tensor_read_reqs = prepare_sharded_tensor_read(
-            metadata=metadata, local_shards_out=local_shards_out
-        )
-        locations_to_load = {twr.storage_key for twr in tensor_read_reqs}
 
+        # Read each persisted shard once and use it to load all its overlapping
+        # regions with the local shards
         read_reqs = []
         for shard in entry.shards:
-            if shard.tensor.location not in locations_to_load:
+            if shard.tensor.location not in path_to_overlapping_regions:
                 continue
             read_reqs.append(
                 ReadReq(
                     path=shard.tensor.location,
                     buffer_consumer=ShardedTensorBufferConsumer(
-                        tensor_read_reqs=[
-                            trr
-                            for trr in tensor_read_reqs
-                            if trr.storage_key == shard.tensor.location
+                        overlapping_regions=path_to_overlapping_regions[
+                            shard.tensor.location
                         ],
                         entry=shard.tensor,
                     ),
                 )
             )
         return read_reqs
+
+
+@dataclass
+class _OverlappingRegion:
+    dst_tensor: torch.Tensor
+    overlap_region: List[
+        Tuple[int, int, int, int]
+    ]  # (dim, src_offset, dst_offset, length)
+
+    def get_views(self, src_tensor: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        src_view = src_tensor
+        dst_view = self.dst_tensor
+        for dim, src_offset, dst_offset, length in self.overlap_region:
+            src_view = torch.narrow(src_view, dim, src_offset, length)
+            dst_view = torch.narrow(dst_view, dim, dst_offset, length)
+        return src_view, dst_view
 
 
 def _q_params_equal(lhs: torch.Tensor, rhs: torch.Tensor) -> bool:
@@ -388,32 +455,26 @@ def tensor_copy(dst: torch.Tensor, src: torch.Tensor) -> None:
 class ShardedTensorBufferConsumer(BufferConsumer):
     def __init__(
         self,
-        tensor_read_reqs: List[TensorReadRequest],
+        overlapping_regions: List[_OverlappingRegion],
         entry: TensorEntry,
     ) -> None:
-        self.tensor_read_reqs = tensor_read_reqs
+        self.overlapping_regions = overlapping_regions
         self.entry = entry
 
     async def consume_buffer(
         self, buf: bytes, executor: Optional[Executor] = None
     ) -> None:
-        view_to_copy = TensorBufferConsumer.deserialize_tensor(
+        deserialized = TensorBufferConsumer.deserialize_tensor(
             buf=buf, entry=self.entry
         )
-        for req in self.tensor_read_reqs:
-            for dim, (start, length) in enumerate(zip(req.offsets, req.lengths)):
-                view_to_copy = torch.narrow(view_to_copy, dim, start, length)
-
-            assert (
-                view_to_copy.size() == req.tensor.size()
-            ), f"The {req.storage_key} src/dst size does not match."
-
+        for overlapping_region in self.overlapping_regions:
+            src_view, dst_view = overlapping_region.get_views(src_tensor=deserialized)
             if executor is not None:
                 await asyncio.get_running_loop().run_in_executor(
-                    executor, tensor_copy, req.tensor, view_to_copy
+                    executor, tensor_copy, dst_view, src_view
                 )
             else:
-                tensor_copy(req.tensor, view_to_copy)
+                tensor_copy(dst_view, src_view)
 
     def get_consuming_cost_bytes(self) -> int:
         tensor_sz_bytes = TensorIOPreparer.get_tensor_size_from_entry(self.entry)
