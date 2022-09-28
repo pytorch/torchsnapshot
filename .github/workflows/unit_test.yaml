@@ -20,7 +20,7 @@ jobs:
       - name: Check out repo
         uses: actions/checkout@v2
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@master
+        uses: aws-actions/configure-aws-credentials@v1
 
         with:
           aws-region: us-east-1
