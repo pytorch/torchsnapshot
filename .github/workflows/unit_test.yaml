@@ -23,7 +23,6 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::252603636282:role/torchsnapshot-github-actions-role
           aws-region: us-east-1
-
       - name: Setup conda env
         uses: conda-incubator/setup-miniconda@v2
         with:
