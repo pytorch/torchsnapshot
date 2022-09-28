@@ -11,9 +11,18 @@ jobs:
     strategy:
       matrix:
         python-version: [3.7, 3.8, 3.9]
+    # These permissions are needed to interact with GitHub's OIDC Token endpoint.
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - name: Check out repo
         uses: actions/checkout@v2
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: arn:aws:iam::252603636282:role/torchsnapshot-github-actions-role
+          aws-region: us-east-1
       - name: Setup conda env
         uses: conda-incubator/setup-miniconda@v2
         with:
@@ -29,11 +38,6 @@ jobs:
           pip install -r requirements.txt
           pip install -r dev-requirements.txt
           pip install --no-build-isolation -e ".[dev]"
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v1
-        with:
-          role-to-assume: arn:aws:iam::252603636282:role/torchsnapshot-github-actions-role
-          aws-region: us-east-1
       - name: Run unit tests with coverage
         shell: bash -l {0}
         run: |
