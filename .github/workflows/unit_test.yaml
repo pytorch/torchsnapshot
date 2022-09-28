@@ -7,7 +7,7 @@ on:
 
 # These permissions are needed to interact with GitHub's OIDC Token endpoint.
 permissions:
-  id-token: read
+  id-token: write
   contents: read
 
 jobs:
