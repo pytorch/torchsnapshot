@@ -19,7 +19,7 @@ jobs:
       - name: Check out repo
         uses: actions/checkout@v2
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v1
+        uses: aws-actions/configure-aws-credentials@b8c74de
         with:
           role-to-assume: arn:aws:iam::252603636282:role/torchsnapshot-github-actions-role
 
