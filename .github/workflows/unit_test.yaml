@@ -29,6 +29,11 @@ jobs:
           pip install -r requirements.txt
           pip install -r dev-requirements.txt
           pip install --no-build-isolation -e ".[dev]"
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: arn:aws:iam::252603636282:role/torchsnapshot-github-actions-role
+          aws-region: us-east-1
       - name: Run unit tests with coverage
         shell: bash -l {0}
         run: |
