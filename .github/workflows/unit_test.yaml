@@ -6,6 +6,9 @@ on:
   pull_request:
 
 # These permissions are needed to interact with GitHub's OIDC Token endpoint.
+permissions:
+  id-token: read
+  contents: read
 
 jobs:
   unit_tests:
@@ -13,9 +16,6 @@ jobs:
     strategy:
       matrix:
         python-version: [3.7, 3.8, 3.9]
-    permissions:
-      id-token: read
-      contents: read
 
     steps:
       - name: Check out repo
