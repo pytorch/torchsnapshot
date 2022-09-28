@@ -5,18 +5,16 @@ on:
     branches: [ main ]
   pull_request:
 
-# These permissions are needed to interact with GitHub's OIDC Token endpoint.
-permissions:
-  id-token: write
-  contents: read
-
 jobs:
   unit_tests:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: [3.7, 3.8, 3.9]
-
+    # These permissions are needed to interact with GitHub's OIDC Token endpoint.
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - name: Check out repo
         uses: actions/checkout@v2
