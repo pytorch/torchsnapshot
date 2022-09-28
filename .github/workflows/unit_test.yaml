@@ -16,6 +16,7 @@ jobs:
     permissions:
       id-token: read
       contents: read
+
     steps:
       - name: Check out repo
         uses: actions/checkout@v2
