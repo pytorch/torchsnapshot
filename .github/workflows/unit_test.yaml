@@ -22,7 +22,7 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v1
+        uses: aws-actions/configure-aws-credentials@v1.6.1
         with:
           aws-region: us-east-1
           role-to-assume: arn:aws:iam::252603636282:role/test-role
