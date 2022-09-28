@@ -14,7 +14,7 @@ jobs:
       matrix:
         python-version: [3.7, 3.8, 3.9]
     permissions:
-      id-token: write
+      id-token: read
       contents: read
     steps:
       - name: Check out repo
