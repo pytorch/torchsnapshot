@@ -1,4 +1,4 @@
-name: unit test
+name: Unit tests
 
 on:
   push:
@@ -11,7 +11,7 @@ jobs:
     strategy:
       matrix:
         python-version: [3.7, 3.8, 3.9]
-    # These permissions are needed to interact with GitHub's OIDC Token endpoint.
+    # These permissions are needed to interact with GitHub's OIDC Token endpoint
     permissions:
       id-token: write
       contents: read
@@ -38,6 +38,6 @@ jobs:
         run: |
           set -eux
           conda activate test
-          pytest --cov=. --cov-report xml tests -vv
-      - name: Upload Coverage to Codecov
+          pytest --timeout=300 --cov=. --cov-report xml tests -vv -rs
+      - name: Upload coverage to codecov
         uses: codecov/codecov-action@v2

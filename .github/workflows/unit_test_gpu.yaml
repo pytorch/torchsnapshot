@@ -1,4 +1,4 @@
-name: unit test
+name: Unit tests (GPU)
 
 on:
   push:
@@ -10,7 +10,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [linux.p3.8xlarge.nvidia.gpu]
+        os: [linux.8xlarge.nvidia.gpu]
         python-version: [3.8]
         cuda-tag: ["cu11"]
     steps:
@@ -59,6 +59,12 @@ jobs:
           set -eux
           conda activate test
           pip install --pre torch -f https://download.pytorch.org/whl/nightly/cu113/torch_nightly.html
+          pip install torchrec-nightly
+
+          # Use stable fbgemm-gpu
+          pip uninstall -y fbgemm-gpu-nightly
+          pip install fbgemm-gpu
+
           pip install -r requirements.txt
           pip install -r dev-requirements.txt
           pip install --no-build-isolation -e ".[dev]"
@@ -67,6 +73,6 @@ jobs:
         run: |
           set -eux
           conda activate test
-          pytest --cov=. --cov-report xml tests/gpu_tests -vv
-      - name: Upload Coverage to Codecov
+          pytest --cov=. --cov-report xml tests/gpu_tests -vv -rs
+      - name: Upload coverage to codecov
         uses: codecov/codecov-action@v2

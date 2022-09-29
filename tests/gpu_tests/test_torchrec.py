@@ -13,16 +13,18 @@ import tempfile
 import unittest
 from typing import List
 
+import pytest
+
 import torch
 import torch.distributed as dist
 import torch.distributed.launcher as pet
 
-import torchsnapshot
-
 try:
     import torchrec
-except Exception:
-    raise unittest.SkipTest("torchrec not found")
+except Exception as e:
+    pytest.skip(f"Failed to import torchrec due to {e}", allow_module_level=True)
+
+import torchsnapshot
 
 from fbgemm_gpu.split_embedding_configs import EmbOptimType
 from torchrec.distributed import ModuleSharder
@@ -234,7 +236,7 @@ class TorchrecTest(unittest.TestCase):
         for max_shard_sz_bytes in [16 * 1024 * 1024, 16 * 1024 * 1024 - 1]:
             with self.subTest(max_shard_sz_bytes=max_shard_sz_bytes):
                 with tempfile.TemporaryDirectory() as path:
-                    lc = get_pet_launch_config(nproc=4)
+                    lc = get_pet_launch_config(nproc=2)
                     pet.elastic_launch(lc, entrypoint=self._test_take_restore)(
                         path, max_shard_sz_bytes, False
                     )
@@ -245,7 +247,7 @@ class TorchrecTest(unittest.TestCase):
         for max_shard_sz_bytes in [16 * 1024 * 1024, 16 * 1024 * 1024 - 1]:
             with self.subTest(max_shard_sz_bytes=max_shard_sz_bytes):
                 with tempfile.TemporaryDirectory() as path:
-                    lc = get_pet_launch_config(nproc=4)
+                    lc = get_pet_launch_config(nproc=2)
                     pet.elastic_launch(lc, entrypoint=self._test_take_restore)(
                         path, max_shard_sz_bytes, True
                     )
