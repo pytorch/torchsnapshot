@@ -1,7 +1,7 @@
+aiobotocore
 numpy
 pre-commit
 pytest
-pytest-cov
 pytest-asyncio
---find-links=https://download.pytorch.org/whl/nightly/torchrec_nightly/index.html
-torchrec_nightly
+pytest-cov
+pytest-timeout
