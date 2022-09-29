@@ -22,6 +22,8 @@ import torch.distributed.launcher as pet
 try:
     import torchrec
 except Exception as e:
+    # pyre-fixme[29]: `_WithException[typing.Any,
+    #  typing.Type[_pytest.outcomes.Skipped]]` is not a function.
     pytest.skip(f"Failed to import torchrec due to {e}", allow_module_level=True)
 
 import torchsnapshot
