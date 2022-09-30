@@ -113,6 +113,8 @@ class TorchrecTest(unittest.TestCase):
         return planner.collective_plan(
             module,
             _SHARDERS,
+            # pyre-fixme[6]: For 3rd param expected `ProcessGroup` but got
+            #  `ProcessGroup`.
             pg,
         )
 
