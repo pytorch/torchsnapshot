@@ -542,6 +542,7 @@ class Snapshot:
             The object read from the snapshot's content.
         """
         torch._C._log_api_usage_once("torchsnapshot.Snapshot.read_object")
+        # TODO: better message for malformatted path
         rank_str, unranked_path = path.split("/", 1)
         rank = int(rank_str)
         # Transform the manifest such that (1) replicated entries are made

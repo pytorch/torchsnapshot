@@ -8,9 +8,11 @@
 # pyre-ignore-all-errors[2]: Allow `Any` in type annotations
 
 import asyncio
+import functools
 import unittest
 import uuid
 from contextlib import contextmanager
+from importlib import import_module
 
 from typing import Any, Awaitable, Callable, Dict, Generator, TypeVar, Union
 from unittest import mock
@@ -103,6 +105,26 @@ def get_pet_launch_config(nproc: int) -> pet.LaunchConfig:
         max_restarts=0,
         monitor_interval=1,
     )
+
+
+def _launch_pad(mod_name: str, func_name: str, args, kwargs) -> None:
+    mod = import_module(mod_name)
+    func = getattr(mod, func_name)
+    func.__wrapped__(*args, **kwargs)
+
+
+def run_with_pet(nproc: int) -> Callable[[Callable[..., None]], Callable[..., None]]:
+    def _run_with_pet(func: Callable[..., None]) -> Callable[..., None]:
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs) -> None:
+            lc = get_pet_launch_config(nproc=nproc)
+            pet.elastic_launch(lc, entrypoint=_launch_pad)(
+                func.__module__, func.__name__, args, kwargs
+            )
+
+        return wrapper
+
+    return _run_with_pet
 
 
 T = TypeVar("T")

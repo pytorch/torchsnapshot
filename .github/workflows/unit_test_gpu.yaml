@@ -58,7 +58,7 @@ jobs:
         run: |
           set -eux
           conda activate test
-          pip install --pre torch -f https://download.pytorch.org/whl/nightly/cu113/torch_nightly.html
+          pip install torch --extra-index-url https://download.pytorch.org/whl/cu116
           pip install torchrec-nightly
 
           # Use stable fbgemm-gpu
@@ -73,6 +73,6 @@ jobs:
         run: |
           set -eux
           conda activate test
-          pytest --cov=. --cov-report xml tests/gpu_tests -vv -rs
+          pytest --timeout 60 --cov=. --cov-report xml tests/gpu_tests -vv -rA
       - name: Upload coverage to codecov
         uses: codecov/codecov-action@v2

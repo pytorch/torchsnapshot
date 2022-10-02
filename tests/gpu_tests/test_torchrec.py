@@ -7,46 +7,41 @@
 
 # pyre-ignore-all-errors[56]
 
-import logging
 import os
-import tempfile
-import unittest
-from typing import List
+import sys
+
+from pathlib import Path
+from typing import cast, Dict, List
 
 import pytest
 
 import torch
 import torch.distributed as dist
-import torch.distributed.launcher as pet
+import torchsnapshot
+
+from torch.distributed._shard.sharded_tensor import ShardedTensor
+from torchsnapshot.io_preparer import ShardedTensorIOPreparer
+from torchsnapshot.test_utils import run_with_pet
+
 
 try:
     import torchrec
 except Exception as e:
-    # pyre-fixme[29]: `_WithException[typing.Any,
-    #  typing.Type[_pytest.outcomes.Skipped]]` is not a function.
+    # pyre-ignore
     pytest.skip(f"Failed to import torchrec due to {e}", allow_module_level=True)
 
-import torchsnapshot
 
 from fbgemm_gpu.split_embedding_configs import EmbOptimType
-from torchrec.distributed import ModuleSharder
+from torchrec.distributed import DistributedModelParallel, ModuleSharder
 from torchrec.distributed.embeddingbag import EmbeddingBagCollectionSharder
 from torchrec.distributed.planner import EmbeddingShardingPlanner, Topology
 from torchrec.distributed.planner.types import ParameterConstraints
-from torchrec.distributed.types import ShardingPlan, ShardingType
+from torchrec.distributed.types import ShardingType
 
 from torchrec.models.dlrm import DLRM, DLRMTrain
-from torchsnapshot.io_preparer import ShardedTensorIOPreparer
-from torchsnapshot.test_utils import (
-    _tensor_eq,
-    assert_state_dict_eq,
-    check_state_dict_eq,
-    get_pet_launch_config,
-)
 
-# Each embedding table is about 100MB in size
 _EMBEDDING_DIM = 128
-_NUM_EMBEDDINGS = 200_000
+_NUM_EMBEDDINGS = 20000
 _DENSE_IN_FEATURES = 128
 _NUM_CLASSES = 8
 
@@ -92,165 +87,160 @@ _SHARDERS: List[ModuleSharder] = [
 ]
 
 
-class TorchrecTest(unittest.TestCase):
-    @staticmethod
-    def _get_rowwise_sharding_plan(
-        module: torch.nn.Module, device: torch.device
-    ) -> ShardingPlan:
-        planner = EmbeddingShardingPlanner(
-            topology=Topology(
-                world_size=dist.get_world_size(), compute_device=device.type
-            ),
-            constraints={
-                table.name: ParameterConstraints(
-                    sharding_types=[ShardingType.ROW_WISE.value]
-                )
-                for table in _TABLES
-            },
-        )
-        pg = dist.group.WORLD
-        assert pg is not None
-        return planner.collective_plan(
-            module,
-            _SHARDERS,
-            # pyre-fixme[6]: For 3rd param expected `ProcessGroup` but got
-            #  `ProcessGroup`.
-            pg,
-        )
+def _initialize_dmp(
+    device: torch.device, sharding_type: str
+) -> DistributedModelParallel:
+    dlrm_model = DLRM(
+        embedding_bag_collection=torchrec.EmbeddingBagCollection(
+            device=torch.device("meta"),
+            tables=_TABLES,
+        ),
+        dense_in_features=_DENSE_IN_FEATURES,
+        dense_arch_layer_sizes=[64, _EMBEDDING_DIM],
+        over_arch_layer_sizes=[64, _NUM_CLASSES],
+    )
+    model = DLRMTrain(dlrm_model)
 
-    @classmethod
-    def _initialize_dmp(
-        cls, device: torch.device
-    ) -> torchrec.distributed.DistributedModelParallel:
-        dlrm_model = DLRM(
-            embedding_bag_collection=torchrec.EmbeddingBagCollection(
-                device=torch.device("meta"),
-                tables=_TABLES,
-            ),
-            dense_in_features=_DENSE_IN_FEATURES,
-            dense_arch_layer_sizes=[64, _EMBEDDING_DIM],
-            over_arch_layer_sizes=[64, _NUM_CLASSES],
-        )
-        model = DLRMTrain(dlrm_model)
-        return torchrec.distributed.DistributedModelParallel(
-            module=model,
-            device=device,
-            plan=cls._get_rowwise_sharding_plan(model, device),
-            sharders=_SHARDERS,
-        )
+    plan = EmbeddingShardingPlanner(
+        topology=Topology(world_size=dist.get_world_size(), compute_device=device.type),
+        constraints={
+            table.name: ParameterConstraints(sharding_types=[sharding_type])
+            for table in _TABLES
+        },
+    ).collective_plan(
+        model,
+        _SHARDERS,
+        cast(dist.ProcessGroup, dist.group.WORLD),
+    )
 
-    @classmethod
-    def _test_take_restore(
-        cls, path: str, max_shard_sz_bytes: int, use_async: bool
-    ) -> None:
-        os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-        logger = logging.getLogger("torchsnapshot.scheduler")
-        logger.setLevel(logging.DEBUG)
+    return DistributedModelParallel(
+        module=model,
+        device=device,
+        plan=plan,
+        sharders=_SHARDERS,
+    )
 
-        dist.init_process_group(backend="nccl")
-        local_rank = int(os.environ["LOCAL_RANK"])
-        device = torch.device(f"cuda:{local_rank}")
-        torch.cuda.set_device(device)
 
-        ShardedTensorIOPreparer.DEFAULT_MAX_SHARD_SIZE_BYTES = max_shard_sz_bytes
+def _gather_dmp_state_dict(dmp: DistributedModelParallel) -> Dict[str, torch.Tensor]:
+    """
+    Gather a class::`DistributedDataParallel`'s state dict from all ranks.
 
-        # First, initialize a dmp with a certain random seed
-        # IMPORTANT: seed different rank differently
-        torch.manual_seed(42 + dist.get_rank())
-        dmp_0 = cls._initialize_dmp(device)
+    In the gathered state dict, class::`ShardedTensor`s are converted to
+    class::`Tensor`s.
+    """
+    state_dict = dmp.state_dict().copy()
+    for k, v in state_dict.items():
+        # This covers both tensors and sharded tensors
+        if isinstance(v, torch.Tensor):
+            state_dict[k] = v.cpu()
 
-        # Take a snapshot of dmp_0
-        if use_async:
-            future = torchsnapshot.Snapshot.async_take(
-                path=path, app_state={"dmp": dmp_0}
+    key_to_shards = {
+        k: v.local_shards()
+        for k, v in state_dict.items()
+        if isinstance(v, ShardedTensor)
+    }
+    key_to_val = {
+        f"{dist.get_rank()}/dmp/{k}": v
+        for k, v in state_dict.items()
+        if not isinstance(v, ShardedTensor)
+    }
+
+    object_list = [None] * dist.get_world_size()
+    dist.all_gather_object(object_list, (key_to_shards, key_to_val))
+
+    gathered = {}
+    key_to_shards = {}
+    # pyre-ignore
+    for key_to_shards, key_to_val in object_list:
+        gathered.update(key_to_val)
+        for key, shards in key_to_shards.items():
+            full_key = f"{dist.get_rank()}/dmp/{key}"
+            gathered.setdefault(full_key, torch.empty(_NUM_EMBEDDINGS, _EMBEDDING_DIM))
+            for shard in shards:
+                offsets = shard.metadata.shard_offsets
+                sizes = shard.metadata.shard_sizes
+                # Assume 2D tensor
+                gathered[full_key][
+                    offsets[0] : offsets[0] + sizes[0],
+                    offsets[1] : offsets[1] + sizes[1],
+                ].copy_(shard.tensor)
+    return gathered
+
+
+def _sharding_types() -> List[str]:
+    return [
+        ShardingType.ROW_WISE.value,
+        ShardingType.COLUMN_WISE.value,
+        ShardingType.TABLE_WISE.value,
+    ]
+
+
+@pytest.mark.parametrize("src_sharding_type", _sharding_types())
+@pytest.mark.parametrize("dst_sharding_type", _sharding_types())
+@pytest.mark.parametrize("use_async", [True, False])
+@run_with_pet(nproc=2)
+def test_torchrec(
+    src_sharding_type: str,
+    dst_sharding_type: str,
+    use_async: bool,
+    tmp_path: Path,
+) -> None:
+    dist.init_process_group(backend="nccl")
+    local_rank = int(os.environ["LOCAL_RANK"])
+    device = torch.device(f"cuda:{local_rank}")
+    torch.cuda.set_device(device)
+
+    # First, initialize a dmp with a certain random seed
+    # IMPORTANT: seed different rank differently
+    torch.manual_seed(42 + dist.get_rank())
+    src_dmp = _initialize_dmp(device=device, sharding_type=src_sharding_type)
+
+    # Find the smallest shard size
+    smallest_shard_sz = sys.maxsize
+    for v in src_dmp.state_dict().values():
+        if not isinstance(v, ShardedTensor):
+            continue
+        for shard in v.local_shards():
+            smallest_shard_sz = min(
+                smallest_shard_sz, shard.tensor.nelement() * shard.tensor.element_size()
             )
-            snapshot = future.wait()
-        else:
-            snapshot = torchsnapshot.Snapshot.take(path=path, app_state={"dmp": dmp_0})
 
-        # Initialize another dmp with a different random seed
-        torch.manual_seed(777 + dist.get_rank())
-        dmp_1 = cls._initialize_dmp(device)
+    # Make sure we are testing sharded tensor subdivision
+    ShardedTensorIOPreparer.DEFAULT_MAX_SHARD_SIZE_BYTES = smallest_shard_sz // 2 - 1
 
-        tc = unittest.TestCase()
-        tc.maxDiff = None
-
-        # Sanity check that the state dicts of the two dmps are different
-        tc.assertFalse(check_state_dict_eq(dmp_0.state_dict(), dmp_1.state_dict()))
-
-        # Restore dmp_1 with dmp_0's snapshot, after which the state dicts of
-        # the two dmps should be the same
-        snapshot.restore(app_state={"dmp": dmp_1})
-        assert_state_dict_eq(tc, dmp_0.state_dict(), dmp_1.state_dict())
-
-        # Initialize another dmp to verify the behavior of snapshot.loadd_entry
-        del dmp_1
-        torch.manual_seed(420 + dist.get_rank())
-        dmp_2 = cls._initialize_dmp(device)
-
-        t1_weight_key = (
-            "model.sparse_arch.embedding_bag_collection.embedding_bags.t1.weight"
+    # Take a snapshot of src_dmp
+    if use_async:
+        future = torchsnapshot.Snapshot.async_take(
+            path=str(tmp_path), app_state={"dmp": src_dmp}
         )
-        dmp_0_t1_weight = dmp_0.state_dict()[t1_weight_key]
-        dmp_2_t1_weight = dmp_2.state_dict()[t1_weight_key]
-
-        # Since dmp_0 and dmp_2 were initialized with different random seeds,
-        # their t1 weight should be different
-        tc.assertFalse(_tensor_eq(dmp_2_t1_weight, dmp_0_t1_weight))
-
-        # Load dmp_2's t1 weight from dmp_1's snapshot, after which the t1
-        # weights of dmp_0 and dmp_2 should be the same
-        t1_weight_entry_path = os.path.join("0/dmp", t1_weight_key)
-        snapshot.read_object(path=t1_weight_entry_path, obj_out=dmp_2_t1_weight)
-        tc.assertTrue(_tensor_eq(dmp_2_t1_weight, dmp_0_t1_weight))
-
-    @classmethod
-    def _test_resharding(cls, path: str) -> None:
-        dist.init_process_group(backend="nccl")
-        local_rank = int(os.environ["LOCAL_RANK"])
-        device = torch.device(f"cuda:{local_rank}")
-        torch.cuda.set_device(device)
-
-        tc = unittest.TestCase()
-        tc.maxDiff = None
-
-        dmp_0 = cls._initialize_dmp(device)
-        snapshot = torchsnapshot.Snapshot(path=path)
-        snapshot.restore(app_state={"dmp": dmp_0})
-        # TODO: verify weight
-
-        torch.manual_seed(420 + dist.get_rank())
-        dmp_1 = cls._initialize_dmp(device)
-
-        t1_weight_key = (
-            "model.sparse_arch.embedding_bag_collection.embedding_bags.t1.weight"
+        snapshot = future.wait()
+    else:
+        snapshot = torchsnapshot.Snapshot.take(
+            path=str(tmp_path), app_state={"dmp": src_dmp}
         )
-        dmp_0_t1_weight = dmp_0.state_dict()[t1_weight_key]
-        dmp_1_t1_weight = dmp_1.state_dict()[t1_weight_key]
-        tc.assertFalse(_tensor_eq(dmp_1_t1_weight, dmp_0_t1_weight))
 
-        t1_weight_entry_path = os.path.join("0/dmp", t1_weight_key)
-        snapshot.read_object(path=t1_weight_entry_path, obj_out=dmp_1_t1_weight)
-        tc.assertTrue(_tensor_eq(dmp_1_t1_weight, dmp_0_t1_weight))
+    # Initialize another dmp with a different random seed
+    torch.manual_seed(777 + dist.get_rank())
+    dst_dmp = _initialize_dmp(device=device, sharding_type=dst_sharding_type)
 
-    @unittest.skipUnless(torch.cuda.is_available(), "This test requires GPU to run.")
-    def test_torchrec(self) -> None:
-        for max_shard_sz_bytes in [16 * 1024 * 1024, 16 * 1024 * 1024 - 1]:
-            with self.subTest(max_shard_sz_bytes=max_shard_sz_bytes):
-                with tempfile.TemporaryDirectory() as path:
-                    lc = get_pet_launch_config(nproc=2)
-                    pet.elastic_launch(lc, entrypoint=self._test_take_restore)(
-                        path, max_shard_sz_bytes, False
-                    )
-                    pet.elastic_launch(lc, entrypoint=self._test_resharding)(path)
+    # Sanity check that the state dicts of the two dmps are different
+    src_gathered = _gather_dmp_state_dict(src_dmp)
+    dst_gathered = _gather_dmp_state_dict(dst_dmp)
+    for key, src_tensor in src_gathered.items():
+        assert not torch.allclose(src_tensor, dst_gathered[key])
 
-    @unittest.skipUnless(torch.cuda.is_available(), "This test requires GPU to run.")
-    def test_torchrec_async(self) -> None:
-        for max_shard_sz_bytes in [16 * 1024 * 1024, 16 * 1024 * 1024 - 1]:
-            with self.subTest(max_shard_sz_bytes=max_shard_sz_bytes):
-                with tempfile.TemporaryDirectory() as path:
-                    lc = get_pet_launch_config(nproc=2)
-                    pet.elastic_launch(lc, entrypoint=self._test_take_restore)(
-                        path, max_shard_sz_bytes, True
-                    )
-                    pet.elastic_launch(lc, entrypoint=self._test_resharding)(path)
+    # Restore dst_dmp with src_dmp's snapshot, after which the state dicts of
+    # the two dmps should be the same
+    snapshot.restore(app_state={"dmp": dst_dmp})
+
+    dst_gathered = _gather_dmp_state_dict(dst_dmp)
+    for key, src_tensor in src_gathered.items():
+        assert torch.allclose(src_tensor, dst_gathered[key])
+
+    # Test reading tensor/sharded tensor into tensor with read_object
+    for key, src in src_gathered.items():
+        dst = torch.rand_like(src)
+        assert not torch.allclose(src, dst)
+
+        snapshot.read_object(path=key, obj_out=dst)
+        assert torch.allclose(src, dst)
