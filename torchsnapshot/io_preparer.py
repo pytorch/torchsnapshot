@@ -67,22 +67,22 @@ class Chunk:
     dtype: str
 
 
-class ChunkedTensorIOPreparer:
-    DEFAULT_MAX_CHUNK_SIZE_BYTES: int = 512 * 1024 * 1024
+DEFAULT_MAX_CHUNK_SIZE_BYTES: int = 512 * 1024 * 1024
 
+
+class ChunkedTensorIOPreparer:
     @staticmethod
     def chunk_tensor(
         tensor: torch.Tensor,
         chunking_dim: int = 0,
+        chunk_sz_bytes: int = DEFAULT_MAX_CHUNK_SIZE_BYTES,
     ) -> List[Chunk]:
         # for 0-d case, reshape to 1-d
         if tensor.ndim == 0:
             tensor = tensor.view(-1)
 
         tensor_sz_bytes = tensor.numel() * tensor.element_size()
-        n_chunks = math.ceil(
-            tensor_sz_bytes / ChunkedTensorIOPreparer.DEFAULT_MAX_CHUNK_SIZE_BYTES
-        )
+        n_chunks = math.ceil(tensor_sz_bytes / chunk_sz_bytes)
         tensor_chunks = torch.chunk(tensor, chunks=n_chunks, dim=chunking_dim)
 
         curr_offsets = [0] * tensor.ndim
@@ -347,7 +347,7 @@ class ShardedTensorIOPreparer:
 
         # For each persisted shard, find all its overlapping regions with the
         # local shards
-        path_to_overlapping_regions = defaultdict(list)
+        path_byte_range_to_overlapping_regions = defaultdict(list)
         for local_shard, shard in itertools.product(local_shards, entry.shards):
             shard_md = ShardMetadata(
                 shard_offsets=shard.offsets,
@@ -356,7 +356,8 @@ class ShardedTensorIOPreparer:
             )
             if not _check_shard_metadata_pair_overlap(local_shard.metadata, shard_md):
                 continue
-            path_to_overlapping_regions[shard.tensor.location].append(
+            path_byte_range = (shard.tensor.location, shard.tensor.byte_range_tuple)
+            path_byte_range_to_overlapping_regions[path_byte_range].append(
                 _OverlappingRegion(
                     dst_tensor=local_shard.tensor,
                     overlap_region=cls._shards_get_overlap_region_wrt_saved_tensor(
@@ -370,17 +371,19 @@ class ShardedTensorIOPreparer:
         # regions with the local shards
         read_reqs = []
         for shard in entry.shards:
-            if shard.tensor.location not in path_to_overlapping_regions:
+            path_byte_range = (shard.tensor.location, shard.tensor.byte_range_tuple)
+            if path_byte_range not in path_byte_range_to_overlapping_regions:
                 continue
             read_reqs.append(
                 ReadReq(
                     path=shard.tensor.location,
                     buffer_consumer=ShardedTensorBufferConsumer(
-                        overlapping_regions=path_to_overlapping_regions[
-                            shard.tensor.location
+                        overlapping_regions=path_byte_range_to_overlapping_regions[
+                            path_byte_range
                         ],
                         entry=shard.tensor,
                     ),
+                    byte_range=shard.tensor.byte_range_tuple,
                 )
             )
         return read_reqs
@@ -658,7 +661,13 @@ class TensorIOPreparer:
                 tensor=tensor_out,
                 entry=entry,
             )
-            return [ReadReq(path=entry.location, buffer_consumer=buffer_consumer)]
+            return [
+                ReadReq(
+                    path=entry.location,
+                    byte_range=entry.byte_range_tuple,
+                    buffer_consumer=buffer_consumer,
+                )
+            ]
 
         num_chunks = math.ceil(
             cls.get_tensor_size_from_entry(entry) / buffer_size_limit_bytes
@@ -687,10 +696,21 @@ class TensorIOPreparer:
                     replicated=entry.replicated,
                 ),
             )
+            byte_range = entry.byte_range
+            if byte_range is None:
+                byte_range = (
+                    offset,
+                    offset + chunk_sz_bytes,
+                )
+            else:
+                byte_range = (
+                    byte_range[0] + offset,
+                    byte_range[0] + offset + chunk_sz_bytes,
+                )
             read_reqs.append(
                 ReadReq(
                     path=entry.location,
-                    byte_range=(offset, offset + chunk_sz_bytes),
+                    byte_range=byte_range,
                     buffer_consumer=buffer_consumer,
                 )
             )
