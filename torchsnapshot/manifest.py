@@ -11,7 +11,7 @@ import base64
 import struct
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional, TypeVar, Union
+from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union
 
 import yaml
 
@@ -41,6 +41,7 @@ class TensorEntry(Entry):
     dtype: str
     shape: List[int]
     replicated: bool
+    byte_range: Optional[List[int]]
 
     def __init__(
         self,
@@ -49,6 +50,7 @@ class TensorEntry(Entry):
         dtype: str,
         shape: List[int],
         replicated: bool,
+        byte_range: Optional[List[int]] = None,
     ) -> None:
         super().__init__(type="Tensor")
         self.location = location
@@ -56,6 +58,15 @@ class TensorEntry(Entry):
         self.dtype = dtype
         self.shape = shape
         self.replicated = replicated
+        self.byte_range = byte_range
+
+    @property
+    def byte_range_tuple(self) -> Optional[Tuple[int, int]]:
+        byte_range = self.byte_range
+        if byte_range is None:
+            return None
+        else:
+            return (byte_range[0], byte_range[1])
 
 
 @dataclass
@@ -272,6 +283,7 @@ class SnapshotMetadata:
                             dtype=shard["tensor"]["dtype"],
                             shape=shard["tensor"]["shape"],
                             replicated=shard["tensor"]["replicated"],
+                            byte_range=shard["tensor"].get("byte_range"),
                         ),
                     )
                     for shard in entry["shards"]
@@ -290,6 +302,7 @@ class SnapshotMetadata:
                             dtype=chunk["tensor"]["dtype"],
                             shape=chunk["tensor"]["shape"],
                             replicated=chunk["tensor"]["replicated"],
+                            byte_range=chunk["tensor"].get("byte_range"),
                         ),
                     )
                     for chunk in entry["chunks"]

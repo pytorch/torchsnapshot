@@ -14,12 +14,25 @@ import uuid
 from contextlib import contextmanager
 from importlib import import_module
 
-from typing import Any, Awaitable, Callable, Dict, Generator, TypeVar, Union
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    cast,
+    Dict,
+    Generator,
+    List,
+    Tuple,
+    TypeVar,
+    Union,
+)
 from unittest import mock
 
 import torch
 import torch.distributed.launcher as pet
 from torch.distributed._shard.sharded_tensor import ShardedTensor
+
+from .serialization import SUPPORTED_QUANTIZED_DTYPES
 
 
 def _tensor_eq(lhs: Union[torch.Tensor, ShardedTensor], rhs: Any) -> bool:
@@ -83,6 +96,71 @@ def check_state_dict_eq(lhs: Dict[Any, Any], rhs: Dict[Any, Any]) -> bool:
     """
     with _patch_tensor_eq():
         return lhs == rhs
+
+
+def rand_tensor(
+    shape: Union[Tuple[int, ...], List[int], torch.Size], dtype: torch.dtype
+) -> torch.Tensor:
+    """
+    Create a tensor and initialize randomly for testing purposes.
+
+    Tensors of different dtypes needs to be intialized differently. This
+    function provides a unified signature for scenarios in which the random
+    range is not a concern.
+
+    Args:
+        shape: The shape of the random tensor.
+        dtype: The dtype of the random tensor.
+
+    Return:
+        The random tensor.
+    """
+    if dtype.is_floating_point or dtype.is_complex:
+        return torch.rand(shape, dtype=dtype)
+    elif dtype == torch.bool:
+        return torch.randint(2, shape, dtype=dtype)
+    elif dtype in SUPPORTED_QUANTIZED_DTYPES:
+        return torch.quantize_per_tensor(
+            torch.rand(shape), scale=0.1, zero_point=10, dtype=dtype
+        )
+    else:
+        return torch.randint(torch.iinfo(dtype).max, shape, dtype=dtype)
+
+
+def tensor_eq(lhs: torch.Tensor, rhs: torch.Tensor) -> bool:
+    if type(lhs) != type(rhs):
+        return False
+
+    if type(lhs) == ShardedTensor:
+        for l_shard, r_shard in zip(
+            lhs.local_shards(), cast(ShardedTensor, rhs).local_shards()
+        ):
+            if not tensor_eq(l_shard.tensor, r_shard.tensor):
+                return False
+        return True
+    elif type(lhs) == torch.Tensor:
+        if lhs.dtype in SUPPORTED_QUANTIZED_DTYPES:
+            return torch.allclose(lhs.dequantize(), rhs.dequantize())
+        else:
+            return torch.allclose(lhs, rhs)
+    else:
+        raise AssertionError(
+            f"The lhs operand must be a Tensor or ShardedTensor (got: {type(lhs)}."
+        )
+
+
+def tensor_local_sz_bytes(tensor: torch.Tensor) -> int:
+    if type(tensor) == torch.Tensor:
+        return tensor.nelement() * tensor.element_size()
+    elif type(tensor) == ShardedTensor:
+        sz = 0
+        for shard in tensor.local_shards():
+            sz += tensor_local_sz_bytes(shard.tensor)
+        return sz
+    else:
+        raise AssertionError(
+            f"The input must be a Tensor or ShardedTensor (got: {type(tensor)}."
+        )
 
 
 def get_pet_launch_config(nproc: int) -> pet.LaunchConfig:

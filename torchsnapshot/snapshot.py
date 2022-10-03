@@ -30,6 +30,8 @@ from torch.distributed._shard.sharded_tensor import ShardedTensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torchsnapshot.serialization import dtype_to_element_size, string_to_dtype
 
+from .batcher import batch_read_requests, batch_write_requests
+
 from .dist_store import get_or_create_store, LinearBarrier
 
 from .flatten import flatten, inflate
@@ -420,6 +422,14 @@ class Snapshot:
             object_entries[logical_path] = entry
             write_reqs.extend(item_write_reqs)
 
+        if os.environ.get("TORCHSNAPSHOT_ENABLE_BATCHING") is not None:
+            entry_keys = list(object_entries.keys())
+            entries = list(object_entries.values())
+            entries, write_reqs = batch_write_requests(
+                entries=entries, write_reqs=write_reqs
+            )
+            object_entries = dict(zip(entry_keys, entries))
+
         manifest.update(object_entries)
         manifest = cls._gather_manifest(manifest=manifest, pg=pg_wrapper)
 
@@ -590,6 +600,9 @@ class Snapshot:
                 # by the buffer consumer.
                 buffer_consumer.set_consume_callback(functools.partial(box.append))
 
+        if os.environ.get("TORCHSNAPSHOT_ENABLE_BATCHING") is not None:
+            read_reqs = batch_read_requests(read_reqs=read_reqs)
+
         sync_execute_read_reqs(
             read_reqs=read_reqs,
             storage=storage,
@@ -731,6 +744,9 @@ path "{logical_path}" which was not available to rank {rank}.
                         functools.partial(dict.__setitem__, flattened, logical_path)
                     )
             read_reqs += rrs
+
+        if os.environ.get("TORCHSNAPSHOT_ENABLE_BATCHING") is not None:
+            read_reqs = batch_read_requests(read_reqs=read_reqs)
 
         memory_budget_bytes = get_process_memory_budget_bytes(pg=pg)
         sync_execute_read_reqs(

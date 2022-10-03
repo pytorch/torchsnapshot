@@ -11,6 +11,7 @@ from typing import List, Tuple
 
 import torch
 import torchsnapshot
+import torchsnapshot.io_preparer as io_preparer
 from torch import distributed as dist
 from torch.distributed import launcher as pet
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -37,9 +38,9 @@ class ChunkedTensorIOPreparerTest(unittest.TestCase):
         tensor_to_chunk: torch.Tensor,
         max_chunk_sz_bytes: int,
     ) -> None:
-        ChunkedTensorIOPreparer.DEFAULT_MAX_CHUNK_SIZE_BYTES = max_chunk_sz_bytes
         actual_chunks = ChunkedTensorIOPreparer.chunk_tensor(
             tensor=tensor_to_chunk,
+            chunk_sz_bytes=max_chunk_sz_bytes,
         )
         self.assertEqual(len(expected_chunks), len(actual_chunks))
         for i in range(len(expected_chunks)):
@@ -270,7 +271,7 @@ class ChunkedTensorIOPreparerTest(unittest.TestCase):
         nonddp_foo = torch.nn.Linear(16, 1)
         nonddp_bar = torch.nn.Linear(16, 1)
         app_state: AppState = {"ddp": ddp_foo, "nonddp": nonddp_foo}
-        ChunkedTensorIOPreparer.DEFAULT_MAX_CHUNK_SIZE_BYTES = 4
+        io_preparer.DEFAULT_MAX_CHUNK_SIZE_BYTES = 4
         snapshot = torchsnapshot.Snapshot.take(
             path=path,
             app_state=app_state,

@@ -38,6 +38,12 @@ ALL_SUPPORTED_DTYPES: List[torch.dtype] = [
     torch.quint8,
 ]
 
+SUPPORTED_QUANTIZED_DTYPES: List[torch.dtype] = [
+    torch.qint32,
+    torch.qint8,
+    torch.quint8,
+]
+
 # The approach is dumb. But we want to be 100% certain we can recognize the
 # dtype strings we persist.
 _DTYPE_TO_STRING: Dict[torch.dtype, str] = {

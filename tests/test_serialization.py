@@ -22,16 +22,12 @@ from torchsnapshot.serialization import (
     tensor_as_memoryview,
     tensor_from_memoryview,
 )
+from torchsnapshot.test_utils import rand_tensor
 
 
 class SerializationTest(unittest.TestCase):
     def _test_buffer_protocol_helper(self, dtype: torch.dtype) -> None:
-        if dtype.is_floating_point:
-            foo = torch.randn((1000, 1000), dtype=dtype)
-        elif dtype == torch.bool:
-            foo = torch.randint(1, (1000, 1000), dtype=dtype)
-        else:
-            foo = torch.randint(torch.iinfo(dtype).max, (1000, 1000), dtype=dtype)
+        foo = rand_tensor(shape=(1000, 1000), dtype=dtype)
 
         serialized = tensor_as_memoryview(foo).tobytes()
         dtype_str = dtype_to_string(foo.dtype)
