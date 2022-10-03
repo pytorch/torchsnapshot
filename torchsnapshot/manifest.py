@@ -15,6 +15,11 @@ from typing import Any, Dict, List, Optional, TypeVar, Union
 
 import yaml
 
+try:
+    from yaml import CSafeDumper as Dumper, CSafeLoader as Loader
+except ImportError:
+    from yaml import Dumper, Loader
+
 
 @dataclass
 class Entry:
@@ -237,11 +242,11 @@ class SnapshotMetadata:
     manifest: Manifest
 
     def to_yaml(self) -> str:
-        return yaml.dump(asdict(self), sort_keys=False)
+        return yaml.dump(asdict(self), sort_keys=False, Dumper=Dumper)
 
     @classmethod
     def from_yaml(cls, yaml_str: str) -> "SnapshotMetadata":
-        d = yaml.safe_load(yaml_str)
+        d = yaml.load(yaml_str, Loader=Loader)
         manifest: Manifest = {}
         for path, entry in d["manifest"].items():
             type_name = entry["type"]
