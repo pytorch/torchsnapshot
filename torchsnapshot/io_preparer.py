@@ -336,7 +336,7 @@ class ShardedTensorIOPreparer:
                     metadata=ShardMetadata(
                         shard_offsets=[0] * len(obj_out.shape),
                         shard_sizes=list(obj_out.shape),
-                        placement="cpu",
+                        placement=str(obj_out.device),
                     ),
                 )
             ]
