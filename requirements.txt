@@ -4,3 +4,4 @@ importlib-metadata
 psutil
 typing-extensions
 PyYAML
+torch

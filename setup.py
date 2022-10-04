@@ -12,7 +12,10 @@ from datetime import date
 from typing import List
 
 from setuptools import find_packages, setup
-from torchsnapshot import __version__
+
+# using exec_file instead of the import to avoid having to install dependencies
+# when building the wheel
+exec(open("torchsnapshot/version.py").read())
 
 
 def current_path(file_name: str) -> str:
