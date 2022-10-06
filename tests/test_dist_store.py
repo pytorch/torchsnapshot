@@ -21,8 +21,6 @@ class DistStoreTest(unittest.TestCase):
     def _test_create_store(init_pg: bool) -> None:
         if init_pg:
             dist.init_process_group(backend="gloo")
-        # pyre-fixme[6]: For 1st param expected `Optional[dist.ProcessGroup]` but
-        #  got `Optional[_distributed_c10d.ProcessGroup]`.
         pg_wrapper = PGWrapper(pg=dist.group.WORLD)
         store = create_store(pg_wrapper=pg_wrapper)
 
@@ -39,8 +37,6 @@ class DistStoreTest(unittest.TestCase):
 
     @staticmethod
     def _test_linear_barrier() -> None:
-        # pyre-fixme[6]: For 1st param expected `Optional[dist.ProcessGroup]` but
-        #  got `Optional[_distributed_c10d.ProcessGroup]`.
         pg_wrapper = PGWrapper(pg=dist.group.WORLD)
         store = get_or_create_store(pg_wrapper=pg_wrapper)
 
@@ -62,8 +58,6 @@ class DistStoreTest(unittest.TestCase):
     @staticmethod
     def _test_linear_barrier_timeout() -> None:
         dist.init_process_group(backend="gloo")
-        # pyre-fixme[6]: For 1st param expected `Optional[dist.ProcessGroup]` but
-        #  got `Optional[_distributed_c10d.ProcessGroup]`.
         pg_wrapper = PGWrapper(pg=dist.group.WORLD)
         rank = pg_wrapper.get_rank()
         store = get_or_create_store(pg_wrapper=pg_wrapper)
@@ -129,8 +123,6 @@ class DistStoreTest(unittest.TestCase):
     @staticmethod
     def _test_linear_barrier_error() -> None:
         dist.init_process_group(backend="gloo")
-        # pyre-fixme[6]: For 1st param expected `Optional[dist.ProcessGroup]` but
-        #  got `Optional[_distributed_c10d.ProcessGroup]`.
         pg_wrapper = PGWrapper(pg=dist.group.WORLD)
         rank = pg_wrapper.get_rank()
         store = get_or_create_store(pg_wrapper=pg_wrapper)
