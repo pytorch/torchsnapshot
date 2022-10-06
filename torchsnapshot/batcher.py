@@ -158,6 +158,13 @@ def batch_write_requests(  # noqa
     Returns:
         The batched write requests and updated entries.
     """
+    # For unit tests only
+    slab_size_threshold_bytes_override = os.environ.get(
+        "TORCHSNAPSHOT_SLAB_SIZE_THRESHOLD_BYTES_OVERRIDE"
+    )
+    if slab_size_threshold_bytes_override is not None:
+        slab_size_threshold_bytes = int(slab_size_threshold_bytes_override)
+
     batched_write_reqs = []
     slab_locations = [os.path.join("batched", str(uuid.uuid4()))]
     slabs: List[BatchedBufferStager.Builder] = [BatchedBufferStager.Builder()]
