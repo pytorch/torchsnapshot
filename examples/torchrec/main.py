@@ -96,7 +96,6 @@ def get_rowwise_sharding_plan(
     )
     pg = dist.group.WORLD
     assert pg is not None
-    # pyre-fixme[6]: For 3rd param expected `ProcessGroup` but got `ProcessGroup`.
     return planner.collective_plan(module=module, sharders=SHARDERS, pg=pg)
 
 
