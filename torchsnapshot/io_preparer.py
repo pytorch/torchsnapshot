@@ -77,6 +77,13 @@ class ChunkedTensorIOPreparer:
         chunking_dim: int = 0,
         chunk_sz_bytes: int = DEFAULT_MAX_CHUNK_SIZE_BYTES,
     ) -> List[Chunk]:
+        # For unit tests only
+        chunk_sz_bytes_override = os.environ.get(
+            "TORCHSNAPSHOT_MAX_CHUNK_SIZE_BYTES_OVERRIDE"
+        )
+        if chunk_sz_bytes_override is not None:
+            chunk_sz_bytes = int(chunk_sz_bytes_override)
+
         # for 0-d case, reshape to 1-d
         if tensor.ndim == 0:
             tensor = tensor.view(-1)
@@ -307,8 +314,8 @@ class ShardedTensorIOPreparer:
             out_shape = list(obj_out.shape)
         if out_shape != global_shape:
             logger.warn(
-                "The shape of obj_out ({out_shape}) is different from the "
-                "shape of the persisted sharded tensor ({global_shape}). "
+                f"The shape of obj_out ({out_shape}) is different from the "
+                f"shape of the persisted sharded tensor ({global_shape}). "
                 "Only the overlapping part will be loaded. "
             )
 
@@ -843,9 +850,18 @@ def prepare_write(
             storage_path, obj, _tensor_prepare_func
         )
     elif isinstance(obj, torch.Tensor):
-        entry, obj_write_req = TensorIOPreparer.prepare_write(
-            storage_path, obj, _tensor_prepare_func
-        )
+        chunking_instruction = ChunkedTensorIOPreparer.chunk_tensor(obj)
+        if len(chunking_instruction) > 1:
+            entry, obj_write_req = ChunkedTensorIOPreparer.prepare_write(
+                storage_path=storage_path,
+                tensor=obj,
+                chunking_instruction=chunking_instruction,
+                _tensor_prepare_func=_tensor_prepare_func,
+            )
+        else:
+            entry, obj_write_req = TensorIOPreparer.prepare_write(
+                storage_path, obj, _tensor_prepare_func
+            )
     else:
         entry, obj_write_req = ObjectIOPreparer.prepare_write(storage_path, obj)
 

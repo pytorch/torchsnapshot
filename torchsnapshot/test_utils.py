@@ -26,6 +26,7 @@ from typing import (
     TypeVar,
     Union,
 )
+
 from unittest import mock
 
 import torch
@@ -197,6 +198,33 @@ def run_with_pet(nproc: int) -> Callable[[Callable[..., None]], Callable[..., No
         def wrapper(*args, **kwargs) -> None:
             lc = get_pet_launch_config(nproc=nproc)
             pet.elastic_launch(lc, entrypoint=_launch_pad)(
+                func.__module__, func.__name__, args, kwargs
+            )
+
+        return wrapper
+
+    return _run_with_pet
+
+
+def _async_launch_pad(mod_name: str, func_name: str, args, kwargs) -> None:
+    mod = import_module(mod_name)
+    func = getattr(mod, func_name)
+    coro = func.__wrapped__(*args, **kwargs)
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+def run_with_pet_async(
+    nproc: int,
+) -> Callable[[Callable[..., Awaitable[None]]], Callable[..., None]]:
+    def _run_with_pet(func: Callable[..., Awaitable[None]]) -> Callable[..., None]:
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs) -> None:
+            lc = get_pet_launch_config(nproc=nproc)
+            pet.elastic_launch(lc, entrypoint=_async_launch_pad)(
                 func.__module__, func.__name__, args, kwargs
             )
 

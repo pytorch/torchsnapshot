@@ -18,17 +18,13 @@ import traceback
 
 from collections import defaultdict
 from datetime import timedelta
-from functools import reduce
-from operator import mul
 from threading import Thread
-from typing import Any, Callable, cast, Dict, List, Optional, Tuple, TypeVar
+from typing import Any, Callable, cast, Dict, List, Optional, Set, Tuple, TypeVar
 
-import numpy as np
 import torch
 import torch.distributed as dist
 from torch.distributed._shard.sharded_tensor import ShardedTensor
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torchsnapshot.serialization import dtype_to_element_size, string_to_dtype
 
 from .batcher import batch_read_requests, batch_write_requests
 
@@ -37,23 +33,19 @@ from .dist_store import get_or_create_store, LinearBarrier
 from .flatten import flatten, inflate
 from .io_preparer import (
     _identity_tensor_prepare_func,
-    Chunk,
-    ChunkedTensorIOPreparer,
-    get_storage_path,
     ObjectBufferConsumer,
     prepare_read,
     prepare_write,
 )
 from .io_types import ReadIO, ReadReq, StoragePlugin, WriteIO, WriteReq
 from .manifest import (
-    ChunkedTensorEntry,
     Entry,
     get_available_entries,
-    is_replicated,
     Manifest,
     PrimitiveEntry,
     SnapshotMetadata,
 )
+from .partitioner import consolidate_replicated_entries, partition_write_reqs
 from .pg_wrapper import PGWrapper
 from .rng_state import RNGState
 from .scheduler import (
@@ -71,7 +63,6 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 SNAPSHOT_METADATA_FNAME = ".snapshot_metadata"
 T = TypeVar("T")
-_CHUNKING_INSTRUCTION_T = Dict[str, List[Chunk]]
 
 
 class Snapshot:
@@ -377,50 +368,27 @@ class Snapshot:
         )
 
         object_entries: Dict[str, Entry] = {}
-        write_reqs: List[WriteReq] = []
+        logical_path_to_write_reqs: Dict[str, List[WriteReq]] = {}
 
-        chunking_instructions: Dict[str, List[Chunk]] = {}
         for logical_path, obj in flattened.items():
-            # Chunk non-sharded tensors only
-            if isinstance(obj, ShardedTensor) or not isinstance(obj, torch.Tensor):
-                continue
-            chunking_instruction = ChunkedTensorIOPreparer.chunk_tensor(obj)
-            chunking_instructions[logical_path] = chunking_instruction
-
-        chunking_instructions, filtered_logical_paths = cls._partition_logical_paths(
-            replicated_paths, chunking_instructions, flattened, pg_wrapper
-        )
-        replicated_set = set(replicated_paths)
-        for logical_path in chunking_instructions:
-            entry, cwrs = ChunkedTensorIOPreparer.prepare_write(
-                storage_path=get_storage_path(
-                    flattened[logical_path],
-                    logical_path,
-                    pg_wrapper.get_rank(),
-                    logical_path in replicated_set,
-                ),
-                tensor=flattened[logical_path],
-                chunking_instruction=chunking_instructions[logical_path],
-                _tensor_prepare_func=functools.partial(
-                    _custom_tensor_prepare_func, logical_path
-                ),
-            )
-            entry.replicated = logical_path in replicated_set
-            object_entries[logical_path] = entry
-            write_reqs.extend(cwrs)
-
-        for logical_path in filtered_logical_paths:
-            entry, item_write_reqs = prepare_write(
+            entry, wrs = prepare_write(
                 obj=flattened[logical_path],
                 logical_path=logical_path,
                 rank=pg_wrapper.get_rank(),
-                replicated=logical_path in replicated_set,
+                replicated=logical_path in replicated_paths,
                 _tensor_prepare_func=functools.partial(
                     _custom_tensor_prepare_func, logical_path
                 ),
             )
             object_entries[logical_path] = entry
-            write_reqs.extend(item_write_reqs)
+            logical_path_to_write_reqs[logical_path] = wrs
+
+        object_entries, logical_path_to_write_reqs = partition_write_reqs(
+            entries=object_entries, write_reqs=logical_path_to_write_reqs, pg=pg_wrapper
+        )
+        write_reqs: List[WriteReq] = [
+            wr for wrs in logical_path_to_write_reqs.values() for wr in wrs
+        ]
 
         if os.environ.get("TORCHSNAPSHOT_ENABLE_BATCHING") is not None:
             entry_keys = list(object_entries.keys())
@@ -634,7 +602,7 @@ class Snapshot:
     @staticmethod
     def _calculate_replicated_entries(
         flattened: Dict[str, Any], replicated: List[str], pg: PGWrapper
-    ) -> List[str]:
+    ) -> Set[str]:
         rank = pg.get_rank()
         world_size = pg.get_world_size()
         replicated_paths = []
@@ -664,7 +632,7 @@ class Snapshot:
             replicated_paths_list = [[]]
         pg.broadcast_object_list(replicated_paths_list, src=0)
         replicated_paths = replicated_paths_list[0]
-        return replicated_paths
+        return set(replicated_paths)
 
     @staticmethod
     def _validate_app_state(app_state: AppState) -> None:
@@ -817,87 +785,6 @@ path "{logical_path}" which was not available to rank {rank}.
             )
         return obj_list[0], replicated
 
-    @classmethod
-    def _partition_logical_paths(
-        cls,
-        replicated_paths: List[str],
-        chunking_instructions: _CHUNKING_INSTRUCTION_T,
-        flattened: Dict[str, Any],
-        pg_wrapper: PGWrapper,
-    ) -> Tuple[_CHUNKING_INSTRUCTION_T, List[str]]:
-        """
-        Returns:
-            Chunking instruction (for chunkable tensors) and paths to write (for nonchunkable objects).
-        """
-        if pg_wrapper.get_rank() == 0:
-            all_partition_results = cls._partition_replicated_paths(
-                replicated_paths=replicated_paths,
-                chunking_instructions=chunking_instructions,
-                world_size=pg_wrapper.get_world_size(),
-            )
-        else:
-            all_partition_results = None
-        # Scatter partition results among ranks
-        scatter_output_list = [None]
-        pg_wrapper.scatter_object_list(
-            scatter_output_list, all_partition_results, src=0
-        )
-        # pyre-ignore
-        partition_result: Tuple[
-            _CHUNKING_INSTRUCTION_T, List[str]
-        ] = scatter_output_list[0]
-
-        # Add non-replicated chunks and paths to the partition result
-        replicated_set = set(replicated_paths)
-        for path in flattened:
-            if path not in replicated_set:
-                if path in chunking_instructions:
-                    partition_result[0][path] = chunking_instructions[path]
-                else:
-                    partition_result[1].append(path)
-        return partition_result
-
-    @staticmethod
-    def _partition_replicated_paths(
-        replicated_paths: List[str],
-        chunking_instructions: Dict[str, List[Chunk]],
-        world_size: int,
-    ) -> List[Tuple[_CHUNKING_INSTRUCTION_T, List[str]]]:
-        """Partitions a list of replicated paths.
-        Returns a list of size `world_size`; each element of the list is a tuple of
-        chunking instructions for nonchunked tensors and list of paths for nonchunked objs,
-        which were assigned to a rank by a greedy partitioning alg.
-        """
-        partition_results = [({}, []) for i in range(world_size)]
-        sizes = [0] * world_size
-        chunked_paths: List[Tuple[str, Chunk, int]] = []
-        nonchunked_paths: List[str] = []
-        for path in replicated_paths:
-            if path in chunking_instructions:
-                for chunk in chunking_instructions[path]:
-                    element_size = dtype_to_element_size(string_to_dtype(chunk.dtype))
-                    chunked_paths.append(
-                        (path, chunk, reduce(mul, chunk.sizes) * element_size)
-                    )
-            else:
-                nonchunked_paths.append(path)
-
-        chunked_paths.sort(key=lambda t: t[2], reverse=True)
-
-        # Greedily assign replicated chunks among ranks, based on current sizes of ranks
-        for path, chunk, size in chunked_paths:
-            min_rank = np.argmin(sizes)
-            if path in partition_results[min_rank][0]:
-                partition_results[min_rank][0][path].append(chunk)
-            else:
-                partition_results[min_rank][0][path] = [chunk]
-            sizes[min_rank] += size
-
-        # Round-robin assign rest of replicated paths, which correspond to nonchunked objs
-        for idx, path in enumerate(nonchunked_paths):
-            partition_results[idx % world_size][1].append(path)
-        return partition_results
-
     @staticmethod
     def _infer_replicated(replicated: List[str], app_state: AppState) -> List[str]:
         new_replicated = replicated.copy()
@@ -952,35 +839,14 @@ path "{logical_path}" which was not available to rank {rank}.
             return None
 
     @staticmethod
-    def _gather_manifest(manifest: Dict[str, Any], pg: PGWrapper) -> Dict[str, Any]:
-        manifests = [None] * pg.get_world_size()
+    def _gather_manifest(manifest: Dict[str, Entry], pg: PGWrapper) -> Dict[str, Any]:
+        # pyre-ignore
+        manifests: List[Dict[str, Entry]] = [None] * pg.get_world_size()
         pg.all_gather_object(manifests, manifest)
-        manifests = cast(List[Manifest], manifests)
+        manifests = consolidate_replicated_entries(rank_to_entries=manifests)
 
         global_manifest = {}
-        replicated_entries = {}
-        for manifest in manifests:
-            for path, entry in manifest.items():
-                if not is_replicated(entry):
-                    continue
-                if path in replicated_entries:
-                    if not isinstance(entry, ChunkedTensorEntry):
-                        raise AssertionError(
-                            "Only one rank should emit the entry for a replicated path "
-                            "unless the entry is ChunkedTensorEntry."
-                        )
-                    # Merge chunks across manifests
-                    replicated_entries[path].chunks.extend(entry.chunks)
-                else:
-                    replicated_entries[path] = entry
-
-        for path in replicated_entries:
-            if isinstance(replicated_entries[path], ChunkedTensorEntry):
-                replicated_entries[path].chunks.sort(key=lambda x: x.offsets)
-
         for rank, manifest in enumerate(manifests):
-            for path, entry in replicated_entries.items():
-                manifest[path] = entry
             for logical_path, entry in manifest.items():
                 global_manifest[os.path.join(str(rank), logical_path)] = entry
         return global_manifest
