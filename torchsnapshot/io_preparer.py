@@ -123,6 +123,7 @@ class ChunkedTensorIOPreparer:
         storage_path: str,
         tensor: torch.Tensor,
         chunking_instruction: List[Chunk],
+        is_async_snapshot: bool = False,
         _tensor_prepare_func: Optional[
             Callable[[torch.Tensor, bool], torch.Tensor]
         ] = None,
@@ -132,8 +133,10 @@ class ChunkedTensorIOPreparer:
         for chunk in chunking_instruction:
             suffix = "_".join(str(x) for x in chunk.offsets)
             chunk_entry, chunk_write_reqs = TensorIOPreparer.prepare_write(
-                f"{storage_path}_{suffix}",
-                cls._get_subtensor_view(tensor, chunk),
+                storage_path=f"{storage_path}_{suffix}",
+                tensor=cls._get_subtensor_view(tensor, chunk),
+                is_async_snapshot=is_async_snapshot,
+                _tensor_prepare_func=_tensor_prepare_func,
             )
             chunks.append(
                 Shard(offsets=chunk.offsets, sizes=chunk.sizes, tensor=chunk_entry)
@@ -257,6 +260,7 @@ class ShardedTensorIOPreparer:
         cls,
         storage_path: str,
         obj: ShardedTensor,
+        is_async_snapshot: bool = False,
         _tensor_prepare_func: Optional[
             Callable[[torch.Tensor, bool], torch.Tensor]
         ] = None,
@@ -283,6 +287,7 @@ class ShardedTensorIOPreparer:
                 entry, tensor_write_reqs = TensorIOPreparer.prepare_write(
                     storage_path=f"{storage_path}_{suffix}",
                     tensor=tensor,
+                    is_async_snapshot=is_async_snapshot,
                     _tensor_prepare_func=_tensor_prepare_func,
                 )
                 write_reqs += tensor_write_reqs
@@ -507,16 +512,22 @@ class TensorBufferStager(BufferStager):
         self,
         tensor: torch.Tensor,
         entry: TensorEntry,
+        is_async_snapshot: bool,
         _tensor_prepare_func: Callable[[torch.Tensor, bool], torch.Tensor],
     ) -> None:
         self.tensor = tensor
         self.entry = entry
+        self.is_async_snapshot = is_async_snapshot
         self._tensor_prepare_func = _tensor_prepare_func
 
     async def stage_buffer(self, executor: Optional[Executor] = None) -> BufferType:
-        # TODO: if the custom prepared tensor is different from the original
+        is_tensor_custom_prepared = False
+        tensor = self._tensor_prepare_func(self.tensor, False)  # tracing=False
+        # If the custom prepared tensor is different from the original
         # tensor and is a CPU tensor, don't copy it.
-        self.tensor = self._tensor_prepare_func(self.tensor, False)  # tracing=False
+        if tensor.storage() != self.tensor.storage():
+            is_tensor_custom_prepared = True
+
         if self.tensor.is_cuda:
             # It would be nice to copy from GPU via DMA. However, it is very
             # difficult to figure out the safe amount of page-locked memory
@@ -528,11 +539,7 @@ class TensorBufferStager(BufferStager):
                 )
             else:
                 cpu_tensor = self.tensor.detach().to("cpu")
-        elif (
-            self.tensor.nelement() != self.tensor.storage().size()
-            or self.entry.serializer == Serializer.BUFFER_PROTOCOL
-        ):
-            # Avoid saving the entire storage when saving a view
+        elif not is_tensor_custom_prepared and self._should_copy_cpu_tensor():
             cpu_tensor = self.tensor.detach().clone()
         else:
             cpu_tensor = self.tensor.detach()
@@ -553,6 +560,32 @@ class TensorBufferStager(BufferStager):
             return tensor_sz_bytes
         else:
             raise ValueError(f"Unrecognized serializer: {self.entry.serializer}.")
+
+    def _should_copy_cpu_tensor(self) -> bool:
+        if self.entry.serializer == Serializer.BUFFER_PROTOCOL and (
+            self.is_async_snapshot or not self.tensor.is_contiguous()
+        ):
+            # During async snapshot, it's not safe to use
+            # tensor_as_memoryview() on the original CPU tensor, as its data
+            # may change before the snapshot complete. Thus we make a copy.
+            #
+            # If the CPU tensor is non-contiguous, tensor_as_memoryview() will
+            # make a copy. We might as well do it here.
+            return True
+        if (
+            self.entry.serializer == Serializer.TORCH_SAVE
+            and self.tensor.nelement() > self.tensor.storage().size() * 0.8
+        ):
+            # When saving a tensor view, torch.save() saves the underlying
+            # storage backing the view. When the underlying storage is far
+            # larger than the view, it makes sense to make a copy of the view
+            # before saving it.
+            #
+            # TODO: when the view maps to a contiguous region within its
+            # storage, we can create a new tensor from the slicing the untyped
+            # storage to avoid the copy.
+            return True
+        return False
 
 
 class TensorBufferConsumer(BufferConsumer):
@@ -609,6 +642,7 @@ class TensorIOPreparer:
     def prepare_write(
         storage_path: str,
         tensor: torch.Tensor,
+        is_async_snapshot: bool = False,
         _tensor_prepare_func: Optional[
             Callable[[torch.Tensor, bool], torch.Tensor]
         ] = None,
@@ -639,6 +673,7 @@ class TensorIOPreparer:
         buffer_stager = TensorBufferStager(
             tensor=tensor,
             entry=entry,
+            is_async_snapshot=is_async_snapshot,
             _tensor_prepare_func=_tensor_prepare_func,
         )
         return entry, [WriteReq(path=storage_path, buffer_stager=buffer_stager)]
@@ -824,6 +859,7 @@ def prepare_write(
     logical_path: str,
     rank: int,
     replicated: bool,
+    is_async_snapshot: bool = False,
     _tensor_prepare_func: Optional[Callable[[torch.Tensor, bool], torch.Tensor]] = None,
 ) -> Tuple[Entry, List[WriteReq]]:
     """
@@ -847,7 +883,10 @@ def prepare_write(
     storage_path = get_storage_path(obj, logical_path, rank, replicated)
     if isinstance(obj, ShardedTensor):
         return ShardedTensorIOPreparer.prepare_write(
-            storage_path, obj, _tensor_prepare_func
+            storage_path=storage_path,
+            obj=obj,
+            is_async_snapshot=is_async_snapshot,
+            _tensor_prepare_func=_tensor_prepare_func,
         )
     elif isinstance(obj, torch.Tensor):
         chunking_instruction = ChunkedTensorIOPreparer.chunk_tensor(obj)
@@ -856,11 +895,15 @@ def prepare_write(
                 storage_path=storage_path,
                 tensor=obj,
                 chunking_instruction=chunking_instruction,
+                is_async_snapshot=is_async_snapshot,
                 _tensor_prepare_func=_tensor_prepare_func,
             )
         else:
             entry, obj_write_req = TensorIOPreparer.prepare_write(
-                storage_path, obj, _tensor_prepare_func
+                storage_path=storage_path,
+                tensor=obj,
+                is_async_snapshot=is_async_snapshot,
+                _tensor_prepare_func=_tensor_prepare_func,
             )
     else:
         entry, obj_write_req = ObjectIOPreparer.prepare_write(storage_path, obj)

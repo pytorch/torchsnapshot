@@ -214,6 +214,7 @@ class Snapshot:
             pg_wrapper=PGWrapper(pg),
             storage=storage,
             event_loop=event_loop,
+            is_async_snapshot=False,
             _custom_tensor_prepare_func=_custom_tensor_prepare_func,
         )
         pending_io_work.sync_complete(event_loop=event_loop)
@@ -291,6 +292,7 @@ class Snapshot:
             pg_wrapper=PGWrapper(pg),
             storage=storage,
             event_loop=event_loop,
+            is_async_snapshot=True,
             _custom_tensor_prepare_func=_custom_tensor_prepare_func,
         )
         # PendingSnapshot is responsible for closing `storage` and `event_loop`
@@ -312,6 +314,7 @@ class Snapshot:
         pg_wrapper: PGWrapper,
         storage: StoragePlugin,
         event_loop: asyncio.AbstractEventLoop,
+        is_async_snapshot: bool,
         _custom_tensor_prepare_func: Optional[
             Callable[[str, torch.Tensor, bool], torch.Tensor]
         ] = None,
@@ -376,6 +379,7 @@ class Snapshot:
                 logical_path=logical_path,
                 rank=pg_wrapper.get_rank(),
                 replicated=logical_path in replicated_paths,
+                is_async_snapshot=is_async_snapshot,
                 _tensor_prepare_func=functools.partial(
                     _custom_tensor_prepare_func, logical_path
                 ),
