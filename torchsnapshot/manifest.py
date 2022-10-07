@@ -8,10 +8,12 @@
 # pyre-ignore-all-errors[2]: Allow `Any` in type annotations
 
 import base64
+import logging
 import struct
+from collections import defaultdict
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union
+from typing import Any, cast, Dict, List, Optional, Tuple, TypeVar, Union
 
 import yaml
 
@@ -19,6 +21,8 @@ try:
     from yaml import CSafeDumper as Dumper, CSafeLoader as Loader
 except ImportError:
     from yaml import Dumper, Loader
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -84,6 +88,25 @@ class ShardedTensorEntry(Entry):
         super().__init__(type="ShardedTensor")
         self.shards = shards
 
+    @classmethod
+    def from_yaml(cls, entry: Any) -> "ShardedTensorEntry":
+        shards = [
+            Shard(
+                offsets=shard["offsets"],
+                sizes=shard["sizes"],
+                tensor=TensorEntry(
+                    location=shard["tensor"]["location"],
+                    serializer=shard["tensor"]["serializer"],
+                    dtype=shard["tensor"]["dtype"],
+                    shape=shard["tensor"]["shape"],
+                    replicated=shard["tensor"]["replicated"],
+                    byte_range=shard["tensor"].get("byte_range"),
+                ),
+            )
+            for shard in entry["shards"]
+        ]
+        return cls(shards=shards)
+
 
 @dataclass
 class ChunkedTensorEntry(Entry):
@@ -100,6 +123,33 @@ class ChunkedTensorEntry(Entry):
         self.shape = shape
         self.chunks = chunks
         self.replicated = replicated
+
+    @classmethod
+    def from_yaml(cls, entry: Any) -> "ChunkedTensorEntry":
+        dtype = entry["dtype"]
+        replicated = entry["replicated"]
+        chunks = [
+            Shard(
+                offsets=chunk["offsets"],
+                sizes=chunk["sizes"],
+                tensor=TensorEntry(
+                    location=chunk["tensor"]["location"],
+                    serializer=chunk["tensor"]["serializer"],
+                    dtype=chunk["tensor"]["dtype"],
+                    shape=chunk["tensor"]["shape"],
+                    replicated=chunk["tensor"]["replicated"],
+                    byte_range=chunk["tensor"].get("byte_range"),
+                ),
+            )
+            for chunk in entry["chunks"]
+        ]
+        shape = entry["shape"]
+        return cls(
+            dtype=dtype,
+            shape=shape,
+            chunks=chunks,
+            replicated=replicated,
+        )
 
 
 @dataclass
@@ -273,48 +323,9 @@ class SnapshotMetadata:
             elif type_name == "Tensor":
                 manifest[path] = TensorEntry(**entry)
             elif type_name == "ShardedTensor":
-                shards = [
-                    Shard(
-                        offsets=shard["offsets"],
-                        sizes=shard["sizes"],
-                        tensor=TensorEntry(
-                            location=shard["tensor"]["location"],
-                            serializer=shard["tensor"]["serializer"],
-                            dtype=shard["tensor"]["dtype"],
-                            shape=shard["tensor"]["shape"],
-                            replicated=shard["tensor"]["replicated"],
-                            byte_range=shard["tensor"].get("byte_range"),
-                        ),
-                    )
-                    for shard in entry["shards"]
-                ]
-                manifest[path] = ShardedTensorEntry(shards=shards)
+                manifest[path] = ShardedTensorEntry.from_yaml(entry=entry)
             elif type_name == "ChunkedTensor":
-                dtype = entry["dtype"]
-                replicated = entry["replicated"]
-                chunks = [
-                    Shard(
-                        offsets=chunk["offsets"],
-                        sizes=chunk["sizes"],
-                        tensor=TensorEntry(
-                            location=chunk["tensor"]["location"],
-                            serializer=chunk["tensor"]["serializer"],
-                            dtype=chunk["tensor"]["dtype"],
-                            shape=chunk["tensor"]["shape"],
-                            replicated=chunk["tensor"]["replicated"],
-                            byte_range=chunk["tensor"].get("byte_range"),
-                        ),
-                    )
-                    for chunk in entry["chunks"]
-                ]
-                shape = entry["shape"]
-                manifest[path] = ChunkedTensorEntry(
-                    dtype=dtype,
-                    shape=shape,
-                    chunks=chunks,
-                    replicated=replicated,
-                )
-
+                manifest[path] = ChunkedTensorEntry.from_yaml(entry=entry)
             elif type_name == "object":
                 manifest[path] = ObjectEntry(**entry)
         d["manifest"] = manifest
@@ -343,49 +354,48 @@ def get_available_entries(manifest: Manifest, rank: int) -> Manifest:
     Returns:
         The local manifest for the rank.
     """
-    grouped = {}
+    logical_path_to_rank_to_entry: Dict[str, Dict[int, Entry]] = defaultdict(dict)
     for path, entry in manifest.items():
         tokens = path.split("/")[0]
         entry_rank = int(tokens[0])
-        local_path = "/".join(path.split("/")[1:])
-        if local_path not in grouped:
-            grouped[local_path] = {}
-        grouped[local_path][entry_rank] = entry
+        logical_path = "/".join(path.split("/")[1:])
+        logical_path_to_rank_to_entry[logical_path][entry_rank] = entry
 
     local_manifest = {}
-    for local_path, group in grouped.items():
-        entries = list(group.values())
+    for logical_path, rank_to_entry in logical_path_to_rank_to_entry.items():
+        entries = list(rank_to_entry.values())
 
-        # If the entry is sharded, make all shards available to all ranks.
-        if isinstance(entries[0], ShardedTensorEntry):
-            local_manifest[local_path] = ShardedTensorEntry(
-                shards=[shard for entry in entries for shard in entry.shards]
+        # The logical path corresponds to a replicated entry
+        if is_replicated(entries[0]):
+            local_manifest.setdefault(logical_path, entries[0])
+        # The logical path corresponds to a ShardedTensor entry
+        elif isinstance(entries[0], ShardedTensorEntry):
+            local_manifest[logical_path] = ShardedTensorEntry(
+                shards=[
+                    shard
+                    for entry in entries
+                    for shard in cast(ShardedTensorEntry, entry).shards
+                ]
             )
-        elif isinstance(
-            entries[0], (TensorEntry, ObjectEntry, ChunkedTensorEntry, PrimitiveEntry)
-        ):
-            if rank in group:
-                local_manifest[local_path] = group[rank]
-            # The current rank did not save the entry. Only make the entry
-            # available to the rank if the entry is replicated.
-            elif entries[0].replicated:
-                local_manifest[local_path] = entries[0]
-        elif isinstance(entries[0], (ListEntry, DictEntry, OrderedDictEntry)):
-            # Container entries are only used for reconstructing the original
-            # state dicts.
-            pass
+        # The logical path corresponds to a per-rank entry
+        elif rank in rank_to_entry:
+            # Skip container entries
+            if is_container_entry(rank_to_entry[rank]):
+                continue
+            local_manifest[logical_path] = rank_to_entry[rank]
+        # The logical path doesn't exist for this rank
         else:
-            raise RuntimeError(
-                f"Unknown entry type: {type(entries[0])} ({entries[0].type})."
-            )
+            pass
 
     return local_manifest
 
 
 def is_replicated(entry: Entry) -> bool:
-    return (
-        isinstance(
-            entry, (TensorEntry, ObjectEntry, ChunkedTensorEntry, PrimitiveEntry)
-        )
-        and entry.replicated
-    )
+    if not hasattr(entry, "replicated"):
+        return False
+    # pyre-ignore
+    return entry.replicated
+
+
+def is_container_entry(entry: Entry) -> bool:
+    return isinstance(entry, (ListEntry, DictEntry, OrderedDictEntry))
