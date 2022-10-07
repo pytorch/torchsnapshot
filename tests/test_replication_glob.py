@@ -5,19 +5,18 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-import os
-import tempfile
-import unittest
+from pathlib import Path
 from typing import Any, Dict, List
+
+import pytest
 
 import torch
 import torch.distributed as dist
-import torch.distributed.launcher as pet
-import torchsnapshot
-from torchsnapshot import Snapshot, Stateful
-from torchsnapshot.manifest import is_replicated, SnapshotMetadata
-from torchsnapshot.snapshot import SNAPSHOT_METADATA_FNAME
-from torchsnapshot.test_utils import get_pet_launch_config
+from torchsnapshot import Snapshot
+from torchsnapshot.manifest import is_replicated
+from torchsnapshot.test_utils import run_with_pet
+
+_WORLD_SIZE: int = 2
 
 
 class _TestStateful:
@@ -33,123 +32,87 @@ class _TestStateful:
         raise NotImplementedError()
 
 
-class ReplicationGlobTest(unittest.TestCase):
-    @staticmethod
-    def _worker(path: str, replication_globs: List[List[str]]) -> None:
-        """
-        Take a snapshot of a _TestStateful object with the given replication globs.
-        """
-        dist.init_process_group(backend="gloo")
-        stateful: Stateful = _TestStateful()
-        app_state: Dict[str, Stateful] = {"my_stateful": stateful}
-        torchsnapshot.Snapshot.take(
-            path=path,
-            app_state=app_state,
-            replicated=replication_globs[dist.get_rank()],
-        )
-
-    def _test_helper(
-        self,
-        nproc: int,
-        replication_globs: List[List[str]],
-        expected_replicated_paths: List[str],
-    ) -> None:
-        """
-        Verify whether the supplied replication globs result in expected
-        replicated paths.
-        """
-        lc = get_pet_launch_config(nproc=nproc)
-        with tempfile.TemporaryDirectory() as path:
-            pet.elastic_launch(lc, entrypoint=self._worker)(path, replication_globs)
-            with open(os.path.join(path, SNAPSHOT_METADATA_FNAME)) as f:
-                metadata = SnapshotMetadata.from_yaml(f.read())
-
-        replicated_paths = [
-            path for path in metadata.manifest if is_replicated(metadata.manifest[path])
-        ]
-        self.assertSetEqual(set(replicated_paths), set(expected_replicated_paths))
-
-    def test_all_replicated(self) -> None:
-        replication_globs = [["**"]] * 2
-        expected_replicated_paths = [
-            "0/my_stateful/foo",
-            "0/my_stateful/bar",
-            "0/my_stateful/baz/0",
-            "0/my_stateful/baz/1",
-            "0/my_stateful/qux/quux",
-            "0/my_stateful/qux/quuz",
-            "1/my_stateful/foo",
-            "1/my_stateful/bar",
-            "1/my_stateful/baz/0",
-            "1/my_stateful/baz/1",
-            "1/my_stateful/qux/quux",
-            "1/my_stateful/qux/quuz",
-        ]
-        self._test_helper(2, replication_globs, expected_replicated_paths)
-
-    def test_partially_replicated(self) -> None:
-        replication_globs = [["my_stateful/baz/*", "my_stateful/qux/*"]] * 2
-        expected_replicated_paths = [
-            "0/my_stateful/baz/0",
-            "0/my_stateful/baz/1",
-            "0/my_stateful/qux/quux",
-            "0/my_stateful/qux/quuz",
-            "1/my_stateful/baz/0",
-            "1/my_stateful/baz/1",
-            "1/my_stateful/qux/quux",
-            "1/my_stateful/qux/quuz",
-        ]
-        self._test_helper(2, replication_globs, expected_replicated_paths)
-
-    def test_different_replication_globs_across_ranks(self) -> None:
-        replication_globs = [
-            ["my_stateful/foo", "my_stateful/qux/*"],
-            ["my_stateful/foo", "my_stateful/baz/*"],
-        ]
-        expected_replicated_paths = [
-            "0/my_stateful/foo",
-            "1/my_stateful/foo",
-        ]
-        self._test_helper(2, replication_globs, expected_replicated_paths)
+@pytest.mark.parametrize(
+    "replication_globs, expected_replicated_paths",
+    [
+        (
+            [["**"]] * _WORLD_SIZE,
+            [
+                "0/my_stateful/foo",
+                "0/my_stateful/bar",
+                "0/my_stateful/baz/0",
+                "0/my_stateful/baz/1",
+                "0/my_stateful/qux/quux",
+                "0/my_stateful/qux/quuz",
+            ],
+        ),
+        (
+            [["my_stateful/baz/*", "my_stateful/qux/*"]] * _WORLD_SIZE,
+            [
+                "0/my_stateful/baz/0",
+                "0/my_stateful/baz/1",
+                "0/my_stateful/qux/quux",
+                "0/my_stateful/qux/quuz",
+            ],
+        ),
+        (
+            [
+                ["my_stateful/foo", "my_stateful/qux/*"],
+                ["my_stateful/foo", "my_stateful/bax/*"],
+            ],
+            ["0/my_stateful/foo"],
+        ),
+    ],
+)
+@run_with_pet(nproc=_WORLD_SIZE)
+def test_replication_glob(
+    replication_globs: List[List[str]],
+    expected_replicated_paths: List[str],
+    tmp_path: Path,
+) -> None:
+    dist.init_process_group(backend="gloo")
+    app_state = {"my_stateful": _TestStateful()}
+    snapshot = Snapshot.take(
+        path=str(tmp_path),
+        app_state=app_state,
+        replicated=replication_globs[dist.get_rank()],
+    )
+    replicated_paths = [
+        path for path, entry in snapshot.get_manifest().items() if is_replicated(entry)
+    ]
+    assert set(replicated_paths) == set(expected_replicated_paths)
 
 
-class CoalesceReplicationGlobTest(unittest.TestCase):
-    def test_all_globs_coalesce(self) -> None:
-        local_replicated = ["my_stateful/foo", "my_stateful/qux"]
-        global_replicated = [
+@pytest.mark.parametrize(
+    "global_replicated, expected_replicated",
+    [
+        (
+            [
+                ["my_stateful/foo", "my_stateful/qux"],
+                ["my_stateful/foo", "my_stateful/qux"],
+            ],
             ["my_stateful/foo", "my_stateful/qux"],
-            ["my_stateful/foo", "my_stateful/qux"],
-        ]
-
-        verified_replicated = Snapshot._coalesce_replicated(
-            local_replicated, global_replicated
-        )
-        expected_replicated = ["my_stateful/foo", "my_stateful/qux"]
-        self.assertEqual(set(verified_replicated), set(expected_replicated))
-
-    def test_partial_globs_coalesce(self) -> None:
-        local_replicated = ["my_stateful/foo", "my_stateful/qux"]
-        global_replicated = [
-            ["my_stateful/foo", "my_stateful/qux"],
-            ["my_stateful/foo", "my_stateful/baz"],
-        ]
-
-        verified_replicated = Snapshot._coalesce_replicated(
-            local_replicated, global_replicated
-        )
-        expected_replicated = ["my_stateful/foo"]
-        self.assertEqual(set(verified_replicated), set(expected_replicated))
-
-    def test_no_globs_coalesce(self) -> None:
-        local_replicated = ["my_stateful/foo"]
-        global_replicated = [
+        ),
+        (
+            [
+                ["my_stateful/foo", "my_stateful/qux"],
+                ["my_stateful/foo", "my_stateful/baz"],
+            ],
             ["my_stateful/foo"],
-            ["my_stateful/foo"],
-            ["my_stateful/qux"],
-        ]
-
-        verified_replicated = Snapshot._coalesce_replicated(
-            local_replicated, global_replicated
-        )
-        expected_replicated = []
-        self.assertEqual(set(verified_replicated), set(expected_replicated))
+        ),
+        (
+            [
+                ["my_stateful/foo"],
+                ["my_stateful/qux"],
+            ],
+            [],
+        ),
+    ],
+)
+def test_coalesce_replicated(
+    global_replicated: List[List[str]],
+    expected_replicated: List[str],
+) -> None:
+    assert sorted(
+        Snapshot._coalesce_replicated(global_replicated=global_replicated)
+    ) == sorted(expected_replicated)
