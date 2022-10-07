@@ -99,6 +99,9 @@ class ShardedTensorIOPreparerTest(unittest.TestCase):
         )
         tc.assertEqual(loaded.nelement(), loaded.storage().size())
 
+        if isinstance(buf, memoryview):
+            buf = buf.tobytes()
+
         # Randomize the original sharded tensor before restoring
         torch.nn.init.normal_(shard_view, mean=0, std=1.0)
         tc.assertFalse(torch.allclose(shard_view, shard_copy))
@@ -107,8 +110,6 @@ class ShardedTensorIOPreparerTest(unittest.TestCase):
 
         # For this sharded tensor, each rank writes 1 shard
         tc.assertEqual(len(read_reqs), 1)
-        if isinstance(buf, memoryview):
-            buf = buf.tobytes()
         loop.run_until_complete(read_reqs[0].buffer_consumer.consume_buffer(buf))
 
         # Verify that the original sharded tensor gets restored

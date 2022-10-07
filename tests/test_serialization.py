@@ -8,6 +8,8 @@
 import itertools
 import unittest
 
+import pytest
+
 import torch
 
 from torchsnapshot.serialization import (
@@ -22,7 +24,7 @@ from torchsnapshot.serialization import (
     tensor_as_memoryview,
     tensor_from_memoryview,
 )
-from torchsnapshot.test_utils import rand_tensor
+from torchsnapshot.test_utils import rand_tensor, tensor_eq
 
 
 class SerializationTest(unittest.TestCase):
@@ -114,3 +116,19 @@ class SerializationTest(unittest.TestCase):
                 self.assertTrue(
                     torch.allclose(qtensor.dequantize(), deserialized.dequantize())
                 )
+
+
+@pytest.mark.parametrize("dtype", BUFFER_PROTOCOL_SUPPORTED_DTYPES)
+def test_tensor_as_memoryview_for_continuous_view(dtype: torch.dtype) -> None:
+    """
+    Verify that tensor_as_memoryview() behaves correctly for continuous views.
+    """
+    tensor = rand_tensor((64, 64), dtype=dtype)
+    cont_view = tensor[32:, :]
+    assert cont_view.is_contiguous()
+
+    mv = tensor_as_memoryview(cont_view)
+    assert len(mv) == cont_view.nelement() * cont_view.element_size()
+
+    deserialized_view = tensor_from_memoryview(mv=mv, dtype=dtype, shape=[32, 64])
+    assert tensor_eq(deserialized_view, cont_view)

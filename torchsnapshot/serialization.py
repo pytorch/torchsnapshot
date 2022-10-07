@@ -191,12 +191,23 @@ def _tensor_as_memoryview_via_untyped_storage(tensor: torch.Tensor) -> memoryvie
     Returns:
         The class::`memoryview` of the input tensor.
     """
+    if not tensor.is_contiguous():
+        raise AssertionError(
+            "_tensor_as_memoryview_via_untyped_storage can be only used "
+            "with contiguous tensors"
+        )
     if hasattr(tensor.storage(), "_untyped"):
         # TODO: drop this once PyTorch 1.12 is no longer supported
         # https://github.com/pytorch/pytorch/pull/82438
         untyped_storage = tensor.storage()._untyped()
     else:
         untyped_storage = tensor.storage().untyped()
+    untyped_storage = untyped_storage[
+        tensor.storage_offset()
+        * tensor.element_size() : tensor.storage_offset()
+        * tensor.element_size()
+        + tensor.nelement() * tensor.element_size()
+    ]
     tensor = torch.empty((0))
     tensor.set_(untyped_storage)
     return memoryview(tensor.numpy()).cast("b")
