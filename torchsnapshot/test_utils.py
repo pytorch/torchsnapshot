@@ -13,6 +13,7 @@ import unittest
 import uuid
 from contextlib import contextmanager
 from importlib import import_module
+from tempfile import NamedTemporaryFile
 
 from typing import (
     Any,
@@ -186,6 +187,22 @@ def get_pet_launch_config(nproc: int) -> pet.LaunchConfig:
     )
 
 
+@contextmanager
+def _tempfile_pet_launch_config(nproc: int) -> Generator[pet.LaunchConfig, None, None]:
+    with NamedTemporaryFile() as f:
+        yield pet.LaunchConfig(
+            min_nodes=1,
+            max_nodes=1,
+            nproc_per_node=nproc,
+            run_id=str(uuid.uuid4()),
+            rdzv_backend="c10d",
+            rdzv_configs={"timeout": 10, "store_type": "file"},
+            rdzv_endpoint=f.name,
+            max_restarts=0,
+            monitor_interval=1,
+        )
+
+
 def _launch_pad(mod_name: str, func_name: str, args, kwargs) -> None:
     mod = import_module(mod_name)
     func = getattr(mod, func_name)
@@ -196,10 +213,10 @@ def run_with_pet(nproc: int) -> Callable[[Callable[..., None]], Callable[..., No
     def _run_with_pet(func: Callable[..., None]) -> Callable[..., None]:
         @functools.wraps(func)
         def wrapper(*args, **kwargs) -> None:
-            lc = get_pet_launch_config(nproc=nproc)
-            pet.elastic_launch(lc, entrypoint=_launch_pad)(
-                func.__module__, func.__name__, args, kwargs
-            )
+            with _tempfile_pet_launch_config(nproc=nproc) as lc:
+                pet.elastic_launch(lc, entrypoint=_launch_pad)(
+                    func.__module__, func.__name__, args, kwargs
+                )
 
         return wrapper
 
@@ -223,10 +240,10 @@ def run_with_pet_async(
     def _run_with_pet(func: Callable[..., Awaitable[None]]) -> Callable[..., None]:
         @functools.wraps(func)
         def wrapper(*args, **kwargs) -> None:
-            lc = get_pet_launch_config(nproc=nproc)
-            pet.elastic_launch(lc, entrypoint=_async_launch_pad)(
-                func.__module__, func.__name__, args, kwargs
-            )
+            with _tempfile_pet_launch_config(nproc=nproc) as lc:
+                pet.elastic_launch(lc, entrypoint=_async_launch_pad)(
+                    func.__module__, func.__name__, args, kwargs
+                )
 
         return wrapper
 
