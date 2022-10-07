@@ -41,6 +41,7 @@ from .io_types import ReadIO, ReadReq, StoragePlugin, WriteIO, WriteReq
 from .manifest import (
     Entry,
     get_available_entries,
+    is_replicated,
     Manifest,
     PrimitiveEntry,
     SnapshotMetadata,
@@ -848,6 +849,17 @@ path "{logical_path}" which was not available to rank {rank}.
         manifests: List[Dict[str, Entry]] = [None] * pg.get_world_size()
         pg.all_gather_object(manifests, manifest)
         manifests = consolidate_replicated_entries(rank_to_entries=manifests)
+
+        # Remove replicated entries from non-zero ranks to reduce the size and
+        # serialization time of the yaml. In restore()/read_object(),
+        # replicated entries will be made available to all ranks via
+        # get_available_entries().
+        for rank, manifest in enumerate(manifests):
+            if rank == 0:
+                continue
+            manifests[rank] = {
+                k: v for k, v in manifest.items() if not is_replicated(v)
+            }
 
         global_manifest = {}
         for rank, manifest in enumerate(manifests):

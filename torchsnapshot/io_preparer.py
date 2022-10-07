@@ -318,7 +318,7 @@ class ShardedTensorIOPreparer:
         else:
             out_shape = list(obj_out.shape)
         if out_shape != global_shape:
-            logger.warn(
+            logger.warning(
                 f"The shape of obj_out ({out_shape}) is different from the "
                 f"shape of the persisted sharded tensor ({global_shape}). "
                 "Only the overlapping part will be loaded. "
