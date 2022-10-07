@@ -22,6 +22,7 @@ from typing import (
     Dict,
     Generator,
     List,
+    Optional,
     Tuple,
     TypeVar,
     Union,
@@ -100,7 +101,10 @@ def check_state_dict_eq(lhs: Dict[Any, Any], rhs: Dict[Any, Any]) -> bool:
 
 
 def rand_tensor(
-    shape: Union[Tuple[int, ...], List[int], torch.Size], dtype: torch.dtype
+    shape: Union[Tuple[int, ...], List[int], torch.Size],
+    dtype: torch.dtype,
+    qscheme: Optional[torch.qscheme] = torch.per_tensor_affine,
+    channel_axis: Optional[int] = None,
 ) -> torch.Tensor:
     """
     Create a tensor and initialize randomly for testing purposes.
@@ -121,9 +125,20 @@ def rand_tensor(
     elif dtype == torch.bool:
         return torch.randint(2, shape, dtype=dtype)
     elif dtype in SUPPORTED_QUANTIZED_DTYPES:
-        return torch.quantize_per_tensor(
-            torch.rand(shape), scale=0.1, zero_point=10, dtype=dtype
-        )
+        if qscheme == torch.per_tensor_affine:
+            return torch.quantize_per_tensor(
+                torch.rand(shape), scale=0.1, zero_point=10, dtype=dtype
+            )
+        elif qscheme == torch.per_channel_affine:
+            return torch.quantize_per_channel(
+                torch.rand(shape),
+                torch.rand(shape[channel_axis or 0]),
+                torch.randint(128, (shape[channel_axis or 0],)),
+                axis=channel_axis or 0,
+                dtype=dtype,
+            )
+        else:
+            raise AssertionError(f"Unrecognized qscheme: {qscheme}.")
     else:
         return torch.randint(torch.iinfo(dtype).max, shape, dtype=dtype)
 
