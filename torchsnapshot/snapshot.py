@@ -41,6 +41,7 @@ from .io_types import ReadIO, ReadReq, StoragePlugin, WriteIO, WriteReq
 from .manifest import (
     Entry,
     get_available_entries,
+    is_replicated,
     Manifest,
     PrimitiveEntry,
     SnapshotMetadata,
@@ -198,7 +199,7 @@ class Snapshot:
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(pg=pg)
 
-        path, replicated = cls._coalesce_path_and_replicated(
+        path, coalesced_replicated = cls._coalesce_path_and_replicated(
             path=path,
             pg_wrapper=pg_wrapper,
             app_state=app_state,
@@ -210,7 +211,7 @@ class Snapshot:
         pending_io_work, metadata = cls._take_impl(
             path=path,
             app_state=app_state,
-            replicated=replicated or [],
+            replicated=coalesced_replicated,
             pg_wrapper=PGWrapper(pg),
             storage=storage,
             event_loop=event_loop,
@@ -275,7 +276,7 @@ class Snapshot:
 
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(pg=pg)
-        path, replicated = cls._coalesce_path_and_replicated(
+        path, coalesced_replicated = cls._coalesce_path_and_replicated(
             path=path,
             pg_wrapper=pg_wrapper,
             app_state=app_state,
@@ -288,7 +289,7 @@ class Snapshot:
         pending_io_work, metadata = cls._take_impl(
             path=path,
             app_state=app_state,
-            replicated=replicated or [],
+            replicated=coalesced_replicated,
             pg_wrapper=PGWrapper(pg),
             storage=storage,
             event_loop=event_loop,
@@ -310,7 +311,7 @@ class Snapshot:
         cls,
         path: str,
         app_state: AppState,
-        replicated: List[str],
+        replicated: Set[str],
         pg_wrapper: PGWrapper,
         storage: StoragePlugin,
         event_loop: asyncio.AbstractEventLoop,
@@ -348,6 +349,7 @@ class Snapshot:
         # potential interleaving of different collectives, we first gather the
         # global key list, then invoke .state_dict() on stateful objects in
         # order with synchronization.
+        # TODO: merge this with coalesce path to save an all_gather call
         global_keys = cls._gather_keys(
             keys=list(app_state.keys()), pg_wrapper=pg_wrapper
         )
@@ -605,7 +607,7 @@ class Snapshot:
 
     @staticmethod
     def _calculate_replicated_entries(
-        flattened: Dict[str, Any], replicated: List[str], pg: PGWrapper
+        flattened: Dict[str, Any], replicated: Set[str], pg: PGWrapper
     ) -> Set[str]:
         rank = pg.get_rank()
         world_size = pg.get_world_size()
@@ -760,7 +762,7 @@ path "{logical_path}" which was not available to rank {rank}.
         pg_wrapper: PGWrapper,
         app_state: AppState,
         replicated: List[str],
-    ) -> Tuple[str, List[str]]:
+    ) -> Tuple[str, Set[str]]:
 
         rank = pg_wrapper.get_rank()
 
@@ -775,19 +777,22 @@ path "{logical_path}" which was not available to rank {rank}.
                 f"different from rank 0 ({obj_list[0]}). Using path specified by rank 0."
             )
 
+        # TODO: this should be folded into _calculate_replicated_entries
         # coalesce replicated
         replicated = cls._infer_replicated(replicated, app_state)
         # pyre-ignore[9]
         global_replicated: List[List[str]] = [None] * pg_wrapper.get_world_size()
         pg_wrapper.all_gather_object(global_replicated, replicated)
 
-        replicated = cls._coalesce_replicated(replicated, global_replicated)
-        if set(global_replicated[rank]) != set(replicated):
+        coalesced_replicated = cls._coalesce_replicated(
+            global_replicated=global_replicated
+        )
+        if set(replicated) != coalesced_replicated:
             logger.warning(
                 f"Rank {rank} specified replicated paths: {set(global_replicated[rank])} "
                 f"different from replicated paths verified across all ranks: {set(replicated)}"
             )
-        return obj_list[0], replicated
+        return obj_list[0], coalesced_replicated
 
     @staticmethod
     def _infer_replicated(replicated: List[str], app_state: AppState) -> List[str]:
@@ -808,10 +813,8 @@ path "{logical_path}" which was not available to rank {rank}.
         return new_replicated
 
     @staticmethod
-    def _coalesce_replicated(
-        replicated: List[str], global_replicated: List[List[str]]
-    ) -> List[str]:
-        verified_replicated = list(set.intersection(*map(set, global_replicated)))
+    def _coalesce_replicated(global_replicated: List[List[str]]) -> Set[str]:
+        verified_replicated = set.intersection(*map(set, global_replicated))
         return verified_replicated
 
     @staticmethod
@@ -848,6 +851,17 @@ path "{logical_path}" which was not available to rank {rank}.
         manifests: List[Dict[str, Entry]] = [None] * pg.get_world_size()
         pg.all_gather_object(manifests, manifest)
         manifests = consolidate_replicated_entries(rank_to_entries=manifests)
+
+        # Remove replicated entries from non-zero ranks to reduce the size and
+        # serialization time of the yaml. In restore()/read_object(),
+        # replicated entries will be made available to all ranks via
+        # get_available_entries().
+        for rank, manifest in enumerate(manifests):
+            if rank == 0:
+                continue
+            manifests[rank] = {
+                k: v for k, v in manifest.items() if not is_replicated(v)
+            }
 
         global_manifest = {}
         for rank, manifest in enumerate(manifests):

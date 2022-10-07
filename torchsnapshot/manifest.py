@@ -368,8 +368,11 @@ def get_available_entries(manifest: Manifest, rank: int) -> Manifest:
         # The logical path corresponds to a replicated entry
         if is_replicated(entries[0]):
             local_manifest.setdefault(logical_path, entries[0])
-        # The logical path corresponds to a ShardedTensor entry
+        # The logical path corresponds to a ShardedTensorEntry
         elif isinstance(entries[0], ShardedTensorEntry):
+            # TODO: on save, we should enforce the following invariants that if
+            # a logical path on one rank is a ShardedTensorEntry, the logical
+            # path on all ranks that has the logical path is a ShardedTensorEntry.
             local_manifest[logical_path] = ShardedTensorEntry(
                 shards=[
                     shard
