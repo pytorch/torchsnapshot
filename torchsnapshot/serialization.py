@@ -132,7 +132,8 @@ def string_to_dtype(s: str) -> torch.dtype:
 class Serializer(Enum):
     TORCH_SAVE = "torch_save"
     BUFFER_PROTOCOL = "buffer_protocol"
-    PER_TENSOR_AFFINE_QTENSOR = "per_tensor_affine_qtensor"
+    PER_TENSOR_QTENSOR = "per_tensor_qtensor"
+    PER_CHANNEL_QTENSOR = "per_channel_qtensor"
 
 
 BUFFER_PROTOCOL_SUPPORTED_DTYPES: List[torch.dtype] = [
@@ -234,9 +235,9 @@ def torch_load_from_bytes(buf: bytes) -> torch.Tensor:
     return torch.load(io.BytesIO(buf))
 
 
-def per_tensor_affine_qtensor_as_bytes(tensor: torch.Tensor) -> bytes:
+def per_tensor_qtensor_as_bytes(tensor: torch.Tensor) -> bytes:
     """
-    Serialize a `per_tensor_affine` quantized tensor.
+    Serialize a per-tensor quantized tensor.
 
     Binary format:
 
@@ -252,14 +253,14 @@ def per_tensor_affine_qtensor_as_bytes(tensor: torch.Tensor) -> bytes:
     and shape which are stored separately.
 
     Args:
-        tensor: The `per_tensor_affine` quantized tensor to serialize.
+        tensor: The per-tensor quantized tensor to serialize.
 
     Returns:
         The serialized tensor.
     """
     if not tensor.is_quantized or tensor.qscheme == torch.per_tensor_affine:
         raise RuntimeError(
-            "per_tensor_affine_qtensor_as_bytes() only supports "
+            "per_tensor_qtensor_as_bytes() only supports "
             "per_tensor_affine quantized tensor."
         )
     buf = io.BytesIO()
@@ -269,11 +270,11 @@ def per_tensor_affine_qtensor_as_bytes(tensor: torch.Tensor) -> bytes:
     return buf.getvalue()
 
 
-def per_tensor_affine_qtensor_from_bytes(
+def per_tensor_qtensor_from_bytes(
     buf: bytes, dtype: torch.dtype, shape: List[int]
 ) -> torch.Tensor:
     """
-    Deserialize a `per_tensor_affine` quantized tensor.
+    Deserialize a per-channel quantized tensor.
 
     NOTE: this is a zero-copy deserialization, meaning that the deserialized
     tensor directly uses the input buffer as its storage. The deserialized
@@ -295,6 +296,15 @@ def per_tensor_affine_qtensor_from_bytes(
         strides.append(curr_stride)
 
     data_sz_bytes = nelements * dtype_to_element_size(dtype)
+
+    expected_buf_len = data_sz_bytes + 16
+    if len(buf) != expected_buf_len:
+        raise RuntimeError(
+            "The expected buffer size for the per-tensor quantized tensor "
+            f"(dtype: {dtype}, shape: {shape}) is {expected_buf_len}. "
+            f"The size of the input buffer is {len(buf)}."
+        )
+
     data = buf[:data_sz_bytes]
     scale = struct.unpack("d", buf[data_sz_bytes : data_sz_bytes + 8])[0]
     zero_point = struct.unpack("q", buf[data_sz_bytes + 8 : data_sz_bytes + 16])[0]
@@ -313,39 +323,39 @@ def per_tensor_affine_qtensor_from_bytes(
     return qtensor
 
 
-def per_channel_affine_qtensor_as_bytes(tensor: torch.Tensor) -> bytes:
+def per_channel_qtensor_as_bytes(tensor: torch.Tensor) -> bytes:
     """
-    Serialize a `per_channel_affine` quantized tensor.
+    Serialize a per-channel quantized tensor.
 
     Binary format:
 
     +------------------------------------------+ 0 bytes
-    |             tensor storage               |
-    +------------------------------------------+ nelement * element_size bytes
     |                  axis                    |
-    +------------------------------------------+ nelement * element_size + 8 bytes
+    +------------------------------------------+ 8 bytes
+    |             tensor storage               |
+    +------------------------------------------+ 8 + nelement * element_size bytes
     |   q_per_channel_scales tensor storage    |
-    +------------------------------------------+ nelement * element_size + 8 + 8 * shape[axis] bytes
+    +------------------------------------------+ 8 + nelement * element_size + 8 * shape[axis] bytes
     | q_per_channel_zero_points tensor storage |
-    +------------------------------------------+ nelement * element_size + 8 + 16 * shape[axis] bytes
+    +------------------------------------------+ 8 + nelement * element_size + 16 * shape[axis] bytes
 
     On deserialization, nelement and element_size can be inferred from dtype
     and shape which are stored separately.
 
     Args:
-        tensor: The `per_channel_affine` quantized tensor to serialize.
+        tensor: The per-channel quantized tensor to serialize.
 
     Returns:
         The serialized tensor.
     """
     if not tensor.is_quantized or tensor.qscheme == torch.per_channel_affine:
         raise RuntimeError(
-            "per_channel_affine_qtensor_as_bytes() only supports "
+            "per_channel_qtensor_as_bytes() only supports "
             "per_channel_affine quantized tensor."
         )
     buf = io.BytesIO()
-    buf.write(_tensor_as_memoryview_via_untyped_storage(tensor))
     buf.write(struct.pack("q", tensor.q_per_channel_axis()))
+    buf.write(_tensor_as_memoryview_via_untyped_storage(tensor))
     buf.write(
         tensor_as_memoryview(tensor.q_per_channel_scales().to(dtype=torch.float64))
     )
@@ -355,11 +365,11 @@ def per_channel_affine_qtensor_as_bytes(tensor: torch.Tensor) -> bytes:
     return buf.getvalue()
 
 
-def per_channel_affine_qtensor_from_bytes(
+def per_channel_qtensor_from_bytes(
     buf: bytes, dtype: torch.dtype, shape: List[int]
 ) -> torch.Tensor:
     """
-    Deserialize a `per_channel_affine` quantized tensor.
+    Deserialize a per-channel quantized tensor.
 
     NOTE: this is a zero-copy deserialization, meaning that the deserialized
     tensor directly uses the input buffer as its storage. The deserialized
@@ -381,15 +391,29 @@ def per_channel_affine_qtensor_from_bytes(
         strides.append(curr_stride)
 
     data_sz_bytes = nelements * dtype_to_element_size(dtype)
-    data = buf[:data_sz_bytes]
-    axis = struct.unpack("q", buf[data_sz_bytes : data_sz_bytes + 8])[0]
+    axis = struct.unpack("q", buf[:8])[0]
 
-    scales_data = buf[data_sz_bytes + 8 : data_sz_bytes + 8 + 8 * shape[axis]]
+    if axis < 0 or axis >= len(shape):
+        raise RuntimeError(
+            f"Read invalid axis ({axis}) from the input buffer when deserializing "
+            f"the per-channel quantized tensor (dtype: {dtype}, shape: {shape})."
+        )
+
+    expected_buf_len = data_sz_bytes + 8 + 16 * shape[axis]
+    if len(buf) != expected_buf_len:
+        raise RuntimeError(
+            "The expected buffer size for the per-channel quantized tensor "
+            f"(dtype: {dtype}, shape: {shape}, axis: {axis}) is {expected_buf_len}. "
+            f"The size of the input buffer is {len(buf)}."
+        )
+
+    data = buf[8 : 8 + data_sz_bytes]
+    scales_data = buf[8 + data_sz_bytes : data_sz_bytes + 8 + 8 * shape[axis]]
     scales_tensor = tensor_from_memoryview(
         mv=memoryview(scales_data), shape=[shape[axis]], dtype=torch.float64
     )
     zero_points_data = buf[
-        data_sz_bytes + 8 + 8 * shape[axis] : data_sz_bytes + 8 + 16 * shape[axis]
+        8 + data_sz_bytes + 8 * shape[axis] : 8 + data_sz_bytes + 16 * shape[axis]
     ]
     zero_points_tensor = tensor_from_memoryview(
         mv=memoryview(zero_points_data), shape=[shape[axis]], dtype=torch.int64
