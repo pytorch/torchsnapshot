@@ -5,120 +5,179 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-import asyncio
 import copy
+import os
 import unittest
-from typing import List, Tuple
+from typing import Generator, List, Set, Tuple
+
+import pytest
 
 import torch
 
 import torch.distributed as dist
-import torch.distributed.launcher as pet
-import torchsnapshot.manifest as manifest
+
+from _pytest.fixtures import SubRequest  # @manual
+from torch.distributed._shard import sharded_tensor
 from torch.distributed._shard.metadata import ShardMetadata
+from torch.distributed._shard.sharding_spec import (
+    ChunkShardingSpec,
+    EnumerableShardingSpec,
+    ShardingSpec,
+)
 
-from torch.distributed._shard.sharded_tensor import init_from_local_shards, Shard
+from torchsnapshot.io_preparer import (
+    ShardedTensorIOPreparer,
+    TensorBufferConsumer,
+    TensorIOPreparer,
+)
 
-from torchsnapshot.io_preparer import ShardedTensorIOPreparer
-from torchsnapshot.serialization import string_to_dtype, tensor_from_memoryview
-from torchsnapshot.test_utils import get_pet_launch_config
+from torchsnapshot.test_utils import run_with_pet_async, tensor_eq
+
+WORLD_SIZE = 4
+
+
+@pytest.fixture(params=[("chunk", 0), ("chunk", 1), ("enumerate", None)])
+def sharding_spec(shape: Tuple[int, int], request: SubRequest) -> ShardingSpec:
+    """
+    Fixture for generating different sharding specs given the global shape.
+    """
+    sharding_type, dim = request.param
+    if sharding_type == "chunk":
+        # pyre-ignore
+        return ChunkShardingSpec(
+            dim=dim, placements=[f"rank:{rank}/cpu" for rank in range(WORLD_SIZE)]
+        )
+
+    assert sharding_type == "enumerate"
+    #     b    d
+    #   +----+---+
+    # a |    |   |
+    #   +----+---+
+    # c |    |   |
+    #   +----+---+
+    a = shape[0] // 2
+    b = shape[1] // 2
+    c = shape[0] - shape[0] // 2
+    d = shape[1] - shape[1] // 2
+    return EnumerableShardingSpec(
+        [
+            ShardMetadata(
+                shard_offsets=[0, 0],
+                shard_sizes=[a, b],
+                placement="rank:0/cpu",
+            ),
+            ShardMetadata(
+                shard_offsets=[0, b],
+                shard_sizes=[a, d],
+                placement="rank:1/cpu",
+            ),
+            ShardMetadata(
+                shard_offsets=[a, 0],
+                shard_sizes=[c, b],
+                placement="rank:2/cpu",
+            ),
+            ShardMetadata(
+                shard_offsets=[a, b],
+                shard_sizes=[c, d],
+                placement="rank:3/cpu",
+            ),
+        ]
+    )
+
+
+@pytest.fixture
+def enable_subdivision(
+    shape: Tuple[int, int], request: SubRequest
+) -> Generator[bool, None, None]:
+    if not request.param:
+        yield False
+        return
+    tensor_sz_bytes = shape[0] * shape[1] * 4
+    os.environ["TORCHSNAPSHOT_MAX_SHARD_SIZE_BYTES_OVERRIDE"] = str(
+        tensor_sz_bytes // WORLD_SIZE // WORLD_SIZE
+    )
+    yield True
+    del os.environ["TORCHSNAPSHOT_MAX_SHARD_SIZE_BYTES_OVERRIDE"]
+
+
+@pytest.mark.parametrize("shape", [(128, 128), (127, 129)])
+@pytest.mark.parametrize("enable_subdivision", [True, False], indirect=True)
+@run_with_pet_async(nproc=WORLD_SIZE)
+async def test_sharded_tensor_io_preparer(
+    shape: Tuple[int, int], sharding_spec: ShardingSpec, enable_subdivision: bool
+) -> None:
+    """
+    Verify the basic behavior of ShardedTensorIOPreparer.
+    """
+    dist.init_process_group("gloo")
+    src = sharded_tensor.empty(sharding_spec, *shape)
+    dst = sharded_tensor.empty(sharding_spec, *shape)
+    for st in [src, dst]:
+        for shard in st.local_shards():
+            shard.tensor.random_()
+
+    entry, write_reqs = ShardedTensorIOPreparer.prepare_write(
+        storage_path="/foo", obj=src
+    )
+    assert len(entry.shards) == len(write_reqs)
+
+    if enable_subdivision:
+        # When subdivision is enabled, we have more write requests than local
+        # shards, and each write request corresponds to a subview of a local
+        # shard.
+        assert len(src.local_shards()) < len(write_reqs)
+        for shard_entry, shard in zip(entry.shards, src.local_shards()):
+            assert (
+                TensorIOPreparer.get_tensor_size_from_entry(shard_entry.tensor)
+                < shard.tensor.storage().size() * shard.tensor.element_size()
+            )
+    else:
+        assert len(src.local_shards()) == len(write_reqs)
+        for shard_entry, shard in zip(entry.shards, src.local_shards()):
+            assert (
+                TensorIOPreparer.get_tensor_size_from_entry(shard_entry.tensor)
+                == shard.tensor.storage().size() * shard.tensor.element_size()
+            )
+
+    # Verify no overlapping locations among local shards
+    locations = set()
+    for shard, wr in zip(entry.shards, write_reqs):
+        assert shard.tensor.location == wr.path
+        locations.add(wr.path)
+
+    assert len(locations) == len(write_reqs)
+
+    # Verify no overlapping locations among global shards
+    # pyre-ignore
+    obj_list: List[Set[str]] = [None] * dist.get_world_size()
+    dist.all_gather_object(obj_list, locations)
+    all_locations = [location for ls in obj_list for location in ls]
+    assert len(set(all_locations)) == len(all_locations)
+
+    location_to_buf = {
+        wr.path: bytes(await wr.buffer_stager.stage_buffer()) for wr in write_reqs
+    }
+
+    # Verify that the size of the storage of a persisted shard matches with the
+    # shape of the shard (as opposed to the size of the storage of the shard).
+    for idx, buf in enumerate(location_to_buf.values()):
+        deserialized = TensorBufferConsumer.deserialize_tensor(
+            buf=buf, entry=entry.shards[idx].tensor
+        )
+        assert (
+            deserialized.storage().size() * deserialized.element_size()
+            == TensorIOPreparer.get_tensor_size_from_entry(entry.shards[idx].tensor)
+        )
+
+    # Consume the buffers with dst and verify that src == dst
+    assert not tensor_eq(src, dst)
+    read_reqs = ShardedTensorIOPreparer.prepare_read(entry=entry, obj_out=dst)
+    for rr in read_reqs:
+        await rr.buffer_consumer.consume_buffer(buf=location_to_buf[rr.path])
+    assert tensor_eq(src, dst)
 
 
 class ShardedTensorIOPreparerTest(unittest.TestCase):
-    @staticmethod
-    def _worker() -> None:
-        """
-        Perform a series of sanity test against ShardedTensorIOPreparer.
-        """
-        dim_0: int = 128
-        dim_1: int = 16
-
-        dist.init_process_group(backend="gloo")
-        torch.manual_seed(42 + dist.get_rank())
-        global_tensor = torch.rand((dim_0, dim_1))
-
-        rank = dist.get_rank()
-        world_sz = dist.get_world_size()
-        chunk_sz = int(dim_0 / world_sz)
-        begin = rank * chunk_sz
-
-        shard_view = torch.narrow(global_tensor, 0, begin, chunk_sz)
-        shard_copy = copy.deepcopy(shard_view)
-        shard = Shard(
-            tensor=shard_view,
-            metadata=ShardMetadata(
-                shard_offsets=[begin, 0],
-                shard_sizes=[chunk_sz, dim_1],
-                placement=f"rank:{rank}/cpu",
-            ),
-        )
-        sharded_tensor = init_from_local_shards([shard], (dim_0, dim_1))
-
-        entry, write_reqs = ShardedTensorIOPreparer.prepare_write(
-            "/foo", sharded_tensor
-        )
-
-        tc = unittest.TestCase()
-
-        # The path is determined by torch.distributed which is experiemental
-        # and subject to change
-        tc.assertEqual(
-            entry,
-            manifest.ShardedTensorEntry(
-                shards=[
-                    manifest.Shard(
-                        offsets=[begin, 0],
-                        sizes=[chunk_sz, dim_1],
-                        tensor=manifest.TensorEntry(
-                            location=f"/foo_{begin}_0",
-                            serializer="buffer_protocol",
-                            dtype="torch.float32",
-                            shape=[chunk_sz, dim_1],
-                            replicated=False,
-                        ),
-                    )
-                ]
-            ),
-        )
-
-        # For this sharded tensor, each rank writes 1 shard
-        tc.assertEqual(len(write_reqs), 1)
-
-        # The path is determined by torch.distributed which is experiemental
-        # and subject to change
-        tc.assertEqual(write_reqs[0].path, f"/foo_{begin}_0")
-
-        loop = asyncio.new_event_loop()
-        buf = loop.run_until_complete(write_reqs[0].buffer_stager.stage_buffer())
-
-        # Make sure only the data described by the view gets persisted
-        loaded = tensor_from_memoryview(
-            mv=memoryview(buf),
-            dtype=string_to_dtype(entry.shards[0].tensor.dtype),
-            shape=entry.shards[0].tensor.shape,
-        )
-        tc.assertEqual(loaded.nelement(), loaded.storage().size())
-
-        if isinstance(buf, memoryview):
-            buf = buf.tobytes()
-
-        # Randomize the original sharded tensor before restoring
-        torch.nn.init.normal_(shard_view, mean=0, std=1.0)
-        tc.assertFalse(torch.allclose(shard_view, shard_copy))
-
-        read_reqs = ShardedTensorIOPreparer.prepare_read(entry, sharded_tensor)
-
-        # For this sharded tensor, each rank writes 1 shard
-        tc.assertEqual(len(read_reqs), 1)
-        loop.run_until_complete(read_reqs[0].buffer_consumer.consume_buffer(buf))
-
-        # Verify that the original sharded tensor gets restored
-        tc.assertTrue(torch.allclose(shard_view, shard_copy))
-
-    def test_sharded_tensor_io_preparer(self) -> None:
-        lc = get_pet_launch_config(nproc=4)
-        pet.elastic_launch(lc, entrypoint=self._worker)()
-
     def _verify_subdivided_shards(
         self,
         subdivided: List[Tuple[torch.Tensor, List[int], List[int]]],

@@ -265,6 +265,15 @@ class ShardedTensorIOPreparer:
             Callable[[torch.Tensor, bool], torch.Tensor]
         ] = None,
     ) -> Tuple[ShardedTensorEntry, List[WriteReq]]:
+        max_shard_sz_bytes = cls.DEFAULT_MAX_SHARD_SIZE_BYTES
+
+        # For unit tests only
+        max_shard_sz_bytes_override = os.environ.get(
+            "TORCHSNAPSHOT_MAX_SHARD_SIZE_BYTES_OVERRIDE"
+        )
+        if max_shard_sz_bytes_override is not None:
+            max_shard_sz_bytes = int(max_shard_sz_bytes_override)
+
         shards = []
         write_reqs = []
         for shard in obj.local_shards():
@@ -273,13 +282,12 @@ class ShardedTensorIOPreparer:
                 sharding_dim = sharding_spec.dim
             else:
                 sharding_dim = 0
-
             subdivided = cls.subdivide_shard(
                 shard=shard.tensor,
                 offsets=shard.metadata.shard_offsets,
                 sizes=shard.metadata.shard_sizes,
                 dim=sharding_dim,
-                max_shard_sz_bytes=cls.DEFAULT_MAX_SHARD_SIZE_BYTES,
+                max_shard_sz_bytes=max_shard_sz_bytes,
             )
 
             for tensor, offsets, sizes in subdivided:
