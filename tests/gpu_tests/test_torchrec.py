@@ -20,7 +20,7 @@ import torch.distributed as dist
 import torchsnapshot
 
 from torch.distributed._shard.sharded_tensor import ShardedTensor
-from torchsnapshot.io_preparer import ShardedTensorIOPreparer
+from torchsnapshot.knobs import override_max_shard_size_bytes
 from torchsnapshot.test_utils import run_with_pet
 
 
@@ -209,7 +209,7 @@ def test_torchrec(
             )
 
     # Make sure we are testing sharded tensor subdivision
-    ShardedTensorIOPreparer.DEFAULT_MAX_SHARD_SIZE_BYTES = smallest_shard_sz // 2 - 1
+    override_max_shard_size_bytes(smallest_shard_sz // 2 - 1).__enter__()
 
     # Take a snapshot of src_dmp
     if use_async:

@@ -38,6 +38,7 @@ from .io_preparer import (
     prepare_write,
 )
 from .io_types import ReadIO, ReadReq, StoragePlugin, WriteIO, WriteReq
+from .knobs import get_is_batching_enabled
 from .manifest import (
     Entry,
     get_available_entries,
@@ -396,7 +397,7 @@ class Snapshot:
             wr for wrs in logical_path_to_write_reqs.values() for wr in wrs
         ]
 
-        if os.environ.get("TORCHSNAPSHOT_ENABLE_BATCHING") is not None:
+        if get_is_batching_enabled():
             entry_keys = list(object_entries.keys())
             entries = list(object_entries.values())
             entries, write_reqs = batch_write_requests(
@@ -574,7 +575,7 @@ class Snapshot:
                 # by the buffer consumer.
                 buffer_consumer.set_consume_callback(functools.partial(box.append))
 
-        if os.environ.get("TORCHSNAPSHOT_ENABLE_BATCHING") is not None:
+        if get_is_batching_enabled():
             read_reqs = batch_read_requests(read_reqs=read_reqs)
 
         sync_execute_read_reqs(
@@ -719,7 +720,7 @@ path "{logical_path}" which was not available to rank {rank}.
                     )
             read_reqs += rrs
 
-        if os.environ.get("TORCHSNAPSHOT_ENABLE_BATCHING") is not None:
+        if get_is_batching_enabled():
             read_reqs = batch_read_requests(read_reqs=read_reqs)
 
         memory_budget_bytes = get_process_memory_budget_bytes(pg=pg)

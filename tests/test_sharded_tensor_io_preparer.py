@@ -6,7 +6,6 @@
 # LICENSE file in the root directory of this source tree.
 
 import copy
-import os
 import unittest
 from typing import Generator, List, Set, Tuple
 
@@ -30,6 +29,8 @@ from torchsnapshot.io_preparer import (
     TensorBufferConsumer,
     TensorIOPreparer,
 )
+
+from torchsnapshot.knobs import override_max_shard_size_bytes
 
 from torchsnapshot.test_utils import run_with_pet_async, tensor_eq
 
@@ -91,13 +92,10 @@ def enable_subdivision(
 ) -> Generator[bool, None, None]:
     if not request.param:
         yield False
-        return
-    tensor_sz_bytes = shape[0] * shape[1] * 4
-    os.environ["TORCHSNAPSHOT_MAX_SHARD_SIZE_BYTES_OVERRIDE"] = str(
-        tensor_sz_bytes // WORLD_SIZE // WORLD_SIZE
-    )
-    yield True
-    del os.environ["TORCHSNAPSHOT_MAX_SHARD_SIZE_BYTES_OVERRIDE"]
+    else:
+        max_shard_size_bytes = shape[0] * shape[1] * 4 // WORLD_SIZE // WORLD_SIZE
+        with override_max_shard_size_bytes(max_shard_size_bytes):
+            yield True
 
 
 @pytest.mark.parametrize("shape", [(128, 128), (127, 129)])

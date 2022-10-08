@@ -5,7 +5,6 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-import os
 from functools import reduce
 from operator import mul
 from pathlib import Path
@@ -18,6 +17,10 @@ import torch.distributed as dist
 import torchsnapshot
 from _pytest.fixtures import SubRequest  # @manual
 from torch.nn.parallel import DistributedDataParallel
+from torchsnapshot.knobs import (
+    override_max_chunk_size_bytes,
+    override_slab_size_threshold_bytes,
+)
 from torchsnapshot.test_utils import check_state_dict_eq, run_with_pet
 
 
@@ -36,13 +39,9 @@ def enable_chunking(
     if not request.param:
         yield
         return
-    min_layer_size_bytes = min(reduce(mul, ls) for ls in layer_shapes) * 4
-
-    os.environ["TORCHSNAPSHOT_MAX_CHUNK_SIZE_BYTES_OVERRIDE"] = str(
-        min_layer_size_bytes // WORLD_SIZE
-    )
-    yield
-    del os.environ["TORCHSNAPSHOT_MAX_CHUNK_SIZE_BYTES_OVERRIDE"]
+    max_chunk_size_bytes = min(reduce(mul, ls) for ls in layer_shapes) * 4
+    with override_max_chunk_size_bytes(max_chunk_size_bytes):
+        yield
 
 
 @pytest.fixture(params=[True, False])
@@ -53,11 +52,8 @@ def enable_batcher(
         yield
         return
     total_layer_size_bytes = sum(reduce(mul, ls) for ls in layer_shapes) * 4
-    os.environ["TORCHSNAPSHOT_SLAB_SIZE_THRESHOLD_BYTES_OVERRIDE"] = str(
-        total_layer_size_bytes * 2
-    )
-    yield
-    del os.environ["TORCHSNAPSHOT_SLAB_SIZE_THRESHOLD_BYTES_OVERRIDE"]
+    with override_slab_size_threshold_bytes(total_layer_size_bytes * 2):
+        yield
 
 
 @pytest.mark.usefixtures("enable_chunking", "enable_batcher")

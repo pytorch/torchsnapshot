@@ -16,10 +16,9 @@ from typing import Dict, List, Optional, Tuple
 from .io_preparer import TensorBufferStager, TensorIOPreparer
 
 from .io_types import BufferConsumer, BufferStager, BufferType, ReadReq, WriteReq
+from .knobs import get_slab_size_threshold_bytes
 from .manifest import ChunkedTensorEntry, Entry, ShardedTensorEntry, TensorEntry
 from .serialization import Serializer
-
-_DEFAULT_SLAB_SIZE_THRESHOLD_BYTES: int = 128 * 1024 * 1024
 
 
 class BatchedBufferStager(BufferStager):
@@ -99,7 +98,7 @@ class BatchedBufferStager(BufferStager):
 def batch_write_requests(  # noqa
     entries: List[Entry],
     write_reqs: List[WriteReq],
-    slab_size_threshold_bytes: int = _DEFAULT_SLAB_SIZE_THRESHOLD_BYTES,
+    slab_size_threshold_bytes: Optional[int] = None,
 ) -> Tuple[List[Entry], List[WriteReq]]:
     """
     Batch small write requests into fewer large write requests.
@@ -159,13 +158,9 @@ def batch_write_requests(  # noqa
     Returns:
         The batched write requests and updated entries.
     """
-    # For unit tests only
-    slab_size_threshold_bytes_override = os.environ.get(
-        "TORCHSNAPSHOT_SLAB_SIZE_THRESHOLD_BYTES_OVERRIDE"
+    slab_size_threshold_bytes = (
+        slab_size_threshold_bytes or get_slab_size_threshold_bytes()
     )
-    if slab_size_threshold_bytes_override is not None:
-        slab_size_threshold_bytes = int(slab_size_threshold_bytes_override)
-
     batched_write_reqs = []
     slab_locations = [os.path.join("batched", str(uuid.uuid4()))]
     slabs: List[BatchedBufferStager.Builder] = [BatchedBufferStager.Builder()]

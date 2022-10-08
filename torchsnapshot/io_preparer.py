@@ -35,6 +35,7 @@ from torch.distributed._shard.sharding_spec._internals import (
 )
 
 from .io_types import BufferConsumer, BufferStager, BufferType, ReadReq, WriteReq
+from .knobs import get_max_chunk_size_bytes, get_max_shard_size_bytes
 from .manifest import (
     ChunkedTensorEntry,
     Entry,
@@ -67,22 +68,14 @@ class Chunk:
     dtype: str
 
 
-DEFAULT_MAX_CHUNK_SIZE_BYTES: int = 512 * 1024 * 1024
-
-
 class ChunkedTensorIOPreparer:
     @staticmethod
     def chunk_tensor(
         tensor: torch.Tensor,
         chunking_dim: int = 0,
-        chunk_sz_bytes: int = DEFAULT_MAX_CHUNK_SIZE_BYTES,
+        chunk_sz_bytes: Optional[int] = None,
     ) -> List[Chunk]:
-        # For unit tests only
-        chunk_sz_bytes_override = os.environ.get(
-            "TORCHSNAPSHOT_MAX_CHUNK_SIZE_BYTES_OVERRIDE"
-        )
-        if chunk_sz_bytes_override is not None:
-            chunk_sz_bytes = int(chunk_sz_bytes_override)
+        chunk_sz_bytes = chunk_sz_bytes or get_max_chunk_size_bytes()
 
         # for 0-d case, reshape to 1-d
         if tensor.ndim == 0:
@@ -172,8 +165,6 @@ class ChunkedTensorIOPreparer:
 
 
 class ShardedTensorIOPreparer:
-    DEFAULT_MAX_SHARD_SIZE_BYTES: int = 512 * 1024 * 1024
-
     @staticmethod
     def subdivide_shard(
         shard: torch.Tensor,
@@ -265,15 +256,6 @@ class ShardedTensorIOPreparer:
             Callable[[torch.Tensor, bool], torch.Tensor]
         ] = None,
     ) -> Tuple[ShardedTensorEntry, List[WriteReq]]:
-        max_shard_sz_bytes = cls.DEFAULT_MAX_SHARD_SIZE_BYTES
-
-        # For unit tests only
-        max_shard_sz_bytes_override = os.environ.get(
-            "TORCHSNAPSHOT_MAX_SHARD_SIZE_BYTES_OVERRIDE"
-        )
-        if max_shard_sz_bytes_override is not None:
-            max_shard_sz_bytes = int(max_shard_sz_bytes_override)
-
         shards = []
         write_reqs = []
         for shard in obj.local_shards():
@@ -287,7 +269,7 @@ class ShardedTensorIOPreparer:
                 offsets=shard.metadata.shard_offsets,
                 sizes=shard.metadata.shard_sizes,
                 dim=sharding_dim,
-                max_shard_sz_bytes=max_shard_sz_bytes,
+                max_shard_sz_bytes=get_max_shard_size_bytes(),
             )
 
             for tensor, offsets, sizes in subdivided:
