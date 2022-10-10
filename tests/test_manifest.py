@@ -7,9 +7,12 @@
 
 import json
 from dataclasses import asdict
-from typing import Dict
+from typing import Dict, Generator
+from unittest.mock import patch
 
 import pytest
+
+from _pytest.fixtures import SubRequest  # @manual
 
 from torchsnapshot.manifest import (
     ChunkedTensorEntry,
@@ -221,6 +224,23 @@ _MANIFEST_1: Dict[str, Entry] = {
 }
 
 
+@pytest.fixture(params=[True, False])
+def use_cyaml(request: SubRequest) -> Generator[None, None, None]:
+    if request.param:
+        from yaml import CSafeDumper, CSafeLoader
+
+        with patch("torchsnapshot.manifest.Dumper", CSafeDumper):
+            with patch("torchsnapshot.manifest.Loader", CSafeLoader):
+                yield
+    else:
+        from yaml import SafeDumper, SafeLoader
+
+        with patch("torchsnapshot.manifest.Dumper", SafeDumper):
+            with patch("torchsnapshot.manifest.Loader", SafeLoader):
+                yield
+
+
+@pytest.mark.usefixtures("use_cyaml")
 @pytest.mark.parametrize("manifest", [_MANIFEST_0, _MANIFEST_1])
 def test_manifest_yaml_serialization(manifest: Dict[str, Entry]) -> None:
     metadata = SnapshotMetadata(
@@ -233,6 +253,7 @@ def test_manifest_yaml_serialization(manifest: Dict[str, Entry]) -> None:
     assert metadata.manifest == loaded_metadata.manifest
 
 
+@pytest.mark.usefixtures("use_cyaml")
 @pytest.mark.parametrize("manifest", [_MANIFEST_0, _MANIFEST_1])
 def test_manifest_json_serialization(manifest: Dict[str, Entry]) -> None:
     """

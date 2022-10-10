@@ -20,7 +20,7 @@ import yaml
 try:
     from yaml import CSafeDumper as Dumper, CSafeLoader as Loader
 except ImportError:
-    from yaml import Dumper, Loader
+    from yaml import SafeDumper as Dumper, SafeLoader as Loader
 
 logger: logging.Logger = logging.getLogger(__name__)
 
