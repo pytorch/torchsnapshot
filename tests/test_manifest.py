@@ -5,6 +5,8 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+import json
+from dataclasses import asdict
 from typing import Dict
 
 import pytest
@@ -229,6 +231,32 @@ def test_manifest_yaml_serialization(manifest: Dict[str, Entry]) -> None:
     yaml_str = metadata.to_yaml()
     loaded_metadata = SnapshotMetadata.from_yaml(yaml_str=yaml_str)
     assert metadata.manifest == loaded_metadata.manifest
+
+
+@pytest.mark.parametrize("manifest", [_MANIFEST_0, _MANIFEST_1])
+def test_manifest_json_serialization(manifest: Dict[str, Entry]) -> None:
+    """
+    Verify that when the metadata is serialized via json, it is load-able with
+    the yaml loader.
+
+    When the number of entries in the snapshot metadata is very large, yaml
+    serialization becomes a bottleneck and there's little we can do to
+    optimize. We likely need to switch to json to overcome this. Fortunately,
+    when our metadata is serialized via json, it is compatible with the yaml
+    loader, so we can make the switch in a backward compatible fashion. This
+    test makes sure that we don't do anything crazy with the metadata to break
+    this compatibility.
+    """
+    metadata = SnapshotMetadata(
+        version="0.0.0",
+        world_size=_WORLD_SIZE,
+        manifest=manifest,
+    )
+    yaml_str = metadata.to_yaml()
+    json_str = json.dumps(asdict(metadata))
+    metadata_from_yaml = SnapshotMetadata.from_yaml(yaml_str=yaml_str)
+    metadata_from_json = SnapshotMetadata.from_yaml(yaml_str=json_str)
+    assert metadata_from_json == metadata_from_yaml
 
 
 @pytest.mark.parametrize("manifest", [_MANIFEST_0, _MANIFEST_1])
