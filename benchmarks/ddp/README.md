@@ -4,15 +4,21 @@
 sbatch --partition=[PARTITION] --nodes=[NUM_NODES] --gpus-per-task=[NUM_GPUS_PER_NODE] run.slurm
 ```
 
-## Results
+## Benchmark
 
-Environment: p4d.24xlarge
+PyTorch version: 1.13.0.dev20220915+cu113
 
-Storage: FSx for Lustre
+Benchmark environment: p4d.24xlarge
 
-| Nodes x GPUs | Avg Param Size | Param Count | torch.save | torchsnapshot |
-| ------------ | -------------- | ----------- | ---------- | ------------- |
-| 1 x 1 | 100MB | 180 | ~49s | ~45s |
-| 1 x 8 | 100MB | 180 | ~49s | ~14s |
-| 2 x 8 | 100MB | 180 | ~49s | ~7s |
-| 4 x 8 | 100MB | 180 | ~49s | ~5s |
+Model size: 20GB
+
+| Storage Type | Nodes x GPUs | torch.save | torchsnapshot |
+| ------------ | ------------ | ---------- | ------------- |
+| Local FS | 1 x 1 | ~32s | ~13.91s |
+| Local FS | 1 x 8 | ~32s | ~3.38s |
+| Local FS | 2 x 8 | ~32s | ~2.02s |
+| Local FS | 4 x 8 | ~32s | ~1.29s |
+| FSx for Lustre | 1 x 1 |  ~38s | ~14.52s |
+| FSx for Lustre | 1 x 8 |  ~38s | ~7.61s |
+| FSx for Lustre | 2 x 8 |  ~38s | ~4.61s |
+| FSx for Lustre | 4 x 8 |  ~38s | ~2.68s |
