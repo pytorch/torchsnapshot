@@ -14,6 +14,24 @@ from .stateful import Stateful
 from .version import __version__
 
 
+def _is_notebook() -> bool:
+    try:
+        from IPython import get_ipython  # pyre-ignore  # @manual
+
+        return (
+            get_ipython().__class__.__name__ == "ZMQInteractiveShell"  # Jupyter
+            or get_ipython().__class__.__module__ == "google.colab._shell"  # Colab
+        )
+    except ImportError:
+        return False
+
+
+# https://github.com/jupyter/notebook/issues/3397
+if _is_notebook():
+    import nest_asyncio
+
+    nest_asyncio.apply()
+
 __all__ = [
     "__version__",
     "Snapshot",
