@@ -1,7 +1,8 @@
+PyYAML
 aiofiles
 aiohttp
 importlib-metadata
+nest_asyncio
 psutil
-typing-extensions
-PyYAML
 torch
+typing-extensions
