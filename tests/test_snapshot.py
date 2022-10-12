@@ -134,6 +134,10 @@ class SnapshotTest(unittest.TestCase):
             _assert_primitive_entry_with_type("0/key/bytes_key", "bytes")
             _assert_primitive_entry_with_type("0/key/float_key", "float")
 
+            assert snapshot.metadata.manifest["0/key/float_key"].readable == str(
+                state["float_key"]
+            )
+
             snapshot.restore({"key": restored_state})
 
             assert state == restored_state
