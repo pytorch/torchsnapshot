@@ -10,12 +10,12 @@
 
 **This library is currently in Alpha and currently does not have a stable release. The API may change and may not be backward compatible. If you have suggestions for improvements, please open a GitHub issue. We'd love to hear your feedback.**
 
-A light-weight library for adding fault tolerance to large-scale PyTorch distributed training workloads.
+A performant, memory-efficient checkpointing library for PyTorch applications, designed with large, complex distributed workloads in mind.
 
 
 ## Install
 
-Requires Python >= 3.7 and PyTorch >= 1.11
+Requires Python >= 3.7 and PyTorch >= 1.12
 
 From pip:
 
@@ -26,52 +26,46 @@ pip install --pre torchsnapshot-nightly
 From source:
 
 ```bash
-git clone https://github.com/facebookresearch/torchsnapshot
+git clone https://github.com/pytorch/torchsnapshot
 cd torchsnapshot
 pip install -r requirements.txt
 python setup.py install
 ```
 
-## Concepts
-- **Stateful object** - an object that whose state can be obtained via `.state_dict()` and restored via `.load_state_dict()`. Most PyTorch components (e.g. `Module`, `Optimizer`, `LRScheduler`) already implement this [protocol](https://github.com/facebookresearch/torchsnapshot/blob/main/torchsnapshot/stateful.py).
-- **App state** - the application state described using multiple stateful objects.
-- **Snapshot** - the persisted app state.
+## Why TorchSnapshot
+
+**Performance**
+- TorchSnapshot provides a fast checkpointing implementation employing various optimizations, including zero-copy serialization for most tensor types, overlapped device-to-host copy and storage I/O, parallelized storage I/O.
+- TorchSnapshot greatly speeds up checkpointing for DistributedDataParallel workloads by distributing the write load across all ranks ([benchmark](https://github.com/pytorch/torchsnapshot/tree/main/benchmarks/ddp)).
+- When host memory is abundant, TorchSnapshot allows training to resume before all storage I/O completes, reducing the time blocked by checkpoint saving.
+
+**Memory Usage**
+- TorchSnapshot's memory usage adapts to the host's available resources, greatly reducing the chance of out-of-memory issues when saving and loading checkpoints.
+- TorchSnapshot supports efficient random access to individual objects within a snapshot, even when the snapshot is stored in a cloud object storage.
+
+**Usability**
+- Simple APIs that are consistent between distributed and non-distributed workloads.
+- Out of the box integration with commonly used cloud object storage systems.
+- Automatic resharding (elasticity) on world size change for supported workloads ([more details](https://pytorch.org/torchsnapshot/getting_started.html#elasticity-experimental)).
+
+**Security**
+- Secure tensor serialization without pickle dependency [WIP].
 
 
-## Basic Usage
+## Getting Started
 
-Describing the application state with multiple stateful objects:
-```python
-app_state = {"model": model, "optimizer": optimizer}
-```
-
-
-Taking a snapshot of the application state:
 ```python
 from torchsnapshot import Snapshot
 
-# File System
-snapshot = Snapshot.take(path="/foo/bar/baz", app_state=app_state)
+# Taking a snapshot
+app_state = {"model": model, "optimizer": optimizer}
+snapshot = Snapshot.take(app_state=app_state, "/path/to/snapshot")
 
-# S3
-snapshot = Snapshot.take(path="s3://foo/bar", app_state=app_state)
-
-# Google Cloud Storage
-snapshot = Snapshot.take(path="gcs://foo/bar", app_state=app_state)
-```
-
-Referencing an existing snapshot:
-```python
-snapshot = Snapshot(path="foo/bar/baz")
-```
-
-
-Restoring the application state from a snapshot:
-```python
+# Restoring from a snapshot
 snapshot.restore(app_state=app_state)
 ```
 
-See the [example directory](https://github.com/facebookresearch/torchsnapshot/tree/main/examples) for more examples.
+See the [documentation](https://pytorch.org/torchsnapshot/getting_started.html) for more details.
 
 
 ## License
