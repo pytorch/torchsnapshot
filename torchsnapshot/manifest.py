@@ -212,17 +212,17 @@ class PrimitiveEntry(Entry):
     """
 
     serialized_value: str
-    readable: Optional[str]
     replicated: bool
+    readable: Optional[str]
 
     def __init__(
         self,
-        primitive_type: PrimitiveType,
+        type: str,
         serialized_value: str,
         replicated: bool,
         readable_value: Optional[str] = None,
     ) -> None:
-        super().__init__(type=primitive_type.value)
+        super().__init__(type=type)
         self.serialized_value = serialized_value
         self.replicated = replicated
         self.readable = readable_value
@@ -270,12 +270,12 @@ class PrimitiveEntry(Entry):
     @classmethod
     def from_object(cls, obj: Any) -> "PrimitiveEntry":
         type_name = type(obj).__name__
-        try:
-            type_enum = PrimitiveType(type_name)
-            serialized_value = cls._serialize(type_name, obj)
-            return PrimitiveEntry(type_enum, serialized_value, False)
-        except ValueError:
+        if type_name not in cls.supported_types():
             raise TypeError(f"Unsupported primitive obj of type {type_name}")
+
+        serialized_value = cls._serialize(type_name, obj)
+        readable_value = str(obj) if type_name == "float" else None
+        return PrimitiveEntry(type_name, serialized_value, False, readable_value)
 
     @classmethod
     def from_serialized(
@@ -285,11 +285,10 @@ class PrimitiveEntry(Entry):
         replicated: bool,
         readable: Optional[str],
     ) -> "PrimitiveEntry":
-        try:
-            type_enum = PrimitiveType(type_name)
-            return PrimitiveEntry(type_enum, serialized_value, replicated)
-        except ValueError:
+        if type_name not in cls.supported_types():
             raise TypeError(f"Unsupported primitive obj of type {type_name}")
+
+        return PrimitiveEntry(type_name, serialized_value, replicated)
 
 
 T = TypeVar("T", bound=Entry)
