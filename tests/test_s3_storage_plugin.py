@@ -26,7 +26,27 @@ _TEST_BUCKET = "torchsnapshot-test"
 _TENSOR_SZ = int(1_000_000 / 4)
 
 
+@pytest.fixture
+def s3_health_check() -> None:
+    """
+    S3 access can be flaky on Gihub Action. Only run the tests if the health
+    check passes.
+    """
+    try:
+        import boto3  # pyre-ignore  # @manual
+
+        s3 = boto3.client("s3")
+        data = b"hello"
+        key = str(uuid.uuid4())
+        s3.upload_fileobj(io.BytesIO(data), _TEST_BUCKET, key)
+        s3.download_fileobj(_TEST_BUCKET, key, io.BytesIO())
+    except Exception as e:
+        pytest.skip(f"Skipping the test becuase s3 health check failed: {e}")
+
+
+@pytest.mark.s3_integration_test
 @pytest.mark.skipif(os.environ.get("TORCHSNAPSHOT_ENABLE_AWS_TEST") is None, reason="")
+@pytest.mark.usefixtures("s3_health_check")
 def test_s3_read_write_via_snapshot() -> None:
     path = f"s3://{_TEST_BUCKET}/{uuid.uuid4()}"
     logger.info(path)
@@ -42,7 +62,9 @@ def test_s3_read_write_via_snapshot() -> None:
     assert torch.allclose(tensor, app_state["state"]["tensor"])
 
 
+@pytest.mark.s3_integration_test
 @pytest.mark.skipif(os.environ.get("TORCHSNAPSHOT_ENABLE_AWS_TEST") is None, reason="")
+@pytest.mark.usefixtures("s3_health_check")
 @pytest.mark.asyncio
 async def test_s3_write_read_delete() -> None:
     path = f"{_TEST_BUCKET}/{uuid.uuid4()}"
@@ -65,7 +87,9 @@ async def test_s3_write_read_delete() -> None:
     await plugin.close()
 
 
+@pytest.mark.s3_integration_test
 @pytest.mark.skipif(os.environ.get("TORCHSNAPSHOT_ENABLE_AWS_TEST") is None, reason="")
+@pytest.mark.usefixtures("s3_health_check")
 @pytest.mark.asyncio
 async def test_s3_ranged_read() -> None:
     path = f"{_TEST_BUCKET}/{uuid.uuid4()}"

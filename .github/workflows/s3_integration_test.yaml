@@ -1,4 +1,4 @@
-name: Unit tests
+name: S3 integration tests
 
 on:
   push:
@@ -10,8 +10,19 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: [3.7, 3.8, 3.9]
+        python-version: [3.8]
+    # These permissions are needed to interact with GitHub's OIDC Token endpoint
+    permissions:
+      id-token: write
+      contents: read
     steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: Set environment variables
+        run: echo "TORCHSNAPSHOT_ENABLE_AWS_TEST=1" >> $GITHUB_ENV
       - name: Check out repo
         uses: actions/checkout@v2
       - name: Setup conda env
@@ -34,6 +45,6 @@ jobs:
         run: |
           set -eux
           conda activate test
-          pytest --timeout=300 --cov=. --cov-report xml tests -vv -rA
+          pytest --timeout=300 --cov=. --cov-report xml -m s3_integration_test tests -vv -rA
       - name: Upload coverage to codecov
         uses: codecov/codecov-action@v2
