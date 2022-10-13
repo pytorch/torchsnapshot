@@ -1,4 +1,4 @@
-name: S3 integration tests
+name: GCS integration tests
 
 on:
   push:
@@ -16,17 +16,11 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    env:
+      GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
     steps:
-      # - name: Dump GitHub context
-      #   id: github_context_step
-      #   run: echo '${{ toJSON(github) }}'
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v1
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
       - name: Set environment variables
-        run: echo "TORCHSNAPSHOT_ENABLE_AWS_TEST=1" >> $GITHUB_ENV
+        run: echo "TORCHSNAPSHOT_ENABLE_GCP_TEST=1" >> $GITHUB_ENV
       - name: Check out repo
         uses: actions/checkout@v2
       - name: Setup conda env
@@ -49,6 +43,6 @@ jobs:
         run: |
           set -eux
           conda activate test
-          pytest --timeout=300 --cov=. --cov-report xml -m s3_integration_test tests -vv -rA
+          pytest --timeout=300 --cov=. --cov-report xml -m gcs_integration_test tests -vv -rA
       - name: Upload coverage to codecov
         uses: codecov/codecov-action@v2
