@@ -1,4 +1,5 @@
 aiobotocore
+boto3
 numpy
 pre-commit
 pytest
