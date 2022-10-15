@@ -42,7 +42,7 @@ def s3_health_check() -> None:
         s3.download_fileobj(_TEST_BUCKET, key, io.BytesIO())
     except Exception as e:
         # pyre-ignore[29]
-        pytest.skip(f"Skipping the test becuase s3 health check failed: {e}")
+        pytest.skip(f"Skipping the test because s3 health check failed: {e}")
 
 
 @pytest.mark.s3_integration_test
