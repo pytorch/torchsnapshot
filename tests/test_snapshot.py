@@ -34,8 +34,34 @@ class SnapshotTest(unittest.TestCase):
             {
                 "a": torch.rand(40, 40),
                 "b": torch.rand(40, 40),
+                "c": 41,
+                "d/e": 42,
+                "[@x]->&y^%": {"(z)": 43},
+            },
+        )
+        self.assertFalse(check_state_dict_eq(foo.state_dict(), bar.state_dict()))
+        self.assertTrue(type(foo.state_dict()) == dict)
+
+        with tempfile.TemporaryDirectory() as path:
+            snapshot = torchsnapshot.Snapshot.take(path, {"foo": foo})
+            snapshot.restore({"foo": bar})
+            assert_state_dict_eq(self, foo.state_dict(), bar.state_dict())
+
+    def test_incomplete_state_dict(self) -> None:
+        foo = torchsnapshot.StateDict(
+            {
+                "a": torch.rand(40, 40),
+                "b": torch.rand(40, 40),
                 "c": 42,
                 "d/e": 43,
+                "f": {"g": torch.rand(40, 40)},
+                "[@x]->&y^%": {"(z)": 44},
+            },
+        )
+        bar = torchsnapshot.StateDict(
+            {
+                "a": torch.rand(40, 40),
+                "c": 42,
                 "[@x]->&y^%": {"(z)": 44},
             },
         )

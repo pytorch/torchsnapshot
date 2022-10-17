@@ -73,12 +73,17 @@ def flatten(obj: Any, prefix: str = "") -> Tuple[Manifest, Dict[str, Any]]:
 def _populate_mnfst_entry(mnfst, logical_path):
     path = os.path.dirname(logical_path)
     basename = os.path.basename(logical_path)
-    mnfst_entry = mnfst[path]
+    if path not in mnfst:
+        _populate_mnfst_entry(mnfst, path)
+    mnfst_entry = mnfst.setdefault(path, DictEntry(keys=[]))
     if isinstance(mnfst_entry, ListEntry):
-        idx_str = os.path.basename(logical_path)
+        pass
+        # idx_str = os.path.basename(logical_path)
     elif isinstance(mnfst_entry, DictEntry):
+        basename = _filename_to_key(basename)
         mnfst_entry.keys.append(basename)
     elif isinstance(mnfst_entry, OrderedDictEntry):
+        basename = _filename_to_key(basename)
         mnfst_entry.keys.append(basename)
     else:
         raise NotImplementedError(f"Unknown entry type {type(mnfst_entry)}")

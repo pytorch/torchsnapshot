@@ -719,6 +719,10 @@ class Snapshot:
                 flattened[logical_path] = obj
                 # populate manifest
                 _populate_mnfst_entry(mnfst, logical_path)
+                if isinstance(entry, PrimitiveEntry):
+                    # for primitive types, directly materialize from PrimitiveEntry
+                    flattened[logical_path] = obj
+                    continue
             else:
                 break
 

@@ -903,13 +903,20 @@ def prepare_write(
 
 
 def _make_obj_from_entry(entry: Entry):
-    obj_out = torch.empty(
-        *entry.shape, dtype=string_to_dtype(entry.dtype), device=torch.device("cpu")
-    )
-    if isinstance(entry, ShardedTensorEntry):
-        # Do we need this?
-        obj_out.share_memory_()
-
+    if isinstance(entry, PrimitiveEntry):
+        obj_out = entry.get_value()
+    elif isinstance(entry, (ChunkedTensorEntry, TensorEntry, ShardedTensorEntry)):
+        # we could perhaps code a get_value() for those too?
+        obj_out = torch.empty(
+            *entry.shape, dtype=string_to_dtype(entry.dtype), device=torch.device("cpu")
+        )
+        if isinstance(entry, ShardedTensorEntry):
+            # Do we need this?
+            obj_out.share_memory_()
+    else:
+        raise NotImplementedError(
+            f"populating non-instantiated {type(entry)} is not implemented"
+        )
     return obj_out
 
 
