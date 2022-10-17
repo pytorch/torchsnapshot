@@ -70,6 +70,20 @@ def flatten(obj: Any, prefix: str = "") -> Tuple[Manifest, Dict[str, Any]]:
     return manifest, flattened
 
 
+def _populate_mnfst_entry(mnfst, logical_path):
+    path = os.path.dirname(logical_path)
+    basename = os.path.basename(logical_path)
+    mnfst_entry = mnfst[path]
+    if isinstance(mnfst_entry, ListEntry):
+        idx_str = os.path.basename(logical_path)
+    elif isinstance(mnfst_entry, DictEntry):
+        mnfst_entry.keys.append(basename)
+    elif isinstance(mnfst_entry, OrderedDictEntry):
+        mnfst_entry.keys.append(basename)
+    else:
+        raise NotImplementedError(f"Unknown entry type {type(mnfst_entry)}")
+
+
 # pyre-ignore[3]: Return annotation cannot be `Any`
 def inflate(
     manifest: Manifest, flattened: Dict[str, Any], prefix: str = ""

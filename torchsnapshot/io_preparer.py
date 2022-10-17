@@ -902,6 +902,17 @@ def prepare_write(
     return entry, obj_write_req
 
 
+def _make_obj_from_entry(entry: Entry):
+    obj_out = torch.empty(
+        *entry.shape, dtype=string_to_dtype(entry.dtype), device=torch.device("cpu")
+    )
+    if isinstance(entry, ShardedTensorEntry):
+        # Do we need this?
+        obj_out.share_memory_()
+
+    return obj_out
+
+
 def prepare_read(
     entry: Entry,
     obj_out: Optional[Any] = None,
