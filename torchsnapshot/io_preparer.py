@@ -905,7 +905,7 @@ def prepare_write(
 def _make_obj_from_entry(entry: Entry):
     if isinstance(entry, PrimitiveEntry):
         obj_out = entry.get_value()
-    elif isinstance(entry, (ChunkedTensorEntry, TensorEntry, ShardedTensorEntry)):
+    elif isinstance(entry, (TensorEntry, )):
         # we could perhaps code a get_value() for those too?
         obj_out = torch.empty(
             *entry.shape, dtype=string_to_dtype(entry.dtype), device=torch.device("cpu")
