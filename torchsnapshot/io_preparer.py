@@ -907,10 +907,12 @@ def _make_obj_from_entry(entry: Entry):
         obj_out = entry.get_value()
     elif isinstance(entry, (ObjectEntry,)):
         obj_out = None
-    elif isinstance(entry, (TensorEntry, )):
+    elif isinstance(entry, (TensorEntry,)):
         # we could perhaps code a get_value() for those too?
         obj_out = torch.empty(
-            torch.Size(entry.shape), dtype=string_to_dtype(entry.dtype), device=torch.device("cpu")
+            torch.Size(entry.shape),
+            dtype=string_to_dtype(entry.dtype),
+            device=torch.device("cpu"),
         )
         if isinstance(entry, ShardedTensorEntry):
             # Do we need this?
