@@ -6,57 +6,99 @@
 # LICENSE file in the root directory of this source tree.
 
 # pyre-ignore-all-errors[21, 56]: ignore pytest undefine import and invalid decoration
+import copy
 import random
 import sys
-from typing import Generator, List, Optional, Tuple
+
+import uuid
+from typing import cast, Generator, List, Optional, Tuple
+
+import pytest
 
 import torch
+import torch.distributed as dist
+from torch.distributed._shard import sharded_tensor
+from torch.distributed._shard.sharded_tensor import ShardedTensor
+from torch.distributed._shard.sharding_spec import ChunkShardingSpec
 from torchsnapshot.batcher import (
     batch_read_requests,
     batch_write_requests,
+    BatchedBufferStager,
+    GPUBatchedBufferStager,
     is_batchable,
 )
-from torchsnapshot.io_preparer import ObjectIOPreparer, TensorIOPreparer
+from torchsnapshot.io_preparer import (
+    ChunkedTensorIOPreparer,
+    ObjectIOPreparer,
+    prepare_read,
+    ShardedTensorIOPreparer,
+    TensorIOPreparer,
+)
+from torchsnapshot.io_types import WriteReq
 from torchsnapshot.manifest import Entry
 from torchsnapshot.serialization import ALL_SUPPORTED_DTYPES
-from torchsnapshot.test_utils import rand_tensor
+from torchsnapshot.test_utils import rand_tensor, tensor_eq, tensor_local_sz_bytes
 
 NUM_TENSORS = 50
 TENSOR_SHAPE = (64, 64)
 
 
-import uuid
-
-import pytest
-import torch.distributed as dist
-from torch.distributed._shard import sharded_tensor
-from torch.distributed._shard.sharded_tensor import ShardedTensor
-from torch.distributed._shard.sharding_spec import ChunkShardingSpec
-from torchsnapshot.io_preparer import (
-    ChunkedTensorIOPreparer,
-    prepare_read,
-    ShardedTensorIOPreparer,
-)
-from torchsnapshot.io_types import WriteReq
-from torchsnapshot.test_utils import tensor_eq, tensor_local_sz_bytes
+@pytest.fixture
+def use_gpu() -> bool:
+    return torch.cuda.is_available()
 
 
 @pytest.fixture
-def dummy_pg() -> Generator[None, None, None]:
+def dummy_pg(use_gpu: bool) -> Generator[None, None, None]:
     """
     Fixture for initializing a single process pg.
     """
     dist.init_process_group(
-        backend="gloo", init_method=f"file:///tmp/{uuid.uuid4()}", rank=0, world_size=1
+        backend="nccl" if use_gpu else "gloo",
+        init_method=f"file:///tmp/{uuid.uuid4()}",
+        rank=0,
+        world_size=1,
     )
+    if use_gpu:
+        torch.cuda.set_device(torch.device("cuda:0"))
     yield
     dist.destroy_process_group()
 
 
+TestCase = Tuple[List[torch.Tensor], List[Entry], List[WriteReq], List[torch.Tensor]]
+
+
+def _sharded_tensor_to_gpu(
+    tensor: sharded_tensor.ShardedTensor,
+) -> sharded_tensor.ShardedTensor:
+    # TODO: this is available as ShardedTensor.to() in PyTorch 1.13.
+    # Remove this once we drop PyTorch 1.12 support.
+    device = torch.device(f"cuda:{torch.cuda.current_device()}")
+    shards: List[sharded_tensor.Shard] = []
+    for shard in tensor.local_shards():
+        new_tensor = shard.tensor.to(
+            device=device,
+        )
+        metadata = copy.deepcopy(shard.metadata)
+        # pyre-ignore
+        metadata.placement._device = device
+        shards.append(sharded_tensor.Shard(new_tensor, metadata))
+
+    metadata = copy.deepcopy(tensor.metadata())
+    for meta in metadata.shards_metadata:
+        meta.placement._device = device
+
+    return ShardedTensor._init_from_local_shards_and_global_metadata(
+        shards,
+        sharded_tensor_metadata=metadata,
+        process_group=tensor._process_group,
+    )
+
+
 @pytest.fixture
 def sharded_tensor_test_cases(
-    dummy_pg: None,
-) -> Tuple[List[ShardedTensor], List[Entry], List[WriteReq], List[ShardedTensor]]:
+    use_gpu: bool,
+) -> TestCase:
     """
     Fixture for preparing sharded tensor test cases.
 
@@ -75,9 +117,12 @@ def sharded_tensor_test_cases(
     )
     srcs = [sharded_tensor.empty(spec, TENSOR_SHAPE) for _ in range(NUM_TENSORS)]
     dsts = [sharded_tensor.empty(spec, TENSOR_SHAPE) for _ in range(NUM_TENSORS)]
-    for tensor in srcs + dsts:
-        for shard in tensor.local_shards():
+    for idx, (src, dst) in enumerate(zip(srcs, dsts)):
+        for shard in src.local_shards() + dst.local_shards():
             shard.tensor.random_()
+        if use_gpu and idx % 2 == 0:
+            srcs[idx] = _sharded_tensor_to_gpu(src)
+            dsts[idx] = _sharded_tensor_to_gpu(dst)
 
     entries = []
     write_reqs = []
@@ -87,13 +132,18 @@ def sharded_tensor_test_cases(
         )
         entries.append(entry)
         write_reqs.extend(wrs)
-    return srcs, entries, write_reqs, dsts
+    return (
+        cast(List[torch.Tensor], srcs),
+        entries,
+        write_reqs,
+        cast(List[torch.Tensor], dsts),
+    )
 
 
 @pytest.fixture
 def tensor_test_cases(
-    dtype: torch.dtype, enable_chunking: bool
-) -> Tuple[List[torch.Tensor], List[Entry], List[WriteReq], List[torch.Tensor]]:
+    dtype: torch.dtype, enable_chunking: bool, use_gpu: bool
+) -> TestCase:
     """
     Fixture for preparing tensor test cases.
 
@@ -112,6 +162,10 @@ def tensor_test_cases(
         ]
     srcs = [rand_tensor(TENSOR_SHAPE, dtype=dtypes[i]) for i in range(NUM_TENSORS)]
     dsts = [rand_tensor(TENSOR_SHAPE, dtype=dtypes[i]) for i in range(NUM_TENSORS)]
+    for idx, (src, dst) in enumerate(zip(srcs, dsts)):
+        if use_gpu and idx % 2 == 0:
+            srcs[idx] = src.to(torch.cuda.current_device())
+            dsts[idx] = dst.to(torch.cuda.current_device())
 
     entries = []
     write_reqs = []
@@ -137,12 +191,8 @@ def tensor_test_cases(
 
 @pytest.fixture
 def slab_size_bytes(
-    tensor_test_cases: Tuple[
-        List[torch.Tensor], List[Entry], List[WriteReq], List[torch.Tensor]
-    ],
-    sharded_tensor_test_cases: Tuple[
-        List[torch.Tensor], List[Entry], List[WriteReq], List[torch.Tensor]
-    ],
+    tensor_test_cases: TestCase,
+    sharded_tensor_test_cases: TestCase,
 ) -> int:
     """
     Fixture for determining the slab size.
@@ -160,12 +210,7 @@ def slab_size_bytes(
 
 @pytest.fixture
 def read_chunk_size_bytes(
-    tensor_test_cases: Tuple[
-        List[torch.Tensor], List[Entry], List[WriteReq], List[torch.Tensor]
-    ],
-    sharded_tensor_test_cases: Tuple[
-        List[torch.Tensor], List[Entry], List[WriteReq], List[torch.Tensor]
-    ],
+    tensor_test_cases: TestCase, sharded_tensor_test_cases: TestCase
 ) -> int:
     """
     Fixture for determining the read chunk size.
@@ -185,37 +230,27 @@ def read_chunk_size_bytes(
 
 
 @pytest.mark.asyncio
+@pytest.mark.cpu_and_gpu
+@pytest.mark.usefixtures("dummy_pg")
 @pytest.mark.parametrize("dtype", ALL_SUPPORTED_DTYPES)
 @pytest.mark.parametrize("enable_chunking", [True, False])
 @pytest.mark.parametrize("enable_batched_read", [True, False])
 @pytest.mark.parametrize("enable_chunked_read", [True, False])
 async def test_batcher(
-    tensor_test_cases: Tuple[
-        List[torch.Tensor], List[Entry], List[WriteReq], List[torch.Tensor]
-    ],
-    sharded_tensor_test_cases: Tuple[
-        List[torch.Tensor], List[Entry], List[WriteReq], List[torch.Tensor]
-    ],
+    tensor_test_cases: TestCase,
+    sharded_tensor_test_cases: TestCase,
     slab_size_bytes: int,
     read_chunk_size_bytes: Optional[int],
     enable_batched_read: bool,
     enable_chunked_read: bool,
+    use_gpu: bool,
 ) -> None:
     """
     Verify the behavior of the batcher.
     """
-    src_tensors, tensor_entries, tensor_write_reqs, dst_tensors = tensor_test_cases
-    (
-        src_sharded_tensors,
-        sharded_tensor_entries,
-        sharded_tensor_write_reqs,
-        dst_sharded_tensors,
-    ) = sharded_tensor_test_cases
-
-    src_tensors.extend(src_sharded_tensors)
-    dst_tensors.extend(dst_sharded_tensors)
-    entries = tensor_entries + sharded_tensor_entries
-    write_reqs = tensor_write_reqs + sharded_tensor_write_reqs
+    src_tensors, entries, write_reqs, dst_tensors = (
+        a + b for a, b in zip(tensor_test_cases, sharded_tensor_test_cases)
+    )
 
     # Mix in some object write requests
     for idx in range(NUM_TENSORS):
@@ -248,6 +283,15 @@ async def test_batcher(
     )
     assert len(batched_write_reqs) < len(write_reqs)
     write_reqs = batched_write_reqs
+
+    buffer_stager_types = {type(wr.buffer_stager) for wr in write_reqs}
+
+    # In this test setup, sharded tensor shard are alway batchable
+    assert BatchedBufferStager in buffer_stager_types
+
+    # When use_gpu == True, verify that BatchedBufferStager is used
+    if use_gpu:
+        assert GPUBatchedBufferStager in buffer_stager_types
 
     # Prepare read requests for the dst tensors
     read_reqs = []

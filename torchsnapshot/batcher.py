@@ -11,30 +11,54 @@ import os
 import uuid
 from collections import defaultdict
 from concurrent.futures import Executor
-from typing import Dict, List, Optional, Tuple
+from enum import Enum
+from typing import cast, Dict, Iterator, List, Optional, Tuple
 
-from .io_preparer import TensorBufferStager, TensorIOPreparer
+import torch
+
+from .io_preparer import TensorBufferStager
 
 from .io_types import BufferConsumer, BufferStager, BufferType, ReadReq, WriteReq
 from .knobs import get_slab_size_threshold_bytes
 from .manifest import ChunkedTensorEntry, Entry, ShardedTensorEntry, TensorEntry
-from .serialization import Serializer
+from .serialization import (
+    contiguous_view_as_untyped_storage,
+    Serializer,
+    tensor_as_memoryview,
+)
+
+
+def _check_byte_ranges_contiguous(byte_ranges: Iterator[Tuple[int, int]]) -> int:
+    """
+    Verify that the input byte ranges are contiguous.
+
+    Args:
+        byte_ranges: The input byte ranges.
+
+    Returns:
+        The end of the last byte range (exclusive).
+    """
+    end = next(byte_ranges)[1]
+    for byte_range in byte_ranges:
+        if byte_range[0] != end:
+            raise AssertionError("The byte ranges are not consecutive.")
+        end = byte_range[1]
+    return end
 
 
 class BatchedBufferStager(BufferStager):
+    """
+    This class calls into the .stage_buffer() method on each individual buffer
+    stagers and copies the staged buffer into a consecutive CPU buffer. It
+    reduces the number of I/O operations at the cost of extra memcpy.
+    """
+
     def __init__(
         self,
         byte_range_to_buffer_stager: Dict[Tuple[int, int], BufferStager],
     ) -> None:
         self.byte_range_to_buffer_stager = byte_range_to_buffer_stager
-
-        byte_ranges = sorted(byte_range_to_buffer_stager.keys())
-        end = byte_ranges[0][1]
-        for byte_range in byte_ranges[1:]:
-            if byte_range[0] != end:
-                raise AssertionError("The byte ranges are not consecutive.")
-            end = byte_range[1]
-
+        end = _check_byte_ranges_contiguous(iter(byte_range_to_buffer_stager.keys()))
         self.slab_sz_bytes: int = end
 
     async def stage_buffer(self, executor: Optional[Executor] = None) -> BufferType:
@@ -74,25 +98,105 @@ class BatchedBufferStager(BufferStager):
             )
         ) + self.slab_sz_bytes
 
-    class Builder:
-        def __init__(self) -> None:
-            self.byte_ranges: List[Tuple[int, int]] = []
-            self.buffer_stagers: List[BufferStager] = []
 
-        def add_buffer_stager(
-            self,
-            byte_range: Tuple[int, int],
-            buffer_stager: BufferStager,
-        ) -> None:
-            self.buffer_stagers.append(buffer_stager)
-            self.byte_ranges.append(byte_range)
+class GPUBatchedBufferStager(BatchedBufferStager):
+    """
+    This class combines the GPU tensors of the buffer stagers it encapsulates
+    into a consecutive GPU buffer before copying the buffer to CPU. Unlike
+    BatchedBufferStager, it doesn't call into the .stage_buffer() method on
+    each individual buffer stagers. It only supports buffer stagers:
 
-        def build(self) -> "BatchedBufferStager":
+    - that is a TensorBufferStagers
+    - that doesn't have a _tensor_prepare_func
+    - whose tensor is serialized with buffer protocol
+    - whose tensor is a cuda tensor
+
+    This class reduces the number of DtoH copies and intra host copies at the
+    cost of additional GPU memory usage and intra device copies.
+    """
+
+    def __init__(
+        self,
+        byte_range_to_buffer_stager: Dict[Tuple[int, int], BufferStager],
+    ) -> None:
+        super().__init__(byte_range_to_buffer_stager=byte_range_to_buffer_stager)
+        for buffer_stager in byte_range_to_buffer_stager.values():
+            if not isinstance(buffer_stager, TensorBufferStager):
+                raise AssertionError(
+                    "GPUBatchedBufferStager only supports TensorBufferStagers "
+                    f"(got {type(buffer_stager)})."
+                )
+            if not is_batchable(buffer_stager=buffer_stager):
+                raise AssertionError(
+                    "GPUBatchedBufferStager only supports batchable entries "
+                    f"(got {buffer_stager.entry})."
+                )
+            if not buffer_stager.tensor.is_cuda:
+                raise AssertionError(
+                    "GPUBatchedBufferStager only supports GPU tensors."
+                )
+        self.byte_range_to_buffer_stager: Dict[
+            Tuple[int, int], TensorBufferStager
+        ] = cast(Dict[Tuple[int, int], TensorBufferStager], byte_range_to_buffer_stager)
+
+    async def stage_buffer(self, executor: Optional[Executor] = None) -> BufferType:
+        try:
+            # pyre-ignore
+            gpu_buf = torch.cuda.ByteTensor(self.slab_sz_bytes)
+        except torch.cuda.OutOfMemoryError:
+            gpu_buf = None
+
+        if gpu_buf is None:
+            return await super().stage_buffer(executor=executor)
+
+        buf_storage = contiguous_view_as_untyped_storage(gpu_buf)
+        for byte_range, buffer_stager in self.byte_range_to_buffer_stager.items():
+            tensor = buffer_stager.tensor.contiguous()
+            tensor_storage = contiguous_view_as_untyped_storage(tensor)
+            buf_storage[byte_range[0] : byte_range[1]].copy_(tensor_storage)
+        return tensor_as_memoryview(gpu_buf.cpu())
+
+    def get_staging_cost_bytes(self) -> int:
+        return self.slab_sz_bytes
+
+
+class SlabType(Enum):
+    CPU = 0
+    GPU = 1
+
+
+class Slab:
+    def __init__(self, type: SlabType) -> None:
+        self.type = type
+        self.byte_ranges: List[Tuple[int, int]] = []
+        self.buffer_stagers: List[BufferStager] = []
+        self.location: str = os.path.join("batched", str(uuid.uuid4()))
+        self.sz_bytes: int = 0
+
+    def add_buffer_stager(
+        self,
+        byte_range: Tuple[int, int],
+        buffer_stager: BufferStager,
+    ) -> None:
+        self.buffer_stagers.append(buffer_stager)
+        self.byte_ranges.append(byte_range)
+        self.sz_bytes += byte_range[1] - byte_range[0]
+
+    def build(self) -> BufferStager:
+        if self.type == SlabType.CPU:
             return BatchedBufferStager(
                 byte_range_to_buffer_stager=dict(
                     zip(self.byte_ranges, self.buffer_stagers)
                 ),
             )
+        elif self.type == SlabType.GPU:
+            return GPUBatchedBufferStager(
+                byte_range_to_buffer_stager=dict(
+                    zip(self.byte_ranges, self.buffer_stagers)
+                ),
+            )
+        else:
+            raise ValueError(f"Unrecognized slab type: {self.type}")
 
 
 def batch_write_requests(  # noqa
@@ -162,9 +266,8 @@ def batch_write_requests(  # noqa
         slab_size_threshold_bytes or get_slab_size_threshold_bytes()
     )
     batched_write_reqs = []
-    slab_locations = [os.path.join("batched", str(uuid.uuid4()))]
-    slabs: List[BatchedBufferStager.Builder] = [BatchedBufferStager.Builder()]
-    curr_slab_sz_bytes = 0
+    cpu_slabs: List[Slab] = [Slab(type=SlabType.CPU)]
+    gpu_slabs: List[Slab] = [Slab(type=SlabType.GPU)]
     relocation: Dict[str, Tuple[str, int, int]] = {}  # (new_location, lower, upper)
 
     # Group write requests into slabs
@@ -174,22 +277,30 @@ def batch_write_requests(  # noqa
         # is currently only possible with tensors that can be serialized with
         # buffer protocol (which covers majority of the cases).
         if not isinstance(wr.buffer_stager, TensorBufferStager) or not is_batchable(
-            wr.buffer_stager.entry
+            buffer_stager=wr.buffer_stager
         ):
             batched_write_reqs.append(wr)
             continue
 
-        tensor_sz_bytes = TensorIOPreparer.get_tensor_size_from_entry(
-            entry=wr.buffer_stager.entry
-        )
+        tensor = wr.buffer_stager.tensor
+        tensor_sz_bytes = tensor.nelement() * tensor.element_size()
+
         # If the tensor size is already greater than the max slab size, no
         # batching is needed.
         if tensor_sz_bytes >= slab_size_threshold_bytes:
             batched_write_reqs.append(wr)
             continue
 
-        byte_range = (curr_slab_sz_bytes, curr_slab_sz_bytes + tensor_sz_bytes)
-        curr_slab_sz_bytes += tensor_sz_bytes
+        if tensor.is_cuda:
+            slabs = gpu_slabs
+        else:
+            slabs = cpu_slabs
+
+        # Create a new slab if the current slab exceeds the limit
+        if slabs[-1].sz_bytes + tensor_sz_bytes >= slab_size_threshold_bytes:
+            slabs.append(Slab(type=SlabType.GPU if tensor.is_cuda else SlabType.CPU))
+
+        byte_range = (slabs[-1].sz_bytes, slabs[-1].sz_bytes + tensor_sz_bytes)
 
         # Add the buffer stager to the current slab
         slabs[-1].add_buffer_stager(
@@ -199,23 +310,17 @@ def batch_write_requests(  # noqa
         # Track the byte range within the slab for this write request. Later
         # we'll need this information to update the corresponding entry.
         relocation[wr.path] = (
-            slab_locations[-1],
+            slabs[-1].location,
             *byte_range,
         )
 
-        # Create a new slab if the current slab exceeds the limit
-        if curr_slab_sz_bytes >= slab_size_threshold_bytes:
-            slabs.append(BatchedBufferStager.Builder())
-            slab_locations.append(os.path.join("batched", str(uuid.uuid4())))
-            curr_slab_sz_bytes = 0
-
     # Convert each slab to a batched write request
-    for slab_location, slab in zip(slab_locations, slabs):
+    for slab in cpu_slabs + gpu_slabs:
         if len(slab.buffer_stagers) == 0:
             continue
         batched_write_reqs.append(
             WriteReq(
-                path=slab_location,
+                path=slab.location,
                 buffer_stager=slab.build(),
             ),
         )
@@ -369,8 +474,9 @@ def batch_read_requests(read_reqs: List[ReadReq]) -> List[ReadReq]:
     return batched_read_reqs
 
 
-def is_batchable(entry: Entry) -> bool:
+def is_batchable(buffer_stager: BufferStager) -> bool:
     return (
-        isinstance(entry, TensorEntry)
-        and entry.serializer == Serializer.BUFFER_PROTOCOL.value
+        isinstance(buffer_stager, TensorBufferStager)
+        and buffer_stager.entry.serializer == Serializer.BUFFER_PROTOCOL.value
+        and buffer_stager._tensor_prepare_func is None
     )

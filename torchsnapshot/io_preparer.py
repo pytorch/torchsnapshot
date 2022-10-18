@@ -9,7 +9,6 @@
 
 import asyncio
 import copy
-import functools
 import io
 import itertools
 import logging
@@ -503,7 +502,7 @@ class TensorBufferStager(BufferStager):
         tensor: torch.Tensor,
         entry: TensorEntry,
         is_async_snapshot: bool,
-        _tensor_prepare_func: Callable[[torch.Tensor, bool], torch.Tensor],
+        _tensor_prepare_func: Optional[Callable[[torch.Tensor, bool], torch.Tensor]],
     ) -> None:
         self.tensor = tensor
         self.entry = entry
@@ -512,11 +511,12 @@ class TensorBufferStager(BufferStager):
 
     async def stage_buffer(self, executor: Optional[Executor] = None) -> BufferType:
         is_tensor_custom_prepared = False
-        tensor = self._tensor_prepare_func(self.tensor, False)  # tracing=False
-        # If the custom prepared tensor is different from the original
-        # tensor and is a CPU tensor, don't copy it.
-        if tensor.storage() != self.tensor.storage():
-            is_tensor_custom_prepared = True
+        if self._tensor_prepare_func is not None:
+            tensor = self._tensor_prepare_func(self.tensor, False)  # tracing=False
+            # If the custom prepared tensor is different from the original
+            # tensor and is a CPU tensor, don't copy it.
+            if tensor.storage() != self.tensor.storage():
+                is_tensor_custom_prepared = True
 
         if self.tensor.is_cuda:
             # It would be nice to copy from GPU via DMA. However, it is very
@@ -638,9 +638,10 @@ class TensorIOPreparer:
         ] = None,
     ) -> Tuple[TensorEntry, List[WriteReq]]:
         if not _tensor_prepare_func:
-            _tensor_prepare_func = functools.partial(_identity_tensor_prepare_func, "")
+            proc_tensor = tensor
+        else:
+            proc_tensor = _tensor_prepare_func(tensor, True)  # tracing=True
 
-        proc_tensor = _tensor_prepare_func(tensor, True)  # tracing=True
         if proc_tensor.shape != tensor.shape:
             raise RuntimeError(
                 "_tensor_prepare_func shouldn't change the tensor's shape "

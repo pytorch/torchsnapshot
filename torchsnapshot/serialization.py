@@ -16,6 +16,15 @@ from typing import Dict, List
 
 import torch
 
+try:
+    # TODO: drop this once PyTorch 1.12 is no longer supported
+    # https://github.com/pytorch/pytorch/pull/82438
+    # pyre-ignore
+    from torch import _UntypedStorage as UntypedStorage  # @manual
+except ImportError:
+    from torch import UntypedStorage  # @manual
+
+
 logger: logging.Logger = logging.getLogger(__name__)
 
 
@@ -197,21 +206,31 @@ def _tensor_as_memoryview_via_untyped_storage(tensor: torch.Tensor) -> memoryvie
             "_tensor_as_memoryview_via_untyped_storage can be only used "
             "with contiguous tensors"
         )
+    untyped_storage = contiguous_view_as_untyped_storage(tensor)
+    tensor = torch.empty((0))
+    tensor.set_(untyped_storage)
+    return memoryview(tensor.numpy()).cast("b")
+
+
+# pyre-ignore[11]
+def contiguous_view_as_untyped_storage(tensor: torch.Tensor) -> UntypedStorage:
+    if not tensor.is_contiguous():
+        raise AssertionError(
+            "contiguous_view_as_untyped_storage can be "
+            "only used with contiguous tensors."
+        )
     if hasattr(tensor.storage(), "_untyped"):
         # TODO: drop this once PyTorch 1.12 is no longer supported
         # https://github.com/pytorch/pytorch/pull/82438
         untyped_storage = tensor.storage()._untyped()
     else:
         untyped_storage = tensor.storage().untyped()
-    untyped_storage = untyped_storage[
+    return untyped_storage[
         tensor.storage_offset()
         * tensor.element_size() : tensor.storage_offset()
         * tensor.element_size()
         + tensor.nelement() * tensor.element_size()
     ]
-    tensor = torch.empty((0))
-    tensor.set_(untyped_storage)
-    return memoryview(tensor.numpy()).cast("b")
 
 
 def tensor_from_memoryview(
