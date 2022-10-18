@@ -30,9 +30,10 @@ from .batcher import batch_read_requests, batch_write_requests
 
 from .dist_store import get_or_create_store, LinearBarrier
 
-from .flatten import flatten, inflate
+from .flatten import _populate_mnfst_entry, flatten, inflate
 from .io_preparer import (
     _identity_tensor_prepare_func,
+    _make_obj_from_entry,
     ObjectBufferConsumer,
     prepare_read,
     prepare_write,
@@ -680,32 +681,53 @@ class Snapshot:
         del state_dict
 
         read_reqs: List[ReadReq] = []
-        for logical_path, obj in flattened.items():
-            if logical_path not in available_entries:
-                raise RuntimeError(
-                    f"""
-When restoring from the snapshot, stateful object "{stateful_key}" requested
-path "{logical_path}" which was not available to rank {rank}.
+        available_entries = {
+            k: item
+            for k, item in available_entries.items()
+            if k.startswith(stateful_key)
+        }
+        flatten_items = list(flattened.items())
+        while True:
+            if len(flatten_items):
+                logical_path, obj = flatten_items[0]
+                flatten_items = flatten_items[1:]
+                if logical_path not in available_entries:
+                    raise RuntimeError(
+                        f"""
+                When restoring from the snapshot, stateful object "{stateful_key}" requested
+                path "{logical_path}" which was not available to rank {rank}.
 
-- If the entry does not exist in the snapshot, it means that the state dict
-  entry was introduced after the snapshot was taken. To partially restore from
-  the snapshot, please explicitly ignore the state dict entries missing from
-  the snapshot.
+                - If the entry does not exist in the snapshot, it means that the state dict
+                  entry was introduced after the snapshot was taken. To partially restore from
+                  the snapshot, please explicitly ignore the state dict entries missing from
+                  the snapshot.
 
-- If the entry exists in the snapshot, it could mean that the world size has
-  changed and the entry was not marked as replicated when the snapshot was
-  taken. To resolve the issue, try any of:
-    - Re-taking the snapshot with the new world size
-    - Re-taking the snapshot with the original world size, ensuring all
-          non-sharded values are marked as replicated
-    - Coerce the missing entry into replicated on restore"""
-                )
+                - If the entry exists in the snapshot, it could mean that the world size has
+                  changed and the entry was not marked as replicated when the snapshot was
+                  taken. To resolve the issue, try any of:
+                    - Re-taking the snapshot with the new world size
+                    - Re-taking the snapshot with the original world size, ensuring all
+                          non-sharded values are marked as replicated
+                    - Coerce the missing entry into replicated on restore"""
+                    )
+                entry = available_entries.pop(logical_path)
+                if isinstance(entry, PrimitiveEntry):
+                    # for primitive types, directly materialize from PrimitiveEntry
+                    flattened[logical_path] = entry.get_value()
+                    continue
+            elif len(available_entries):
+                logical_path, entry = available_entries.popitem()
+                obj = _make_obj_from_entry(entry)
+                flattened[logical_path] = obj
+                # populate manifest
+                _populate_mnfst_entry(mnfst, logical_path)
+                if isinstance(entry, PrimitiveEntry):
+                    # for primitive types, directly materialize from PrimitiveEntry
+                    flattened[logical_path] = obj
+                    continue
+            else:
+                break
 
-            entry = available_entries[logical_path]
-            if isinstance(entry, PrimitiveEntry):
-                # for primitive types, directly materialize from PrimitiveEntry
-                flattened[logical_path] = entry.get_value()
-                continue
             rrs = prepare_read(
                 entry=entry,
                 obj_out=obj,
