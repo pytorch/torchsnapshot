@@ -5,53 +5,57 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-# pyre-ignore-all-errors[2]: Allow `Any` in type annotations
+# pyre-ignore-all-errors[2, 3]: allow `Any` in function signatures
 
 import itertools
-import os
-from collections import OrderedDict
+from collections import defaultdict, OrderedDict
 from typing import Any, Dict, Tuple
 from urllib.parse import unquote
 
-from .manifest import DictEntry, ListEntry, Manifest, OrderedDictEntry
+from .manifest import DictEntry, Entry, ListEntry, Manifest, OrderedDictEntry
 
 
-def flatten(obj: Any, prefix: str = "") -> Tuple[Manifest, Dict[str, Any]]:
+def flatten(obj: Any, prefix: str) -> Tuple[Manifest, Dict[str, Any]]:
     """
-    Recursively flatten a container in a reversible manner.
+    Recursively flatten an object in a reversible manner.
 
     Args:
-        obj: The collection to flatten.
+        obj: The object to flatten.
         prefix: The prefix to prepend to the keys of returned dictionaries.
 
     Returns:
-        The flattened container and the manifest needed for inflating the
-        container.
-
+        - The container manifest needed for inflating the flattened object
+        - The flattened object in the form of a dictionary
     ::
         >>> collection = {'foo': [1, 2, OrderedDict(bar=3, baz=4)]}]}
         >>> manifest, flattened = flatten(collection, prefix='my/prefix')
         >>> manifest
         {
-            "my/prefix": {"type": "dict"},
-            "my/prefix/foo": {"type": "list"},
-            "my/prefix/foo/2": {"type": "OrderedDict", "keys": ["bar", "baz"]},
+            "my%2Fprefix": {"type": "dict"},
+            "my%2Fprefix/foo": {"type": "list"},
+            "my%2Fprefix/foo/2": {"type": "OrderedDict", "keys": ["bar", "baz"]},
         }
         >>> flattened
         {
-            "my/prefix/foo/0": 1,
-            "my/prefix/foo/1": 2,
-            "my/prefix/foo/2/bar": 3,
-            "my/prefix/foo/2/baz": 4,
+            "my%2Fprefix/foo/0": 1,
+            "my%2Fprefix/foo/1": 2,
+            "my%2Fprefix/foo/2/bar": 3,
+            "my%2Fprefix/foo/2/baz": 4,
         }
     """
+    # "/" in the keys of the returned dictionaries is used to denote hiearchy.
+    # Encode the user-provided prefix to eliminate ambiguity.
+    return _flatten(obj=obj, prefix=_encode(prefix))
+
+
+def _flatten(obj: Any, prefix: str) -> Tuple[Manifest, Dict[str, Any]]:
     manifest = {}
     flattened = {}
     if type(obj) == list:
         manifest[prefix] = ListEntry()
         for idx, elem in enumerate(obj):
-            path = os.path.join(prefix, str(idx))
-            m, f = flatten(elem, path)
+            path = f"{prefix}/{str(idx)}"
+            m, f = _flatten(elem, path)
             manifest.update(m)
             flattened.update(f)
     elif type(obj) in (dict, OrderedDict) and _should_flatten_dict(obj):
@@ -60,9 +64,9 @@ def flatten(obj: Any, prefix: str = "") -> Tuple[Manifest, Dict[str, Any]]:
         else:
             manifest[prefix] = OrderedDictEntry(keys=list(obj.keys()))
         for key, elem in obj.items():
-            filename = _key_to_filename(str(key))
-            path = os.path.join(prefix, str(filename))
-            m, f = flatten(elem, path)
+            key = _encode(str(key))
+            path = f"{prefix}/{key}"
+            m, f = _flatten(elem, path)
             manifest.update(m)
             flattened.update(f)
     else:
@@ -70,65 +74,69 @@ def flatten(obj: Any, prefix: str = "") -> Tuple[Manifest, Dict[str, Any]]:
     return manifest, flattened
 
 
-# pyre-ignore[3]: Return annotation cannot be `Any`
 def inflate(
-    manifest: Manifest, flattened: Dict[str, Any], prefix: str = ""
+    manifest: Manifest,
+    flattened: Dict[str, Any],
+    prefix: str,
 ) -> Dict[Any, Any]:
     """
     The reverse operation of func::`flatten`.
 
     Args:
         manifest: The container manifest returned by func::`flatten`.
-        flattened: The flattened container.
-        prefix: The path to the outermost container.
+        flattened: The flattened object.
+        prefix: The prefix used for func::`flatten`.
 
     Returns:
-        The inflated container.
+        The inflated object.
     """
-    for path in itertools.chain(manifest.keys(), flattened.keys()):
-        if not path.startswith(prefix):
-            raise RuntimeError(f"{path} does not start with {prefix}")
+    # Encode the user-provided prefix
+    prefix = _encode(prefix)
 
-    combined = {}
+    # Filter the relevant items in manifest and flattened
+    manifest = {k: v for k, v in manifest.items() if k.split("/")[0] == prefix}
+    flattened = {k: v for k, v in flattened.items() if k.split("/")[0] == prefix}
+
+    # When flatten() receives a non-flattenable object it returns:
+    # ({}, {"[ENCODED_PREFIX]": obj})
+    if prefix in flattened:
+        return flattened[prefix]
+
+    if prefix not in manifest:
+        raise AssertionError(
+            f"{prefix} is absent in both manifest and flattened.\n"
+            f"manifest: {manifest}\n"
+            f"flattened: {flattened}"
+        )
+
+    # Instantiate all containers according to the container manifest
+    containers = {}
     for path, entry in manifest.items():
-        if isinstance(entry, ListEntry):
-            container = []
-        elif isinstance(entry, DictEntry):
-            container = dict.fromkeys(entry.keys)
-        elif isinstance(entry, OrderedDictEntry):
-            container = OrderedDict.fromkeys(entry.keys)
-        else:
-            raise RuntimeError(
-                f"Unrecognized container entry type: {type(entry)} ({entry.type})."
-            )
-        trimmed_path = "/" + path[len(prefix) :]
-        combined[trimmed_path] = container
+        containers[path] = _entry_to_container(entry)
 
-    for path, obj in flattened.items():
-        trimmed_path = "/" + path[len(prefix) :]
-        combined[trimmed_path] = obj
-
-    combined = OrderedDict(sorted(combined.items()))
-    for path, val in combined.items():
-        if path == "/":
+    # Group containers/values by the parent container
+    container_path_to_vals = defaultdict(dict)
+    for path, obj in itertools.chain(containers.items(), flattened.items()):
+        # Skip the outermost container
+        if path == prefix:
             continue
         tokens = path.split("/")
-        dir_path = "/".join(tokens[:-1]) or "/"
-        if dir_path not in combined:
-            raise RuntimeError(f'Container entry is absent for "{dir_path}"')
-        container = combined[dir_path]
-        if type(container) == list:
-            container.append(val)
-        elif type(container) in (dict, OrderedDict):
-            key = _filename_to_key(tokens[-1])
-            if key in container:
-                container[key] = val
-            elif _check_int(key):
-                container[int(key)] = val
-            else:
-                raise AssertionError(f"Item {path} is not listed in the manifest.")
+        if len(tokens) < 2:
+            # Impossible. Just to be defensive.
+            raise AssertionError(f"Invalid path: {path}")
+        key = tokens.pop()
+        container_path = "/".join(tokens)
+        container_path_to_vals[container_path][key] = obj
 
-    return combined["/"]
+    # Populate values within all containers
+    for path, values in container_path_to_vals.items():
+        if not isinstance(containers[path], (list, dict)):
+            raise AssertionError(
+                f"inflate() does not know how to inflate container of type {type(containers[path])} "
+                f"(path: {path}, container entry: {manifest.get(path)})."
+            )
+        _populate_container(container=containers[path], values=values)
+    return containers[prefix]
 
 
 def _should_flatten_dict(d: Dict[Any, Any]) -> bool:
@@ -146,6 +154,41 @@ def _should_flatten_dict(d: Dict[Any, Any]) -> bool:
     return True
 
 
+def _entry_to_container(entry: Entry) -> Any:
+    """
+    Initialize a container from a container entry.
+
+    For dictionary containers, the items are populated with `None` on
+    initialization to ensure the original item order.
+    """
+    if isinstance(entry, ListEntry):
+        return []
+    elif isinstance(entry, DictEntry):
+        return dict.fromkeys(entry.keys)
+    elif isinstance(entry, OrderedDictEntry):
+        return OrderedDict.fromkeys(entry.keys)
+    else:
+        raise RuntimeError(
+            f"Unrecognized container entry type: {type(entry)} ({entry.type})."
+        )
+
+
+def _populate_container(container: Any, values: Dict[str, Any]) -> None:
+    if isinstance(container, list):
+        items = sorted(values.items(), key=lambda e: int(e[0]))
+        container.extend(item[1] for item in items)
+    elif isinstance(container, dict):
+        for key, obj in values.items():
+            key = _decode(key)
+            if key not in container and _check_int(key):
+                key = int(key)
+            if key not in container:
+                raise RuntimeError("TODO")
+            container[key] = obj
+    else:
+        raise AssertionError(f"Unrecognized container type: {type(container)}.")
+
+
 def _check_int(s: str) -> bool:
     if s.isdigit():
         return True
@@ -155,11 +198,15 @@ def _check_int(s: str) -> bool:
         return False
 
 
-def _key_to_filename(s: str) -> str:
+def _encode(s: str) -> str:
+    """
+    Implements a subset of https://datatracker.ietf.org/doc/html/rfc3986.html
+    for escaping "/" in user-provided strings.
+    """
     s = s.replace("%", "%25")
     s = s.replace("/", "%2F")
     return s
 
 
-def _filename_to_key(s: str) -> str:
+def _decode(s: str) -> str:
     return unquote(s)
