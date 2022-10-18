@@ -34,6 +34,6 @@ jobs:
         run: |
           set -eux
           conda activate test
-          pytest --timeout=300 --cov=. --cov-report xml tests -vv -rA
+          pytest --timeout=300 --cov=. --cov-report xml -vv -rA -m "not gpu_only" tests
       - name: Upload coverage to codecov
         uses: codecov/codecov-action@v2

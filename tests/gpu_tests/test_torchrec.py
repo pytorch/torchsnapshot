@@ -178,6 +178,7 @@ def _sharding_types() -> List[str]:
 @pytest.mark.skipif(
     not torch.cuda.is_available(), reason="The test requires GPUs to run."
 )
+@pytest.mark.gpu_only
 @pytest.mark.parametrize("src_sharding_type", _sharding_types())
 @pytest.mark.parametrize("dst_sharding_type", _sharding_types())
 @pytest.mark.parametrize("use_async", [True, False])

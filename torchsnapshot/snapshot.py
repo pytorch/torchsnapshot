@@ -385,7 +385,9 @@ class Snapshot:
                 is_async_snapshot=is_async_snapshot,
                 _tensor_prepare_func=functools.partial(
                     _custom_tensor_prepare_func, logical_path
-                ),
+                )
+                if _custom_tensor_prepare_func is not None
+                else None,
             )
             object_entries[logical_path] = entry
             logical_path_to_write_reqs[logical_path] = wrs
