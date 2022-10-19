@@ -41,8 +41,8 @@ jobs:
           touch build/html/main/.nojekyll
           cd ..
       - name: Deploy docs to Github pages
-        uses: JamesIves/github-pages-deploy-action@releases/v3
+        uses: JamesIves/github-pages-deploy-action@v4.4.1
         with:
-            ACCESS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-            BRANCH: gh-pages # The branch the action should deploy to.
-            FOLDER: docs/build/html # The folder the action should deploy.
+            branch: gh-pages # The branch the action should deploy to.
+            folder: docs/build/html/main # The folder the action should deploy.
+            target-folder: main
