@@ -76,11 +76,15 @@ def test_ddp_simple(layer_shapes: List[List[int]], tmp_path: Path) -> None:
     )
     src_ddp = DistributedDataParallel(src)
     dst_ddp = DistributedDataParallel(dst)
-
+    src_optim = torch.optim.Adagrad(src_ddp.parameters(), lr=0.01)
+    dst_optim = torch.optim.Adagrad(dst_ddp.parameters(), lr=0.001)
     assert not check_state_dict_eq(dst_ddp.state_dict(), src_ddp.state_dict())
 
     snapshot = torchsnapshot.Snapshot.take(
-        path=str(tmp_path), app_state={"ddp": src_ddp}, replicated=["**"]
+        path=str(tmp_path),
+        app_state={"ddp": src_ddp, "optim": src_optim},
+        replicated=["**"],
     )
-    snapshot.restore(app_state={"ddp": dst_ddp})
+    snapshot.restore(app_state={"ddp": dst_ddp, "optim": dst_optim})
     assert check_state_dict_eq(dst_ddp.state_dict(), src_ddp.state_dict())
+    assert check_state_dict_eq(dst_optim.state_dict(), src_optim.state_dict())

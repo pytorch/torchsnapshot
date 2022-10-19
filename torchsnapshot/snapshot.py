@@ -375,6 +375,7 @@ class Snapshot:
 
         object_entries: Dict[str, Entry] = {}
         logical_path_to_write_reqs: Dict[str, List[WriteReq]] = {}
+        primitive_entries: Dict[str, PrimitiveEntry] = {}
 
         for logical_path, obj in flattened.items():
             entry, wrs = prepare_write(
@@ -389,8 +390,13 @@ class Snapshot:
                 if _custom_tensor_prepare_func is not None
                 else None,
             )
-            object_entries[logical_path] = entry
-            logical_path_to_write_reqs[logical_path] = wrs
+            # Primitive entries don't have write requests
+            # and don't need to be partitioned
+            if isinstance(entry, PrimitiveEntry):
+                primitive_entries[logical_path] = entry
+            else:
+                object_entries[logical_path] = entry
+                logical_path_to_write_reqs[logical_path] = wrs
 
         object_entries, logical_path_to_write_reqs = partition_write_reqs(
             entries=object_entries, write_reqs=logical_path_to_write_reqs, pg=pg_wrapper
@@ -407,7 +413,9 @@ class Snapshot:
             )
             object_entries = dict(zip(entry_keys, entries))
 
-        manifest.update(object_entries)
+        all_entries = dict(**primitive_entries, **object_entries)
+
+        manifest.update(all_entries)
         manifest = cls._gather_manifest(manifest=manifest, pg=pg_wrapper)
 
         memory_budget_bytes = get_process_memory_budget_bytes(pg=pg_wrapper)
