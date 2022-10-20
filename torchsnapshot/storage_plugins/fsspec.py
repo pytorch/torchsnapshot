@@ -20,17 +20,17 @@ class FSSpecPlugin(StoragePlugin):
         self.fs = fsspec.filesystem(protocol, asynchronous=True, **storage_options)
 
     async def write(self, write_io: WriteIO) -> None:
-        session = await self.fs.set_session()
         path = os.path.join(self.root, write_io.path)
+        session = await self.fs.set_session()
         with self.fs.open(path, 'wb') as f:
             await f.write(write_io.buf)
         await session.close()
 
     async def read(self, read_io: ReadIO) -> None:
-        session = await self.fs.set_session()
         path = os.path.join(self.root, read_io.path)
         byte_range = read_io.byte_range
 
+        session = await self.fs.set_session()
         with self.fs.open(path, 'rb') as f:
             if byte_range is None:
                 read_io.buf = io.BytesIO(await f.read())
@@ -42,8 +42,8 @@ class FSSpecPlugin(StoragePlugin):
         await session.close()
 
     async def delete(self, path: str) -> None:
-        session = await self.fs.set_session()
         path = os.path.join(self.root, path)
+        session = await self.fs.set_session()
         await self.fs.delete(path)
         await session.close()
 
