@@ -65,7 +65,7 @@ snapshot = Snapshot.take(app_state=app_state, "/path/to/snapshot")
 snapshot.restore(app_state=app_state)
 ```
 
-See the [documentation](https://pytorch.org/torchsnapshot/getting_started.html) for more details.
+See the [documentation](https://pytorch.org/torchsnapshot/main/getting_started.html) for more details.
 
 
 ## License
