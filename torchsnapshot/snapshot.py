@@ -179,6 +179,7 @@ class Snapshot:
         app_state: AppState,
         pg: Optional[dist.ProcessGroup] = None,
         replicated: Optional[List[str]] = None,
+        storage_kwargs: Optional[Dict[str, Any]] = None,
         _custom_tensor_prepare_func: Optional[
             Callable[[str, torch.Tensor, bool], torch.Tensor]
         ] = None,
@@ -196,6 +197,7 @@ class Snapshot:
             replicated: A list of glob patterns for hinting the matching paths
                 as replicated. Note that patterns not specified by all ranks
                 are ignored.
+            storage_kwargs: The StoragePlugin's extra keyword arguments. See each StoragePlugin for doc.
 
         Returns:
             The newly taken snapshot.
@@ -212,8 +214,10 @@ class Snapshot:
             app_state=app_state,
             replicated=replicated or [],
         )
+        if storage_kwargs is None:
+            storage_kwargs = dict()
         storage = url_to_storage_plugin_in_event_loop(
-            url_path=path, event_loop=event_loop
+            url_path=path, event_loop=event_loop, **storage_kwargs,
         )
         pending_io_work, metadata = cls._take_impl(
             path=path,

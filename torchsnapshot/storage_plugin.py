@@ -14,7 +14,7 @@ from .storage_plugins.fs import FSStoragePlugin
 from .storage_plugins.s3 import S3StoragePlugin
 
 
-def url_to_storage_plugin(url_path: str) -> StoragePlugin:
+def url_to_storage_plugin(url_path: str, **kwargs) -> StoragePlugin:
     """
     Initialize storage plugin from url path.
 
@@ -34,13 +34,13 @@ def url_to_storage_plugin(url_path: str) -> StoragePlugin:
 
     # Built-in storage plugins
     if protocol == "fs":
-        return FSStoragePlugin(root=path)
+        return FSStoragePlugin(root=path, **kwargs)
     elif protocol == "s3":
-        return S3StoragePlugin(root=path)
+        return S3StoragePlugin(root=path, **kwargs)
     elif protocol == "gs":
         from torchsnapshot.storage_plugins.gcs import GCSStoragePlugin
 
-        return GCSStoragePlugin(root=path)
+        return GCSStoragePlugin(root=path, **kwargs)
 
     # Registered storage plugins
     eps = entry_points(group="storage_plugins")
@@ -60,9 +60,9 @@ def url_to_storage_plugin(url_path: str) -> StoragePlugin:
 
 
 def url_to_storage_plugin_in_event_loop(
-    url_path: str, event_loop: asyncio.AbstractEventLoop
+    url_path: str, event_loop: asyncio.AbstractEventLoop, **kwargs
 ) -> StoragePlugin:
-    async def _url_to_storage_plugin(url_path: str) -> StoragePlugin:
-        return url_to_storage_plugin(url_path=url_path)
+    async def _url_to_storage_plugin(url_path: str, **_kwargs) -> StoragePlugin:
+        return url_to_storage_plugin(url_path=url_path, **_kwargs)
 
-    return event_loop.run_until_complete(_url_to_storage_plugin(url_path=url_path))
+    return event_loop.run_until_complete(_url_to_storage_plugin(url_path=url_path, **kwargs))
