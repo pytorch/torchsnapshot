@@ -6,3 +6,4 @@ nest_asyncio
 psutil
 torch
 typing-extensions
+fsspec
