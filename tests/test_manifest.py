@@ -15,12 +15,13 @@ import pytest
 from _pytest.fixtures import SubRequest  # @manual
 
 from torchsnapshot.manifest import (
+    _copy_entry,
     ChunkedTensorEntry,
     DictEntry,
     Entry,
-    get_available_entries,
-    is_container_entry,
+    get_manifest_for_rank,
     is_replicated,
+    ListEntry,
     ObjectEntry,
     Shard,
     ShardedTensorEntry,
@@ -31,7 +32,7 @@ from torchsnapshot.manifest import (
 _WORLD_SIZE = 2
 _MANIFEST_0: Dict[str, Entry] = {
     "0/foo": DictEntry(
-        keys=["bar", "baz", "qux", "quuux", "qux_chunked", "quux_chunked"]
+        keys=["bar", "baz", "qux", "quux", "qux_chunked", "quux_chunked"]
     ),
     "0/foo/bar": ObjectEntry(
         location="0/foo/bar", serializer="torch_save", obj_type="Bar", replicated=False
@@ -123,7 +124,7 @@ _MANIFEST_0: Dict[str, Entry] = {
         replicated=False,
     ),
     "1/foo": DictEntry(
-        keys=["bar", "baz", "qux", "quuux", "qux_chunked", "quux_chunked"]
+        keys=["bar", "baz", "qux", "quux", "qux_chunked", "quux_chunked"]
     ),
     "1/foo/bar": ObjectEntry(
         location="1/foo/bar", serializer="torch_save", obj_type="Bar", replicated=False
@@ -282,17 +283,20 @@ def test_manifest_json_serialization(manifest: Dict[str, Entry]) -> None:
 
 @pytest.mark.parametrize("manifest", [_MANIFEST_0, _MANIFEST_1])
 @pytest.mark.parametrize("rank", range(_WORLD_SIZE * 2))
-def test_get_available_entries(manifest: Dict[str, Entry], rank: int) -> None:
-    available_entries = get_available_entries(manifest, rank)
-    expected_available_entries = {}
+def test_get_local_manifest(manifest: Dict[str, Entry], rank: int) -> None:
+    metadata = SnapshotMetadata(
+        version="0.0.0",
+        world_size=_WORLD_SIZE,
+        manifest=manifest,
+    )
+    local_manifest = get_manifest_for_rank(metadata=metadata, rank=rank)
+    expected_local_manifest = {}
     for path, entry in manifest.items():
-        if is_container_entry(entry):
-            continue
         local_path = "/".join(path.split("/")[1:])
         if path.startswith(f"{rank}/") or is_replicated(entry):
-            expected_available_entries[local_path] = entry
+            expected_local_manifest[local_path] = entry
 
-    expected_available_entries["foo/qux"] = ShardedTensorEntry(
+    expected_local_manifest["foo/qux"] = ShardedTensorEntry(
         shards=[
             Shard(
                 offsets=[0, 0],
@@ -318,7 +322,9 @@ def test_get_available_entries(manifest: Dict[str, Entry], rank: int) -> None:
             ),
         ]
     )
-    assert available_entries == expected_available_entries
+    if rank >= _WORLD_SIZE:
+        expected_local_manifest["foo"] = DictEntry(keys=["baz", "qux_chunked", "qux"])
+    assert local_manifest == expected_local_manifest
 
 
 @pytest.mark.parametrize("rank", range(_WORLD_SIZE * 2))
@@ -328,6 +334,91 @@ def test_replicated_entries_only_on_rank_0(rank: int) -> None:
     optimization, replicated entries were only recorded under rank 0. This test
     verifies that the optimization is backward compatible with the old format.
     """
-    assert get_available_entries(_MANIFEST_0, rank) == get_available_entries(
-        _MANIFEST_1, rank
+    local_manifest_0 = get_manifest_for_rank(
+        metadata=SnapshotMetadata(
+            version="0.0.0",
+            world_size=_WORLD_SIZE,
+            manifest=_MANIFEST_0,
+        ),
+        rank=rank,
     )
+    local_manifest_1 = get_manifest_for_rank(
+        metadata=SnapshotMetadata(
+            version="0.0.0",
+            world_size=_WORLD_SIZE,
+            manifest=_MANIFEST_0,
+        ),
+        rank=rank,
+    )
+    assert local_manifest_0 == local_manifest_1
+
+
+def test_copy_entry() -> None:
+    src_manifest = {
+        "foo": DictEntry(keys=["bar", "baz"]),
+        "foo/bar": ListEntry(),
+        "foo/bar/0": DictEntry(keys=["qux"]),
+        "foo/bar/0/qux": ObjectEntry(
+            location="",
+            serializer="torch_save",
+            obj_type="",
+            replicated=True,
+        ),
+        "foo/baz": ObjectEntry(
+            location="",
+            serializer="torch_save",
+            obj_type="",
+            replicated=False,
+        ),
+    }
+    dst_manifest = {}
+    expected_dst_manifest = {
+        "foo": DictEntry(keys=["bar"]),
+        "foo/bar": ListEntry(),
+        "foo/bar/0": DictEntry(keys=["qux"]),
+        "foo/bar/0/qux": ObjectEntry(
+            location="",
+            serializer="torch_save",
+            obj_type="",
+            replicated=True,
+        ),
+    }
+    _copy_entry(
+        dst_manifest=dst_manifest,
+        src_manifest=src_manifest,
+        logical_path="foo/bar/0/qux",
+    )
+    assert dst_manifest == expected_dst_manifest
+
+    dst_manifest = {
+        "foo": DictEntry(keys=["baz"]),
+        "foo/baz": ObjectEntry(
+            location="",
+            serializer="torch_save",
+            obj_type="",
+            replicated=True,
+        ),
+    }
+    expected_dst_manifest = {
+        "foo": DictEntry(keys=["baz", "bar"]),
+        "foo/baz": ObjectEntry(
+            location="",
+            serializer="torch_save",
+            obj_type="",
+            replicated=True,
+        ),
+        "foo/bar": ListEntry(),
+        "foo/bar/0": DictEntry(keys=["qux"]),
+        "foo/bar/0/qux": ObjectEntry(
+            location="",
+            serializer="torch_save",
+            obj_type="",
+            replicated=True,
+        ),
+    }
+    _copy_entry(
+        dst_manifest=dst_manifest,
+        src_manifest=src_manifest,
+        logical_path="foo/bar/0/qux",
+    )
+    assert dst_manifest == expected_dst_manifest

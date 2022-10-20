@@ -51,6 +51,7 @@ from .serialization import (
     dtype_to_string,
     Serializer,
     string_to_dtype,
+    SUPPORTED_QUANTIZED_DTYPES,
     tensor_as_memoryview,
     tensor_from_memoryview,
     torch_load_from_bytes,
@@ -756,6 +757,29 @@ class TensorIOPreparer:
         element_size = dtype_to_element_size(dtype)
         n_element = reduce(mul, entry.shape, 1)
         return element_size * n_element
+
+    @staticmethod
+    def can_load_inplace(
+        entry: Union[TensorEntry, ChunkedTensorEntry], obj: Any
+    ) -> bool:
+        if obj is None or not isinstance(obj, torch.Tensor):
+            return False
+        if string_to_dtype(entry.dtype) == obj.dtype and entry.shape == list(obj.shape):
+            return True
+        return False
+
+    @staticmethod
+    def empty_tensor_from_entry(
+        entry: Union[TensorEntry, ChunkedTensorEntry]
+    ) -> torch.Tensor:
+        if entry.dtype in SUPPORTED_QUANTIZED_DTYPES:
+            # TODO: we can't allocate empty quantized tensors because we don't
+            # know the scale(s) and zero point(s) before loading the tensor.
+            raise RuntimeError(
+                "Allocating an empty quantized tensor is not supported yet."
+            )
+        dtype = string_to_dtype(entry.dtype)
+        return torch.empty(entry.shape, dtype=dtype)
 
 
 class ObjectBufferStager(BufferStager):

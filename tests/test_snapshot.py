@@ -8,6 +8,8 @@
 import copy
 import tempfile
 import unittest
+from pathlib import Path
+from typing import Any, Dict, List
 
 import torch
 import torchsnapshot
@@ -141,3 +143,27 @@ class SnapshotTest(unittest.TestCase):
             snapshot.restore({"key": restored_state})
 
             assert state == restored_state
+
+
+def test_different_state_dict_structure_on_load(tmp_path: Path) -> None:
+    class TestStateful:
+        def __init__(self) -> None:
+            self.objs: List[Any] = []
+
+        def state_dict(self) -> Dict[str, Any]:
+            return {"objs": self.objs}
+
+        def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
+            self.objs = state_dict["objs"]
+
+    src = TestStateful()
+    dst = TestStateful()
+
+    for _ in range(10):
+        src.objs.append(torch.rand(64, 64))
+    src.objs.append([torch.rand(64, 64) for _ in range(10)])
+
+    assert not check_state_dict_eq(src.state_dict(), dst.state_dict())
+    snapshot = Snapshot.take(app_state={"state": src}, path=str(tmp_path))
+    snapshot.restore(app_state={"state": dst})
+    assert check_state_dict_eq(src.state_dict(), dst.state_dict())
