@@ -10,10 +10,9 @@
 import base64
 import logging
 import struct
-from collections import defaultdict
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import Any, cast, Dict, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union
 
 import yaml
 
@@ -331,7 +330,7 @@ class SnapshotMetadata:
         return cls(**d)
 
 
-def get_available_entries(manifest: Manifest, rank: int) -> Manifest:
+def get_manifest_for_rank(metadata: SnapshotMetadata, rank: int) -> Manifest:
     """
     Prepare available entries to load from for the rank.
 
@@ -343,9 +342,6 @@ def get_available_entries(manifest: Manifest, rank: int) -> Manifest:
         sharded: Entries are first merged across all ranks then made available
             to all ranks.
 
-    The function will not return any container entries which are only used to
-    reconstruct the orginal state dict.
-
     Args:
         manifest: The global manifest.
         rank: The rank of the current process.
@@ -353,43 +349,78 @@ def get_available_entries(manifest: Manifest, rank: int) -> Manifest:
     Returns:
         The local manifest for the rank.
     """
-    logical_path_to_rank_to_entry: Dict[str, Dict[int, Entry]] = defaultdict(dict)
-    for path, entry in manifest.items():
-        tokens = path.split("/")[0]
-        entry_rank = int(tokens[0])
-        logical_path = "/".join(path.split("/")[1:])
-        logical_path_to_rank_to_entry[logical_path][entry_rank] = entry
+    rank_to_manifest: Dict[int, Dict[str, Entry]] = {
+        i: {} for i in range(metadata.world_size)
+    }
 
-    local_manifest = {}
-    for logical_path, rank_to_entry in logical_path_to_rank_to_entry.items():
-        entries = list(rank_to_entry.values())
+    for path, entry in metadata.manifest.items():
+        tokens = path.split("/")
+        rnk = int(tokens.pop(0))
+        logical_path = "/".join(tokens)
+        rank_to_manifest[rnk][logical_path] = entry
 
-        # The logical path corresponds to a replicated entry
-        if is_replicated(entries[0]):
-            local_manifest.setdefault(logical_path, entries[0])
-        # The logical path corresponds to a ShardedTensorEntry
-        elif isinstance(entries[0], ShardedTensorEntry):
-            # TODO: on save, we should enforce the following invariants that if
-            # a logical path on one rank is a ShardedTensorEntry, the logical
-            # path on all ranks that has the logical path is a ShardedTensorEntry.
-            local_manifest[logical_path] = ShardedTensorEntry(
-                shards=[
-                    shard
-                    for entry in entries
-                    for shard in cast(ShardedTensorEntry, entry).shards
-                ]
-            )
-        # The logical path corresponds to a per-rank entry
-        elif rank in rank_to_entry:
-            # Skip container entries
-            if is_container_entry(rank_to_entry[rank]):
-                continue
-            local_manifest[logical_path] = rank_to_entry[rank]
-        # The logical path doesn't exist for this rank
-        else:
-            pass
+    local_manifest = rank_to_manifest.get(rank, {})
 
+    _copy_replicated_entries(
+        dst_manifest=local_manifest, src_manifest=rank_to_manifest[0]
+    )
+    for rnk, manifest in rank_to_manifest.items():
+        if rnk == rank:
+            continue
+        _copy_sharded_tensor_entries(dst_manifest=local_manifest, src_manifest=manifest)
     return local_manifest
+
+
+def _copy_replicated_entries(dst_manifest: Manifest, src_manifest: Manifest) -> None:
+    for logical_path, entry in src_manifest.items():
+        if is_replicated(entry) and logical_path not in dst_manifest:
+            _copy_entry(dst_manifest, src_manifest, logical_path)
+
+
+def _copy_sharded_tensor_entries(
+    dst_manifest: Manifest, src_manifest: Manifest
+) -> None:
+    for logical_path, entry in src_manifest.items():
+        if not isinstance(entry, ShardedTensorEntry):
+            continue
+        if logical_path not in dst_manifest:
+            _copy_entry(dst_manifest, src_manifest, logical_path)
+        else:
+            dst_manifest[logical_path] = ShardedTensorEntry(
+                shards=sorted(
+                    dst_manifest[logical_path].shards + entry.shards,
+                    key=lambda s: s.offsets,
+                )
+            )
+
+
+def _copy_entry(
+    dst_manifest: Manifest, src_manifest: Manifest, logical_path: str
+) -> None:
+    if logical_path in dst_manifest:
+        return
+
+    dst_manifest[logical_path] = src_manifest[logical_path]
+
+    tokens = logical_path.split("/")
+    key = tokens.pop()
+    path = "/".join(tokens)
+    while path not in dst_manifest:
+        entry = src_manifest[path]
+        if is_dict_entry(entry):
+            entry.keys = [key]
+        dst_manifest[path] = entry
+        key = tokens.pop()
+        path = "/".join(tokens)
+        if len(tokens) == 0:
+            break
+
+    if path in dst_manifest and is_dict_entry(dst_manifest[path]):
+        dst_manifest[path].keys.append(key)
+
+
+def is_dict_entry(entry: Entry) -> bool:
+    return isinstance(entry, (DictEntry, OrderedDictEntry))
 
 
 def is_replicated(entry: Entry) -> bool:

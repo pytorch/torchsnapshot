@@ -36,16 +36,22 @@ from .io_preparer import (
     ObjectBufferConsumer,
     prepare_read,
     prepare_write,
+    TensorIOPreparer,
 )
 from .io_types import ReadIO, ReadReq, StoragePlugin, WriteIO, WriteReq
 from .knobs import get_is_batching_enabled
+
 from .manifest import (
+    ChunkedTensorEntry,
     Entry,
-    get_available_entries,
+    get_manifest_for_rank,
+    is_container_entry,
     is_replicated,
     Manifest,
     PrimitiveEntry,
+    ShardedTensorEntry,
     SnapshotMetadata,
+    TensorEntry,
 )
 from .partitioner import consolidate_replicated_entries, partition_write_reqs
 from .pg_wrapper import PGWrapper
@@ -456,9 +462,7 @@ class Snapshot:
         global_keys = self._gather_keys(
             keys=list(app_state.keys()), pg_wrapper=pg_wrapper
         )
-        available_entries = get_available_entries(
-            manifest=self.metadata.manifest, rank=rank
-        )
+        available_entries = get_manifest_for_rank(metadata=self.metadata, rank=rank)
         for key in global_keys:
             self._load_stateful(
                 rank=rank,
@@ -544,7 +548,7 @@ class Snapshot:
         # available to the rank (2) sharded tensor shards saved by all ranks
         # are made available to the rank. The availability of the entries is
         # determined from the perspective of the rank specified in the path.
-        manifest = get_available_entries(manifest=self.metadata.manifest, rank=rank)
+        manifest = get_manifest_for_rank(metadata=self.metadata, rank=rank)
 
         if unranked_path not in manifest:
             # TODO: show candidates based on edit distance
@@ -662,7 +666,7 @@ class Snapshot:
                 )
 
     @classmethod
-    def _load_stateful(
+    def _load_stateful(  # noqa
         cls,
         rank: int,
         stateful_key: str,
@@ -675,48 +679,59 @@ class Snapshot:
         if stateful is None:
             return
 
-        # There are two ways to restore a stateful:
-        # 1. Reconstruct the state dict from storage and use it to call .load_state_dict()
-        # 2. Obtain the state dict via .state_dict(), restore its values from storage,
-        # then use it to call .load_state_dict()
-        #
-        # When .state_dict() returns references to the original tensors, #2 is
-        # more memory-efficient, because a tensor loaded from storage can be
-        # freed as soon as its value is copied to the original tensor.
-        state_dict = stateful.state_dict()
-        mnfst, flattened = flatten(state_dict, prefix=stateful_key)
-        del state_dict
+        # In most cases (e.g. when the stateful is an nn.Module), the stateful
+        # has already allocated memory for its tensors. Materializing the
+        # persisted state dict and invoking .load_state_dict() would result in
+        # a memory footprint that is 2x the size of the stateful. We can reduce
+        # the memory footprint by exploiting the fact that most .state_dict()
+        # implementations return references to the internal tensors. By loading
+        # directly into the already allocated tensors and use them to construct
+        # a state dict for .load_state_dict(), we can eliminate an extra
+        # intermediate copy of the state. Even if the tensors in the state dict
+        # are copies of the internal tensors, this approach would not use more
+        # memory compared to the baseline.
+        _, flattened = flatten(stateful.state_dict(), prefix=stateful_key)
+        flattened = {
+            k: v
+            for k, v in flattened.items()
+            # ShardedTensor became a subclass of torch.Tensor since PyTorch
+            # 1.13. We can drop the check for ShardedTensor once PyTorch 1.12.1
+            # is no longer supported.
+            if k in available_entries and isinstance(v, (torch.Tensor, ShardedTensor))
+        }
 
+        container_entries = {}
+        loaded_flattened = {}
         read_reqs: List[ReadReq] = []
-        for logical_path, obj in flattened.items():
-            if logical_path not in available_entries:
-                raise RuntimeError(
-                    f"""
-When restoring from the snapshot, stateful object "{stateful_key}" requested
-path "{logical_path}" which was not available to rank {rank}.
-
-- If the entry does not exist in the snapshot, it means that the state dict
-  entry was introduced after the snapshot was taken. To partially restore from
-  the snapshot, please explicitly ignore the state dict entries missing from
-  the snapshot.
-
-- If the entry exists in the snapshot, it could mean that the world size has
-  changed and the entry was not marked as replicated when the snapshot was
-  taken. To resolve the issue, try any of:
-    - Re-taking the snapshot with the new world size
-    - Re-taking the snapshot with the original world size, ensuring all
-          non-sharded values are marked as replicated
-    - Coerce the missing entry into replicated on restore"""
-                )
-
-            entry = available_entries[logical_path]
-            if isinstance(entry, PrimitiveEntry):
-                # for primitive types, directly materialize from PrimitiveEntry
-                flattened[logical_path] = entry.get_value()
+        for logical_path, entry in available_entries.items():
+            if is_container_entry(entry):
+                container_entries[logical_path] = entry
                 continue
+
+            # For primitive types, directly materialize from PrimitiveEntry
+            if isinstance(entry, PrimitiveEntry):
+                loaded_flattened[logical_path] = entry.get_value()
+                continue
+
+            # Try to load directly into already allocated object
+            if isinstance(entry, (TensorEntry, ChunkedTensorEntry)):
+                obj_out = flattened.get(logical_path)
+                if not TensorIOPreparer.can_load_inplace(entry=entry, obj=obj_out):
+                    obj_out = TensorIOPreparer.empty_tensor_from_entry(entry)
+            elif isinstance(entry, ShardedTensorEntry):
+                obj_out = flattened.get(logical_path)
+                if obj_out is None:
+                    continue
+            else:
+                obj_out = None
+
+            loaded_flattened[logical_path] = obj_out
+            if logical_path in flattened:
+                del flattened[logical_path]
+
             rrs = prepare_read(
                 entry=entry,
-                obj_out=obj,
+                obj_out=obj_out,
             )
             for rr in rrs:
                 buffer_consumer = rr.buffer_consumer
@@ -726,7 +741,9 @@ path "{logical_path}" which was not available to rank {rank}.
                     # in the flattened dictionary with the object materialized
                     # by the buffer consumer.
                     buffer_consumer.set_consume_callback(
-                        functools.partial(dict.__setitem__, flattened, logical_path)
+                        functools.partial(
+                            dict.__setitem__, loaded_flattened, logical_path
+                        )
                     )
             read_reqs += rrs
 
@@ -742,7 +759,10 @@ path "{logical_path}" which was not available to rank {rank}.
             event_loop=event_loop,
         )
 
-        state_dict = inflate(mnfst, flattened, prefix=stateful_key)
+        # Build the originally saved state dict and use it to restore the stateful
+        state_dict = inflate(
+            manifest=container_entries, flattened=loaded_flattened, prefix=stateful_key
+        )
         stateful.load_state_dict(state_dict)
 
     @staticmethod
@@ -866,7 +886,7 @@ path "{logical_path}" which was not available to rank {rank}.
         # Remove replicated entries from non-zero ranks to reduce the size and
         # serialization time of the yaml. In restore()/read_object(),
         # replicated entries will be made available to all ranks via
-        # get_available_entries().
+        # get_manifest_for_rank().
         for rank, manifest in enumerate(manifests):
             if rank == 0:
                 continue

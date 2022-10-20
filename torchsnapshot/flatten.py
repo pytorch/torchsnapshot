@@ -135,7 +135,7 @@ def inflate(
                 f"inflate() does not know how to inflate container of type {type(containers[path])} "
                 f"(path: {path}, container entry: {manifest.get(path)})."
             )
-        _populate_container(container=containers[path], values=values)
+        _populate_container(path=path, container=containers[path], values=values)
     return containers[prefix]
 
 
@@ -173,7 +173,7 @@ def _entry_to_container(entry: Entry) -> Any:
         )
 
 
-def _populate_container(container: Any, values: Dict[str, Any]) -> None:
+def _populate_container(path: str, container: Any, values: Dict[str, Any]) -> None:
     if isinstance(container, list):
         items = sorted(values.items(), key=lambda e: int(e[0]))
         container.extend(item[1] for item in items)
@@ -183,7 +183,10 @@ def _populate_container(container: Any, values: Dict[str, Any]) -> None:
             if key not in container and _check_int(key):
                 key = int(key)
             if key not in container:
-                raise RuntimeError("TODO")
+                raise RuntimeError(
+                    f"{key} is not a valid key of container {path} "
+                    f"(valid keys: {list(container.keys())})."
+                )
             container[key] = obj
     else:
         raise AssertionError(f"Unrecognized container type: {type(container)}.")
