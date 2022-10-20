@@ -4,12 +4,10 @@
 #
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
-
 import io
 import logging
-import os
-import tempfile
 import unittest
+import uuid
 
 import torch
 
@@ -19,30 +17,28 @@ from torchsnapshot.test_utils import async_test
 
 logger: logging.Logger = logging.getLogger(__name__)
 
+_TEST_BUCKET = "torchsnapshot-test"
 _TENSOR_SZ = int(100_000_000 / 4)
 
 
 class FSSpecStoragePluginTest(unittest.TestCase):
     @async_test
     async def test_write_read_delete(self) -> None:
-        with tempfile.TemporaryDirectory() as path:
-            logger.info(path)
-            plugin = FSSpecPlugin(root=path, protocol="file")
+        path = f"{_TEST_BUCKET}/{uuid.uuid4()}"
+        logger.info(path)
+        plugin = FSSpecPlugin(root=path, protocol="s3")
 
-            tensor = torch.rand((_TENSOR_SZ,))
-            tensor_path = os.path.join(path, "tensor")
-            buf = io.BytesIO()
-            torch.save(tensor, buf)
-            write_io = WriteIO(path="tensor", buf=memoryview(buf.getvalue()))
+        tensor = torch.rand((_TENSOR_SZ,))
+        buf = io.BytesIO()
+        torch.save(tensor, buf)
+        write_io = WriteIO(path="tensor", buf=memoryview(buf.getvalue()))
 
-            await plugin.write(write_io=write_io)
-            self.assertTrue(os.path.exists(tensor_path))
+        await plugin.write(write_io=write_io)
 
-            read_io = ReadIO(path="tensor")
-            await plugin.read(read_io=read_io)
-            loaded = torch.load(read_io.buf)
-            self.assertTrue(torch.allclose(tensor, loaded))
+        read_io = ReadIO(path="tensor")
+        await plugin.read(read_io=read_io)
+        loaded = torch.load(read_io.buf)
+        assert torch.allclose(tensor, loaded)
 
-            await plugin.delete(path="tensor")
-            self.assertFalse(os.path.exists(tensor_path))
-            await plugin.close()
+        await plugin.delete(path="tensor")
+        await plugin.close()

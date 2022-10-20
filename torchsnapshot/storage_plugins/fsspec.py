@@ -15,29 +15,37 @@ from torchsnapshot.io_types import StoragePlugin, ReadIO, WriteIO
 class FSSpecPlugin(StoragePlugin):
     def __init__(self, root: str, protocol: str, **storage_options) -> None:
         self.root = root
-        self.fs = fsspec.filesystem(protocol, **storage_options)
+        if protocol not in ["http", "s3"]:
+            raise ValueError(f"Protocol {protocol} does not support async")
+        self.fs = fsspec.filesystem(protocol, asynchronous=True, **storage_options)
 
     async def write(self, write_io: WriteIO) -> None:
+        session = await self.fs.set_session()
         path = os.path.join(self.root, write_io.path)
-        with self.fs.open(path, 'wb+') as f:
-            f.write(write_io.buf)
+        with self.fs.open(path, 'wb') as f:
+            await f.write(write_io.buf)
+        await session.close()
 
     async def read(self, read_io: ReadIO) -> None:
+        session = await self.fs.set_session()
         path = os.path.join(self.root, read_io.path)
         byte_range = read_io.byte_range
 
         with self.fs.open(path, 'rb') as f:
             if byte_range is None:
-                read_io.buf = io.BytesIO(f.read())
+                read_io.buf = io.BytesIO(await f.read())
             else:
                 offset = byte_range[0]
                 size = byte_range[1] - byte_range[0]
                 await f.seek(offset)
-                read_io.buf = io.BytesIO(f.read(size))
+                read_io.buf = io.BytesIO(await f.read(size))
+        await session.close()
 
     async def delete(self, path: str) -> None:
+        session = await self.fs.set_session()
         path = os.path.join(self.root, path)
-        self.fs.delete(path)
+        await self.fs.delete(path)
+        await session.close()
 
     async def close(self) -> None:
         pass
