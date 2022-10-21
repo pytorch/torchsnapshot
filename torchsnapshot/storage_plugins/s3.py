@@ -7,13 +7,14 @@
 
 import io
 import os
+from typing import Any, Dict
 
 from torchsnapshot.io_types import ReadIO, StoragePlugin, WriteIO
 from torchsnapshot.memoryview_stream import MemoryviewStream
 
 
 class S3StoragePlugin(StoragePlugin):
-    def __init__(self, root: str, **kwargs) -> None:
+    def __init__(self, root: str, storage_options: Dict[str, Any]) -> None:
         try:
             from aiobotocore.session import get_session  # @manual
         except ImportError:
@@ -30,7 +31,7 @@ class S3StoragePlugin(StoragePlugin):
         self.bucket: str = components[0]
         self.root: str = "/".join(components[1:])
         # pyre-ignore
-        # TODO: read AWS tokens from **kwargs?
+        # TODO: read AWS tokens from storage_options?
         self.session = get_session()
 
     async def write(self, write_io: WriteIO) -> None:
