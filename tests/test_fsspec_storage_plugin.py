@@ -6,6 +6,7 @@
 # LICENSE file in the root directory of this source tree.
 import io
 import logging
+import os
 import uuid
 
 import pytest
@@ -16,21 +17,18 @@ from torchsnapshot.storage_plugins.fsspec import FSSpecPlugin
 
 logger: logging.Logger = logging.getLogger(__name__)
 
-# _TEST_BUCKET = "torchsnapshot-test"
-_TEST_BUCKET = "chengcshi"
-# _TENSOR_SZ = int(100_000_000 / 4)
-_TENSOR_SZ = 10
+_TEST_BUCKET = "torchsnapshot-test"
+_TENSOR_SZ = int(100_000_000 / 4)
 
 
-# @pytest.mark.s3_integration_test
-# @pytest.mark.skipif(os.environ.get("TORCHSNAPSHOT_ENABLE_AWS_TEST") is None, reason="")
-# @pytest.mark.usefixtures("s3_health_check")
+@pytest.mark.s3_integration_test
+@pytest.mark.skipif(os.environ.get("TORCHSNAPSHOT_ENABLE_AWS_TEST") is None, reason="")
+@pytest.mark.usefixtures("s3_health_check")
 @pytest.mark.asyncio
 async def test_fsspec_s3_write_read_delete() -> None:
     path = f"fsspec-s3://{_TEST_BUCKET}/{uuid.uuid4()}"
     logger.info(path)
-    plugin = FSSpecPlugin(root=path, key="AKIA34KDUMSNPNTFPTSA",
-                          secret="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")
+    plugin = FSSpecPlugin(root=path)
 
     tensor = torch.rand((_TENSOR_SZ,))
     buf = io.BytesIO()
