@@ -12,8 +12,8 @@ import uuid
 import pytest
 import torch
 
-from torchsnapshot.io_types import WriteIO, ReadIO
-from torchsnapshot.storage_plugins.fsspec import FSSpecPlugin
+from torchsnapshot.io_types import ReadIO, WriteIO
+from torchsnapshot.storage_plugins.fsspec import FSSpecStoragePlugin
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ _TENSOR_SZ = int(100_000_000 / 4)
 async def test_fsspec_s3_write_read_delete() -> None:
     path = f"fsspec-s3://{_TEST_BUCKET}/{uuid.uuid4()}"
     logger.info(path)
-    plugin = FSSpecPlugin(root=path)
+    plugin = FSSpecStoragePlugin(root=path)
 
     tensor = torch.rand((_TENSOR_SZ,))
     buf = io.BytesIO()

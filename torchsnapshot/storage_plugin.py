@@ -42,9 +42,9 @@ def url_to_storage_plugin(url_path: str) -> StoragePlugin:
 
         return GCSStoragePlugin(root=path)
     elif protocol.startswith("fsspec-"):
-        from torchsnapshot.storage_plugins.fsspec import FSSpecPlugin
+        from torchsnapshot.storage_plugins.fsspec import FSSpecStoragePlugin
 
-        return FSSpecPlugin(root=path)
+        return FSSpecStoragePlugin(root=path)
 
     # Registered storage plugins
     eps = entry_points(group="storage_plugins")

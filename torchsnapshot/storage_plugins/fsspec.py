@@ -12,12 +12,15 @@ import fsspec
 
 from torchsnapshot.io_types import ReadIO, StoragePlugin, WriteIO
 
-__all__ = ["FSSpecPlugin"]
+__all__ = ["FSSpecStoragePlugin"]
 
 
-class FSSpecPlugin(StoragePlugin):
+class FSSpecStoragePlugin(StoragePlugin):
     def __init__(self, root: str) -> None:
-        protocol, self.root = root.split("://")
+        root_items = root.split("://")
+        if len(root_items) != 2:
+            raise ValueError("only protocol://path is supported by fsspec plugin")
+        protocol, self.root = root_items
         if not protocol.startswith("fsspec-"):
             raise ValueError(
                 f"Invalid protocol: {protocol}, Only fsspec-* protocols are supported"
