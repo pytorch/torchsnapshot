@@ -14,7 +14,7 @@ from typing import Callable, cast, List
 
 import torch
 
-from torchsnapshot.io_preparer import tensor_copy, TensorIOPreparer
+from torchsnapshot.io_preparers.tensor import tensor_copy, TensorIOPreparer
 from torchsnapshot.io_types import ReadReq, WriteReq
 from torchsnapshot.scheduler import execute_read_reqs, execute_write_reqs
 from torchsnapshot.serialization import (
