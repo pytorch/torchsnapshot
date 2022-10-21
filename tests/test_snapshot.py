@@ -6,145 +6,145 @@
 # LICENSE file in the root directory of this source tree.
 
 import copy
-import tempfile
-import unittest
 from pathlib import Path
 from typing import Any, Dict, List
 
+import pytest
+
 import torch
-import torchsnapshot
-from torchsnapshot import Snapshot
+from torchsnapshot import Snapshot, StateDict
 from torchsnapshot.manifest import PrimitiveEntry
-from torchsnapshot.test_utils import assert_state_dict_eq, check_state_dict_eq
+from torchsnapshot.test_utils import check_state_dict_eq
 
 
-class SnapshotTest(unittest.TestCase):
-    def setUp(self) -> None:
-        self.maxDiff = None
+@pytest.mark.usefixtures("toggle_batching")
+def test_state_dict(tmp_path: Path) -> None:
+    foo = StateDict(
+        {
+            "a": torch.rand(40, 40),
+            "b": torch.rand(40, 40),
+            "c": 42,
+            "d/e": 43,
+            "[@x]->&y^%": {"(z)": 44},
+        },
+    )
+    bar = StateDict(
+        {
+            "a": torch.rand(40, 40),
+            "b": torch.rand(40, 40),
+            "c": 42,
+            "d/e": 43,
+            "[@x]->&y^%": {"(z)": 44},
+        },
+    )
+    assert not check_state_dict_eq(foo.state_dict(), bar.state_dict())
+    assert type(foo.state_dict()) == dict
 
-    def test_state_dict(self) -> None:
-        foo = torchsnapshot.StateDict(
-            {
-                "a": torch.rand(40, 40),
-                "b": torch.rand(40, 40),
-                "c": 42,
-                "d/e": 43,
-                "[@x]->&y^%": {"(z)": 44},
-            },
+    snapshot = Snapshot.take(str(tmp_path), {"foo": foo})
+    snapshot.restore({"foo": bar})
+    assert check_state_dict_eq(foo.state_dict(), bar.state_dict())
+
+
+@pytest.mark.usefixtures("toggle_batching")
+def test_nn_linear(tmp_path: Path) -> None:
+    foo = torch.nn.Linear(128, 64)
+    bar = torch.nn.Linear(128, 64)
+    assert not check_state_dict_eq(foo.state_dict(), bar.state_dict())
+
+    snapshot = Snapshot.take(str(tmp_path), {"foo": foo})
+    snapshot.restore({"foo": bar})
+    assert check_state_dict_eq(foo.state_dict(), bar.state_dict())
+
+
+@pytest.mark.usefixtures("toggle_batching")
+def test_nn_sequential(tmp_path: Path) -> None:
+    foo = torch.nn.Sequential(
+        torch.nn.Linear(128, 64),
+        torch.nn.Linear(64, 32),
+        torch.nn.Linear(32, 16),
+    )
+    bar = torch.nn.Sequential(
+        torch.nn.Linear(128, 64),
+        torch.nn.Linear(64, 32),
+        torch.nn.Linear(32, 16),
+    )
+    assert not check_state_dict_eq(foo.state_dict(), bar.state_dict())
+
+    snapshot = Snapshot.take(str(tmp_path), {"foo": foo})
+    snapshot.restore({"foo": bar})
+    assert check_state_dict_eq(foo.state_dict(), bar.state_dict())
+
+
+@pytest.mark.usefixtures("toggle_batching")
+def test_adagrad(tmp_path: Path) -> None:
+    model = torch.nn.Sequential(
+        torch.nn.Linear(128, 64),
+        torch.nn.Linear(64, 32),
+        torch.nn.Linear(32, 16),
+    )
+    optim = torch.optim.Adagrad(model.parameters(), lr=0.01)
+    expected = copy.deepcopy(optim.state_dict())
+
+    snapshot = Snapshot.take(str(tmp_path), {"optim": optim})
+    snapshot.restore({"optim": optim})
+
+    assert check_state_dict_eq(optim.state_dict(), expected)
+
+
+def test_invalid_app_state(tmp_path: Path) -> None:
+    not_stateful = 1
+    app_state = {"optim": not_stateful}
+
+    with pytest.raises(TypeError):
+        Snapshot.take(path=str(tmp_path), app_state=app_state)
+
+    snapshot = Snapshot(path=str(tmp_path))
+    with pytest.raises(TypeError):
+        snapshot.restore(app_state=app_state)
+
+
+@pytest.mark.usefixtures("toggle_batching")
+def test_app_state_with_primitive_types(tmp_path: Path) -> None:
+    state = StateDict(
+        int_key=100,
+        float_key=3.14,
+        str_key="some_string",
+        bool_key=True,
+        bytes_key=b"\x00\x10",
+    )
+    restored_state = StateDict(
+        int_key=None,
+        float_key=None,
+        str_key=None,
+        bool_key=None,
+        bytes_key=None,
+    )
+
+    def _assert_primitive_entry_with_type(
+        location_key: str, expected_type_name: str
+    ) -> None:
+        assert (
+            isinstance(snapshot.metadata.manifest[location_key], PrimitiveEntry)
+            and snapshot.metadata.manifest[location_key].type == expected_type_name
         )
-        bar = torchsnapshot.StateDict(
-            {
-                "a": torch.rand(40, 40),
-                "b": torch.rand(40, 40),
-                "c": 42,
-                "d/e": 43,
-                "[@x]->&y^%": {"(z)": 44},
-            },
-        )
-        self.assertFalse(check_state_dict_eq(foo.state_dict(), bar.state_dict()))
-        self.assertTrue(type(foo.state_dict()) == dict)
 
-        with tempfile.TemporaryDirectory() as path:
-            snapshot = torchsnapshot.Snapshot.take(path, {"foo": foo})
-            snapshot.restore({"foo": bar})
-            assert_state_dict_eq(self, foo.state_dict(), bar.state_dict())
+    snapshot = Snapshot.take(path=str(tmp_path), app_state={"key": state})
 
-    def test_nn_linear(self) -> None:
-        foo = torch.nn.Linear(128, 64)
-        bar = torch.nn.Linear(128, 64)
-        self.assertFalse(check_state_dict_eq(foo.state_dict(), bar.state_dict()))
+    _assert_primitive_entry_with_type("0/key/int_key", "int")
+    _assert_primitive_entry_with_type("0/key/str_key", "str")
+    _assert_primitive_entry_with_type("0/key/bool_key", "bool")
+    _assert_primitive_entry_with_type("0/key/bytes_key", "bytes")
+    _assert_primitive_entry_with_type("0/key/float_key", "float")
 
-        with tempfile.TemporaryDirectory() as path:
-            snapshot = torchsnapshot.Snapshot.take(path, {"foo": foo})
-            snapshot.restore({"foo": bar})
-            assert_state_dict_eq(self, foo.state_dict(), bar.state_dict())
+    assert snapshot.metadata.manifest["0/key/float_key"].readable == str(
+        state["float_key"]
+    )
 
-    def test_nn_sequential(self) -> None:
-        foo = torch.nn.Sequential(
-            torch.nn.Linear(128, 64),
-            torch.nn.Linear(64, 32),
-            torch.nn.Linear(32, 16),
-        )
-        bar = torch.nn.Sequential(
-            torch.nn.Linear(128, 64),
-            torch.nn.Linear(64, 32),
-            torch.nn.Linear(32, 16),
-        )
-        self.assertFalse(check_state_dict_eq(foo.state_dict(), bar.state_dict()))
-
-        with tempfile.TemporaryDirectory() as path:
-            snapshot = torchsnapshot.Snapshot.take(path, {"foo": foo})
-            snapshot.restore({"foo": bar})
-            assert_state_dict_eq(self, foo.state_dict(), bar.state_dict())
-
-    def test_adagrad(self) -> None:
-        model = torch.nn.Sequential(
-            torch.nn.Linear(128, 64),
-            torch.nn.Linear(64, 32),
-            torch.nn.Linear(32, 16),
-        )
-        optim = torch.optim.Adagrad(model.parameters(), lr=0.01)
-
-        expected = copy.deepcopy(optim.state_dict())
-
-        with tempfile.TemporaryDirectory() as path:
-            snapshot = torchsnapshot.Snapshot.take(path, {"optim": optim})
-            snapshot.restore({"optim": optim})
-
-        assert_state_dict_eq(self, optim.state_dict(), expected)
-
-    def test_invalid_app_state(self) -> None:
-        not_stateful = 1
-        app_state = {"optim": not_stateful}
-
-        with tempfile.TemporaryDirectory() as path:
-            self.assertRaises(TypeError, torchsnapshot.Snapshot.take, path, app_state)
-
-            snapshot = Snapshot(path)
-            self.assertRaises(TypeError, snapshot.restore, app_state)
-
-    def test_app_state_with_primitive_types(self) -> None:
-        state = torchsnapshot.StateDict(
-            int_key=100,
-            float_key=3.14,
-            str_key="some_string",
-            bool_key=True,
-            bytes_key=b"\x00\x10",
-        )
-        restored_state = torchsnapshot.StateDict(
-            int_key=None,
-            float_key=None,
-            str_key=None,
-            bool_key=None,
-            bytes_key=None,
-        )
-
-        def _assert_primitive_entry_with_type(
-            location_key: str, expected_type_name: str
-        ) -> None:
-            assert (
-                isinstance(snapshot.metadata.manifest[location_key], PrimitiveEntry)
-                and snapshot.metadata.manifest[location_key].type == expected_type_name
-            )
-
-        with tempfile.TemporaryDirectory() as path:
-            snapshot = torchsnapshot.Snapshot.take(path, {"key": state})
-
-            _assert_primitive_entry_with_type("0/key/int_key", "int")
-            _assert_primitive_entry_with_type("0/key/str_key", "str")
-            _assert_primitive_entry_with_type("0/key/bool_key", "bool")
-            _assert_primitive_entry_with_type("0/key/bytes_key", "bytes")
-            _assert_primitive_entry_with_type("0/key/float_key", "float")
-
-            assert snapshot.metadata.manifest["0/key/float_key"].readable == str(
-                state["float_key"]
-            )
-
-            snapshot.restore({"key": restored_state})
-
-            assert state == restored_state
+    snapshot.restore({"key": restored_state})
+    assert state == restored_state
 
 
+@pytest.mark.usefixtures("toggle_batching")
 def test_different_state_dict_structure_on_load(tmp_path: Path) -> None:
     class TestStateful:
         def __init__(self) -> None:

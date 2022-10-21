@@ -42,12 +42,6 @@ from .manifest import (
 logger: logging.Logger = logging.getLogger(__name__)
 
 
-def _identity_tensor_prepare_func(
-    path: str, tensor: torch.Tensor, tracing: bool
-) -> torch.Tensor:
-    return tensor
-
-
 def get_storage_path(obj: Any, logical_path: str, rank: int, replicated: bool) -> str:
     if isinstance(obj, ShardedTensor):
         return os.path.join("sharded", logical_path)

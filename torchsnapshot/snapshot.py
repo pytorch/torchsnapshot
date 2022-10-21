@@ -32,14 +32,13 @@ from .dist_store import get_or_create_store, LinearBarrier
 
 from .flatten import flatten, inflate
 from .io_preparer import (
-    _identity_tensor_prepare_func,
     ObjectBufferConsumer,
     prepare_read,
     prepare_write,
     TensorIOPreparer,
 )
 from .io_types import ReadIO, ReadReq, StoragePlugin, WriteIO, WriteReq
-from .knobs import get_is_batching_enabled
+from .knobs import is_batching_disabled
 
 from .manifest import (
     ChunkedTensorEntry,
@@ -331,9 +330,6 @@ class Snapshot:
         rng_state_item = cls._pop_rng_state(app_state=app_state)
         rng_state_dict = None
 
-        if not _custom_tensor_prepare_func:
-            _custom_tensor_prepare_func = _identity_tensor_prepare_func
-
         manifest: Manifest = {}
         flattened: Dict[str, Any] = {}
 
@@ -411,7 +407,7 @@ class Snapshot:
             wr for wrs in logical_path_to_write_reqs.values() for wr in wrs
         ]
 
-        if get_is_batching_enabled():
+        if not is_batching_disabled():
             entry_keys = list(object_entries.keys())
             entries = list(object_entries.values())
             entries, write_reqs = batch_write_requests(
@@ -589,7 +585,7 @@ class Snapshot:
                 # by the buffer consumer.
                 buffer_consumer.set_consume_callback(functools.partial(box.append))
 
-        if get_is_batching_enabled():
+        if not is_batching_disabled():
             read_reqs = batch_read_requests(read_reqs=read_reqs)
 
         sync_execute_read_reqs(
@@ -747,7 +743,7 @@ class Snapshot:
                     )
             read_reqs += rrs
 
-        if get_is_batching_enabled():
+        if not is_batching_disabled():
             read_reqs = batch_read_requests(read_reqs=read_reqs)
 
         memory_budget_bytes = get_process_memory_budget_bytes(pg=pg)
