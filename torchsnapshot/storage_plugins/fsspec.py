@@ -10,15 +10,22 @@ import os
 
 import fsspec
 
-from torchsnapshot.io_types import StoragePlugin, ReadIO, WriteIO
+from torchsnapshot.io_types import ReadIO, StoragePlugin, WriteIO
+
+__all__ = ["FSSpecStoragePlugin"]
 
 
-class FSSpecPlugin(StoragePlugin):
-    def __init__(self, root: str, **storage_options) -> None:
-        protocol, self.root = root.split("://")
+class FSSpecStoragePlugin(StoragePlugin):
+    def __init__(self, root: str) -> None:
+        root_items = root.split("://")
+        if len(root_items) != 2:
+            raise ValueError("only protocol://path is supported by fsspec plugin")
+        protocol, self.root = root_items
         if not protocol.startswith("fsspec-"):
-            raise ValueError(f"Invalid protocol: {protocol}, Only fsspec-* protocols are supported")
-        self.fs = fsspec.filesystem(protocol=protocol.removeprefix("fsspec-"), **storage_options)
+            raise ValueError(
+                f"Invalid protocol: {protocol}, Only fsspec-* protocols are supported"
+            )
+        self.fs = fsspec.filesystem(protocol=protocol.removeprefix("fsspec-"))
         self._session = None
         self._lock = asyncio.Lock()
 
