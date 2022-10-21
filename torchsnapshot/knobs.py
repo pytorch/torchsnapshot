@@ -21,12 +21,11 @@ from typing import Any, Generator
 _MAX_CHUNK_SIZE_ENV_VAR = "TORCHSNAPSHOT_MAX_CHUNK_SIZE_BYTES_OVERRIDE"
 _MAX_SHARD_SIZE_ENV_VAR = "TORCHSNAPSHOT_MAX_SHARD_SIZE_BYTES_OVERRIDE"
 _SLAB_SIZE_THRESHOLD_ENV_VAR = "TORCHSNAPSHOT_SLAB_SIZE_THRESHOLD_BYTES_OVERRIDE"
-_ENABLE_BATCHING_ENV_VAR = "TORCHSNAPSHOT_IS_BATCHING_ENABLED"
 
 _DEFAULT_MAX_CHUNK_SIZE_BYTES: int = 512 * 1024 * 1024
 _DEFAULT_MAX_SHARD_SIZE_BYTES: int = 512 * 1024 * 1024
 _DEFAULT_SLAB_SIZE_THRESHOLD_BYTES: int = 128 * 1024 * 1024
-_ENABLE_BATCHING_ENV_VAR = "TORCHSNAPSHOT_ENABLE_BATCHING"
+_DISABLE_BATCHING_ENV_VAR = "TORCHSNAPSHOT_DISABLE_BATCHING"
 
 
 def get_max_chunk_size_bytes() -> int:
@@ -50,9 +49,8 @@ def get_slab_size_threshold_bytes() -> int:
     return _DEFAULT_SLAB_SIZE_THRESHOLD_BYTES
 
 
-def get_is_batching_enabled() -> int:
-    override = os.environ.get(_ENABLE_BATCHING_ENV_VAR)
-    if override is not None:
+def is_batching_disabled() -> int:
+    if os.getenv(_DISABLE_BATCHING_ENV_VAR, "False").lower() in ("true", "1"):
         return True
     return False
 
@@ -85,8 +83,8 @@ def override_max_shard_size_bytes(
 
 
 @contextmanager
-def override_is_batching_enabled(enable: bool) -> Generator[None, None, None]:
-    with _override_env_var(_ENABLE_BATCHING_ENV_VAR, enable):
+def override_is_batching_disabled(disabled: bool) -> Generator[None, None, None]:
+    with _override_env_var(_DISABLE_BATCHING_ENV_VAR, disabled):
         yield
 
 
