@@ -15,13 +15,15 @@ from torchsnapshot.io_types import StoragePlugin, ReadIO, WriteIO
 
 class FSSpecPlugin(StoragePlugin):
     def __init__(self, root: str, **storage_options) -> None:
-        self.root = root
-        self.fs = fsspec.filesystem(protocol=self.root.split("://")[0], **storage_options)
+        protocol, self.root = root.split("://")
+        if not protocol.startswith("fsspec-"):
+            raise ValueError(f"Invalid protocol: {protocol}, Only fsspec-* protocols are supported")
+        self.fs = fsspec.filesystem(protocol=protocol.removeprefix("fsspec-"), **storage_options)
         self._session = None
+        self._lock = asyncio.Lock()
 
     async def _init_session(self) -> None:
-        lock = asyncio.Lock()
-        async with lock:
+        async with self._lock:
             if self._session is None:
                 self._session = await self.fs.set_session()
 
@@ -42,12 +44,7 @@ class FSSpecPlugin(StoragePlugin):
         await self.fs._rm_file(path)
 
     async def close(self) -> None:
-        lock = asyncio.Lock()
-        async with lock:
+        async with self._lock:
             if self._session is not None:
-                try:
-                    await self._session.close()
-                except AttributeError:
-                    # bug in aiobotocore 1.4.1
-                    await self._session._endpoint.http_session._session.close()
+                await self._session.close()
                 self._session = None
