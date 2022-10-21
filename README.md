@@ -59,7 +59,7 @@ from torchsnapshot import Snapshot
 
 # Taking a snapshot
 app_state = {"model": model, "optimizer": optimizer}
-snapshot = Snapshot.take(app_state=app_state, "/path/to/snapshot")
+snapshot = Snapshot.take(app_state=app_state, path="/path/to/snapshot")
 
 # Restoring from a snapshot
 snapshot.restore(app_state=app_state)
