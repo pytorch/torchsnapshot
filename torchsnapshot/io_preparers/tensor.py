@@ -13,7 +13,7 @@ import math
 from concurrent.futures import Executor
 from functools import reduce
 from operator import mul
-from typing import Any, Callable, List, Optional, Tuple, Union
+from typing import Any, Callable, List, Optional, Tuple, TypeVar, Union
 
 import torch
 
@@ -38,6 +38,7 @@ from torchsnapshot.serialization import (
     torch_load_from_bytes,
     torch_save_as_bytes,
 )
+from torchsnapshot.uvm_tensor import is_uvm_tensor, uvm_to_cpu
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -196,6 +197,19 @@ class TensorIOPreparer:
         return torch.empty(entry.shape, dtype=dtype)
 
 
+_Arg = TypeVar("_Arg")
+_Ret = TypeVar("_Ret")
+
+
+async def _run_in_executor(
+    executor: Optional[Executor], func: Callable[[_Arg], _Ret], *args: _Arg
+) -> _Ret:
+    if executor is not None:
+        return await asyncio.get_running_loop().run_in_executor(executor, func, *args)
+    else:
+        return func(*args)
+
+
 class TensorBufferStager(BufferStager):
     def __init__(
         self,
@@ -223,16 +237,17 @@ class TensorBufferStager(BufferStager):
             # difficult to figure out the safe amount of page-locked memory
             # that we can use. For now, we'll resort to a thread pool for
             # concurrent DtoH copy (with GIL released).
-            if executor is not None:
-                cpu_tensor = await asyncio.get_running_loop().run_in_executor(
-                    executor, tensor_to_cpu, self.tensor.detach()
-                )
-            else:
-                cpu_tensor = self.tensor.detach().to("cpu")
-        elif not is_tensor_custom_prepared and self._should_copy_cpu_tensor():
-            cpu_tensor = self.tensor.detach().clone()
+            cpu_tensor = await _run_in_executor(
+                executor, tensor_to_cpu, self.tensor.detach()
+            )
         else:
-            cpu_tensor = self.tensor.detach()
+            cpu_tensor = self.tensor
+            if is_uvm_tensor(cpu_tensor):
+                cpu_tensor = await _run_in_executor(
+                    executor, uvm_to_cpu, cpu_tensor.detach()
+                )
+            if not is_tensor_custom_prepared and self._should_copy_cpu_tensor():
+                cpu_tensor = cpu_tensor.clone()
 
         if self.entry.serializer == Serializer.TORCH_SAVE.value:
             return torch_save_as_bytes(cpu_tensor)
@@ -264,12 +279,12 @@ class TensorBufferStager(BufferStager):
             return True
         if (
             self.entry.serializer == Serializer.TORCH_SAVE
-            and self.tensor.nelement() > self.tensor.storage().size() * 0.8
+            and self.tensor.nelement() != self.tensor.storage().size()
         ):
             # When saving a tensor view, torch.save() saves the underlying
-            # storage backing the view. When the underlying storage is far
-            # larger than the view, it makes sense to make a copy of the view
-            # before saving it.
+            # storage backing the view. When the underlying storage is larger
+            # than the view, it makes sense to make a copy of the view before
+            # saving it.
             #
             # TODO: when the view maps to a contiguous region within its
             # storage, we can create a new tensor from the slicing the untyped
