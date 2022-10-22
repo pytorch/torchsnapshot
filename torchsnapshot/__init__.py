@@ -16,7 +16,7 @@ from .version import __version__
 
 def _is_notebook() -> bool:
     try:
-        from IPython import get_ipython  # pyre-ignore  # @manual
+        from IPython import get_ipython
 
         return (
             get_ipython().__class__.__name__ == "ZMQInteractiveShell"  # Jupyter
