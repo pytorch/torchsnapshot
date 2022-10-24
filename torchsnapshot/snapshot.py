@@ -43,7 +43,6 @@ from .knobs import is_batching_disabled
 from .manifest import (
     ChunkedTensorEntry,
     Entry,
-    get_manifest_for_rank,
     is_container_entry,
     is_replicated,
     Manifest,
@@ -52,6 +51,7 @@ from .manifest import (
     SnapshotMetadata,
     TensorEntry,
 )
+from .manifest_ops import get_manifest_for_rank
 from .partitioner import consolidate_replicated_entries, partition_write_reqs
 from .pg_wrapper import PGWrapper
 from .rng_state import RNGState
@@ -458,13 +458,13 @@ class Snapshot:
         global_keys = self._gather_keys(
             keys=list(app_state.keys()), pg_wrapper=pg_wrapper
         )
-        available_entries = get_manifest_for_rank(metadata=self.metadata, rank=rank)
+        manifest = get_manifest_for_rank(metadata=self.metadata, rank=rank)
         for key in global_keys:
             self._load_stateful(
                 rank=rank,
                 stateful_key=key,
                 stateful=app_state.get(key),
-                available_entries=available_entries,
+                manifest=manifest,
                 storage=storage,
                 pg=pg_wrapper,
                 event_loop=event_loop,
@@ -478,7 +478,7 @@ class Snapshot:
                 rank=rank,
                 stateful_key=key,
                 stateful=stateful,
-                available_entries=available_entries,
+                manifest=manifest,
                 storage=storage,
                 pg=pg_wrapper,
                 event_loop=event_loop,
@@ -667,7 +667,7 @@ class Snapshot:
         rank: int,
         stateful_key: str,
         stateful: Optional[Stateful],
-        available_entries: Manifest,
+        manifest: Manifest,
         storage: StoragePlugin,
         pg: PGWrapper,
         event_loop: asyncio.AbstractEventLoop,
@@ -693,13 +693,13 @@ class Snapshot:
             # ShardedTensor became a subclass of torch.Tensor since PyTorch
             # 1.13. We can drop the check for ShardedTensor once PyTorch 1.12.1
             # is no longer supported.
-            if k in available_entries and isinstance(v, (torch.Tensor, ShardedTensor))
+            if k in manifest and isinstance(v, (torch.Tensor, ShardedTensor))
         }
 
         container_entries = {}
         loaded_flattened = {}
         read_reqs: List[ReadReq] = []
-        for logical_path, entry in available_entries.items():
+        for logical_path, entry in manifest.items():
             if is_container_entry(entry):
                 container_entries[logical_path] = entry
                 continue

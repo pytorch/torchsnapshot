@@ -15,11 +15,9 @@ import pytest
 from _pytest.fixtures import SubRequest  # @manual
 
 from torchsnapshot.manifest import (
-    _copy_entry,
     ChunkedTensorEntry,
     DictEntry,
     Entry,
-    get_manifest_for_rank,
     is_replicated,
     ListEntry,
     ObjectEntry,
@@ -28,6 +26,7 @@ from torchsnapshot.manifest import (
     SnapshotMetadata,
     TensorEntry,
 )
+from torchsnapshot.manifest_ops import _insert_entry, get_manifest_for_rank
 
 _WORLD_SIZE = 2
 _MANIFEST_0: Dict[str, Entry] = {
@@ -323,7 +322,7 @@ def test_get_local_manifest(manifest: Dict[str, Entry], rank: int) -> None:
         ]
     )
     if rank >= _WORLD_SIZE:
-        expected_local_manifest["foo"] = DictEntry(keys=["baz", "qux_chunked", "qux"])
+        expected_local_manifest["foo"] = DictEntry(keys=["baz", "qux", "qux_chunked"])
     assert local_manifest == expected_local_manifest
 
 
@@ -353,7 +352,7 @@ def test_replicated_entries_only_on_rank_0(rank: int) -> None:
     assert local_manifest_0 == local_manifest_1
 
 
-def test_copy_entry() -> None:
+def test_insert_entry() -> None:
     src_manifest = {
         "foo": DictEntry(keys=["bar", "baz"]),
         "foo/bar": ListEntry(),
@@ -383,7 +382,7 @@ def test_copy_entry() -> None:
             replicated=True,
         ),
     }
-    _copy_entry(
+    _insert_entry(
         dst_manifest=dst_manifest,
         src_manifest=src_manifest,
         logical_path="foo/bar/0/qux",
@@ -416,7 +415,7 @@ def test_copy_entry() -> None:
             replicated=True,
         ),
     }
-    _copy_entry(
+    _insert_entry(
         dst_manifest=dst_manifest,
         src_manifest=src_manifest,
         logical_path="foo/bar/0/qux",
