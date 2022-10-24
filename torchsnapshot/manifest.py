@@ -12,7 +12,7 @@ import logging
 import struct
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union
+from typing import Any, ClassVar, Dict, List, Optional, Tuple, TypeVar, Union
 
 import yaml
 
@@ -210,6 +210,8 @@ class PrimitiveEntry(Entry):
     readable: for ease of inspection for certain types
     """
 
+    supported_types: ClassVar[List[str]] = [t.value for t in PrimitiveType]
+
     serialized_value: str
     replicated: bool
     readable: Optional[str]
@@ -247,10 +249,6 @@ class PrimitiveEntry(Entry):
         )
 
     @classmethod
-    def supported_types(cls) -> List[str]:
-        return [t.value for t in PrimitiveType]
-
-    @classmethod
     def _serialize(cls, type_name: str, obj: Any) -> str:
         if type_name == "int":
             return str(obj)
@@ -269,7 +267,7 @@ class PrimitiveEntry(Entry):
     @classmethod
     def from_object(cls, obj: Any) -> "PrimitiveEntry":
         type_name = type(obj).__name__
-        if type_name not in cls.supported_types():
+        if type_name not in cls.supported_types:
             raise TypeError(f"Unsupported primitive obj of type {type_name}")
 
         serialized_value = cls._serialize(type_name, obj)
@@ -284,7 +282,7 @@ class PrimitiveEntry(Entry):
         replicated: bool,
         readable: Optional[str],
     ) -> "PrimitiveEntry":
-        if type_name not in cls.supported_types():
+        if type_name not in cls.supported_types:
             raise TypeError(f"Unsupported primitive obj of type {type_name}")
 
         return PrimitiveEntry(type_name, serialized_value, replicated)
@@ -316,7 +314,7 @@ class SnapshotMetadata:
                 manifest[path] = DictEntry(**entry)
             elif type_name == "OrderedDict":
                 manifest[path] = OrderedDictEntry(**entry)
-            elif type_name in PrimitiveEntry.supported_types():
+            elif type_name in PrimitiveEntry.supported_types:
                 manifest[path] = PrimitiveEntry.from_serialized(type_name, **entry)
             elif type_name == "Tensor":
                 manifest[path] = TensorEntry(**entry)

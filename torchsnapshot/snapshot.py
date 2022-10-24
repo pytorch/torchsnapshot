@@ -44,7 +44,6 @@ from .manifest import (
     ChunkedTensorEntry,
     Entry,
     is_container_entry,
-    is_replicated,
     Manifest,
     PrimitiveEntry,
     ShardedTensorEntry,
@@ -408,12 +407,9 @@ class Snapshot:
         ]
 
         if not is_batching_disabled():
-            entry_keys = list(object_entries.keys())
-            entries = list(object_entries.values())
-            entries, write_reqs = batch_write_requests(
-                entries=entries, write_reqs=write_reqs
+            _, write_reqs = batch_write_requests(
+                entries=list(object_entries.values()), write_reqs=write_reqs
             )
-            object_entries = dict(zip(entry_keys, entries))
 
         all_entries = dict(**primitive_entries, **object_entries)
 
@@ -878,17 +874,6 @@ class Snapshot:
         manifests: List[Dict[str, Entry]] = [None] * pg.get_world_size()
         pg.all_gather_object(manifests, manifest)
         manifests = consolidate_replicated_entries(rank_to_entries=manifests)
-
-        # Remove replicated entries from non-zero ranks to reduce the size and
-        # serialization time of the yaml. In restore()/read_object(),
-        # replicated entries will be made available to all ranks via
-        # get_manifest_for_rank().
-        for rank, manifest in enumerate(manifests):
-            if rank == 0:
-                continue
-            manifests[rank] = {
-                k: v for k, v in manifest.items() if not is_replicated(v)
-            }
 
         global_manifest = {}
         for rank, manifest in enumerate(manifests):

@@ -153,14 +153,14 @@ def _partition_replicated_write_reqs(
     for logical_path, write_req_idx in write_loads:
         entry = entries[logical_path]
         if isinstance(entry, ChunkedTensorEntry):
-            chunk = copy.deepcopy(entry.chunks[write_req_idx])
+            chunk = entry.chunks[write_req_idx]
             if logical_path not in new_entries:
                 new_entries[logical_path] = copy.deepcopy(entry)
                 new_entries[logical_path].chunks = [chunk]
             else:
                 new_entries[logical_path].chunks.append(chunk)
         else:
-            new_entries[logical_path] = copy.deepcopy(entry)
+            new_entries[logical_path] = entry
         new_write_reqs[logical_path].append(write_reqs[logical_path][write_req_idx])
 
     return new_entries, new_write_reqs
@@ -236,7 +236,6 @@ def partition_write_reqs(
 def _consolidate_replicated_chunked_tensor_entries(
     rank_to_entries: List[Dict[str, Entry]]
 ) -> List[Dict[str, Entry]]:
-    rank_to_entries = copy.deepcopy(rank_to_entries)
     groups: Dict[str, List[ChunkedTensorEntry]] = defaultdict(list)
 
     for entries in rank_to_entries:
@@ -245,10 +244,14 @@ def _consolidate_replicated_chunked_tensor_entries(
                 groups[logical_path].append(entry)
 
     for logical_path, group in groups.items():
-        merged = group[0]
-        merged.chunks = sorted(
-            (chunk for entry in group for chunk in entry.chunks),
-            key=lambda chunk: chunk.offsets,
+        merged = ChunkedTensorEntry(
+            dtype=group[0].dtype,
+            shape=group[0].shape,
+            chunks=sorted(
+                (chunk for entry in group for chunk in entry.chunks),
+                key=lambda chunk: chunk.offsets,
+            ),
+            replicated=True,
         )
         for entries in rank_to_entries:
             entries[logical_path] = merged
@@ -257,7 +260,7 @@ def _consolidate_replicated_chunked_tensor_entries(
 
 
 def consolidate_replicated_entries(
-    rank_to_entries: List[Dict[str, Entry]]
+    rank_to_entries: List[Dict[str, Entry]], dedup: bool = True
 ) -> List[Dict[str, Entry]]:
     """
     Consolidate replicated entries across ranks.
@@ -268,6 +271,7 @@ def consolidate_replicated_entries(
 
     Args:
         rank_to_entries: The entries from all ranks.
+        dedup: Whether to place replicated entries only in rank 0's manifest.
 
     Returns:
         Consolidated entries for all ranks.
@@ -275,17 +279,24 @@ def consolidate_replicated_entries(
     rank_to_entries = _consolidate_replicated_chunked_tensor_entries(
         rank_to_entries=rank_to_entries
     )
-    replicated_entries: Dict[str, Entry] = {}
 
+    # Collect all replicated entries and remove them from the manifests
+    replicated_entries = {}
     for entries in rank_to_entries:
-        for logical_path, entry in entries.items():
+        for logical_path in list(entries.keys()):
+            entry = entries[logical_path]
             if not is_replicated(entry):
                 continue
             if logical_path in replicated_entries:
                 assert replicated_entries[logical_path] == entry
-            replicated_entries[logical_path] = entry
+            else:
+                replicated_entries[logical_path] = entry
+            del entries[logical_path]
 
-    for entries in rank_to_entries:
+    # Add the replicated entries to the manifests
+    for rank, entries in enumerate(rank_to_entries):
+        if dedup and rank != 0:
+            continue
         for logical_path, entry in replicated_entries.items():
             entries[logical_path] = entry
 
@@ -293,10 +304,13 @@ def consolidate_replicated_entries(
 
 
 def consolidate_replicated_entries_dist(
-    entries: Dict[str, Entry], pg: PGWrapper
+    entries: Dict[str, Entry], pg: PGWrapper, dedup: bool = True
 ) -> Dict[str, Entry]:
     # pyre-ignore
     obj_list: List[Dict[str, Entry]] = [None] * pg.get_world_size()
     pg.all_gather_object(obj_list=obj_list, obj=entries)
-    rank_to_entries = consolidate_replicated_entries(rank_to_entries=obj_list)
+    rank_to_entries = consolidate_replicated_entries(
+        rank_to_entries=obj_list,
+        dedup=dedup,
+    )
     return rank_to_entries[pg.get_rank()]
