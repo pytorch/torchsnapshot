@@ -30,6 +30,7 @@ from .io_preparers.tensor import (
 )
 
 from .io_types import ReadReq, WriteReq
+from .knobs import get_max_chunk_size_bytes
 from .manifest import (
     ChunkedTensorEntry,
     Entry,
@@ -55,7 +56,7 @@ class PrimitivePreparer:
     @staticmethod
     def should_inline(obj: Any) -> bool:
         type_name = type(obj).__name__
-        if type_name not in PrimitiveEntry.supported_types():
+        if type_name not in PrimitiveEntry.supported_types:
             return False
         # TODO for long str/bytes, return False to fall back to ObjectEntry
         return True
@@ -100,8 +101,8 @@ def prepare_write(
             _tensor_prepare_func=_tensor_prepare_func,
         )
     elif isinstance(obj, torch.Tensor):
-        chunking_instruction = ChunkedTensorIOPreparer.chunk_tensor(obj)
-        if len(chunking_instruction) > 1:
+        if obj.nelement() * obj.element_size() > get_max_chunk_size_bytes():
+            chunking_instruction = ChunkedTensorIOPreparer.chunk_tensor(obj)
             entry, obj_write_req = ChunkedTensorIOPreparer.prepare_write(
                 storage_path=storage_path,
                 tensor=obj,

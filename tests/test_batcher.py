@@ -279,7 +279,7 @@ async def test_batcher(
 
     # Batch the write requests
     entries, batched_write_reqs = batch_write_requests(
-        entries=entries, write_reqs=write_reqs
+        entries=entries, write_reqs=copy.deepcopy(write_reqs)
     )
     assert len(batched_write_reqs) < len(write_reqs)
     write_reqs = batched_write_reqs

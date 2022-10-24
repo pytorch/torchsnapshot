@@ -6,7 +6,6 @@
 # LICENSE file in the root directory of this source tree.
 
 import asyncio
-import copy
 import os
 import uuid
 from collections import defaultdict
@@ -253,6 +252,8 @@ def batch_write_requests(  # noqa
             location: "dir/batch_file_1"
             byte_range: [31457280, 62914560]
 
+    NOTE: this function performs entry relocation in-place.
+
     Args:
         entries: The entries associated with the write requests to batch.
         write_reqs: The write requests to batch.
@@ -328,7 +329,6 @@ def batch_write_requests(  # noqa
     # Since we only update tensor write requests, we only need to update
     # TensorEntrys. TensorEntrys can be nested in ChunkedTensorEntry and
     # ShardedTensorEntry.
-    entries = copy.deepcopy(entries)
     location_to_entry: Dict[str, TensorEntry] = {}
     for entry in entries:
         if isinstance(entry, TensorEntry):

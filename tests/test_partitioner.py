@@ -219,7 +219,7 @@ async def test_partitioner(  # noqa
         partitioned_write_reqs = batched_write_reqs
 
     partitioned_entries = consolidate_replicated_entries_dist(
-        partitioned_entries, pg=PGWrapper(pg=None)
+        partitioned_entries, pg=PGWrapper(pg=None), dedup=False
     )
 
     # Verify that all logical paths are still present
