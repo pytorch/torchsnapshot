@@ -130,5 +130,4 @@ def test_ddp_upscale(layer_shapes: List[List[int]], tmp_path: Path) -> None:
         snapshot = Snapshot(path=str(tmp_path))
         snapshot.restore(app_state={"ddp": dst_ddp, "optim": dst_optim})
         assert check_state_dict_eq(dst.state_dict(), src.state_dict())
-        # TODO: fix this
-        # assert check_state_dict_eq(dst_optim.state_dict(), src_optim.state_dict())
+        assert check_state_dict_eq(dst_optim.state_dict(), src_optim.state_dict())
