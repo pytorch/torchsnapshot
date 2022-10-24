@@ -16,7 +16,7 @@ __all__ = ["FSSpecStoragePlugin"]
 
 
 class FSSpecStoragePlugin(StoragePlugin):
-    def __init__(self, root: str) -> None:
+    def __init__(self, root: str, **storage_options) -> None:
         root_items = root.split("://")
         if len(root_items) != 2:
             raise ValueError("only protocol://path is supported by fsspec plugin")
@@ -25,7 +25,7 @@ class FSSpecStoragePlugin(StoragePlugin):
             raise ValueError(
                 f"Invalid protocol: {protocol}, Only fsspec-* protocols are supported"
             )
-        self.fs = fsspec.filesystem(protocol=protocol.removeprefix("fsspec-"))
+        self.fs = fsspec.filesystem(protocol=protocol.removeprefix("fsspec-"), **storage_options)
         self._session = None
         self._lock = asyncio.Lock()
 
@@ -37,18 +37,22 @@ class FSSpecStoragePlugin(StoragePlugin):
     async def write(self, write_io: WriteIO) -> None:
         await self._init_session()
         path = os.path.join(self.root, write_io.path)
+        splits = path.split("/")
+        for i in range(len(splits)):
+            dir_path = "/".join(splits[:i])
+            if dir_path and not await self.fs._exists(dir_path):
+                await self.fs._mkdir(dir_path)
         await self.fs._pipe_file(path, bytes(write_io.buf))
 
     async def read(self, read_io: ReadIO) -> None:
         await self._init_session()
         path = os.path.join(self.root, read_io.path)
-        result = await self.fs._cat_file(path)
-        read_io.buf = io.BytesIO(result)
+        read_io.buf = io.BytesIO(await self.fs._cat_file(path))
 
     async def delete(self, path: str) -> None:
         await self._init_session()
         path = os.path.join(self.root, path)
-        await self.fs._rm_file(path)
+        await self.fs._rm(path, recursive=True)
 
     async def close(self) -> None:
         async with self._lock:
