@@ -8,7 +8,7 @@
 import io
 import os
 import pathlib
-from typing import Set
+from typing import Any, Dict, Set
 
 import aiofiles
 import aiofiles.os
@@ -17,7 +17,7 @@ from torchsnapshot.io_types import ReadIO, StoragePlugin, WriteIO
 
 
 class FSStoragePlugin(StoragePlugin):
-    def __init__(self, root: str) -> None:
+    def __init__(self, root: str, storage_options: Dict[str, Any]) -> None:
         self.root = root
         self._dir_cache: Set[pathlib.Path] = set()
 
