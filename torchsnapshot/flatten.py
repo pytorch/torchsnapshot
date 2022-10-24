@@ -9,7 +9,7 @@
 
 import itertools
 from collections import defaultdict, OrderedDict
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, Union
 from urllib.parse import unquote
 
 from .manifest import DictEntry, Entry, ListEntry, Manifest, OrderedDictEntry
@@ -178,16 +178,25 @@ def _populate_container(path: str, container: Any, values: Dict[str, Any]) -> No
         items = sorted(values.items(), key=lambda e: int(e[0]))
         container.extend(item[1] for item in items)
     elif isinstance(container, dict):
-        for key, obj in values.items():
+        # pyre-ignore
+        key_to_val: Dict[Union[str, int], Any] = {
+            _decode(k): v for k, v in values.items()
+        }
+        # If a string can represent an integer, make the integer represented by
+        # the string a candidate key in addition.
+        for key in list(values.keys()):
             key = _decode(key)
-            if key not in container and _check_int(key):
-                key = int(key)
-            if key not in container:
-                raise RuntimeError(
-                    f"{key} is not a valid key of container {path} "
-                    f"(valid keys: {list(container.keys())})."
-                )
-            container[key] = obj
+            if _check_int(key):
+                key_to_val[int(key)] = values[key]
+        # NOTE: only keys that appear in both `container` and `key_to_val` will
+        # be present in the poplated container. The caller of `inflate()` is
+        # responsible for adding a key into the container entry if they wish
+        # the key to be present in the inflated container.
+        for key in list(container.keys()):
+            if key in key_to_val:
+                container[key] = key_to_val[key]
+            else:
+                del container[key]
     else:
         raise AssertionError(f"Unrecognized container type: {type(container)}.")
 
