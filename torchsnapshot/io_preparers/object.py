@@ -11,7 +11,7 @@ import io
 import logging
 import sys
 from concurrent.futures import Executor
-from typing import Any, Callable, Generic, List, Optional, Tuple, TypeVar
+from typing import Any, Generic, List, Optional, Tuple, TypeVar
 
 import torch
 
@@ -19,6 +19,7 @@ from torchsnapshot.io_types import (
     BufferConsumer,
     BufferStager,
     BufferType,
+    Future,
     ReadReq,
     WriteReq,
 )
@@ -49,14 +50,18 @@ class ObjectIOPreparer(Generic[T]):
         )
 
     @classmethod
-    def prepare_read(cls, entry: ObjectEntry, obj_out: T) -> List[ReadReq]:
-        buffer_consumer = ObjectBufferConsumer(obj_out=obj_out)
+    def prepare_read(
+        cls, entry: ObjectEntry, obj_out: Optional[Any]
+    ) -> Tuple[List[ReadReq], Future[T]]:
+        # obj_out is only used for memory estimation
+        fut = Future(obj=obj_out)
+        buffer_consumer = ObjectBufferConsumer(fut=fut)
         return [
             ReadReq(
                 path=entry.location,
                 buffer_consumer=buffer_consumer,
             )
-        ]
+        ], fut
 
 
 class ObjectBufferStager(BufferStager):
@@ -74,19 +79,14 @@ class ObjectBufferStager(BufferStager):
 
 
 class ObjectBufferConsumer(BufferConsumer, Generic[T]):
-    def __init__(self, obj_out: T) -> None:
-        self.consuming_cost_bytes: int = sys.getsizeof(obj_out)
-        self.callback: Optional[Callable[[T], None]] = None
+    def __init__(self, fut: Future[T]) -> None:
+        self.fut = fut
 
     async def consume_buffer(
         self, buf: bytes, executor: Optional[Executor] = None
     ) -> None:
         obj: T = torch.load(io.BytesIO(buf))
-        if self.callback is not None:
-            self.callback(obj)
+        self.fut.obj = obj
 
     def get_consuming_cost_bytes(self) -> int:
-        return self.consuming_cost_bytes
-
-    def set_consume_callback(self, callback: Callable[[T], None]) -> None:
-        self.callback = callback
+        return sys.getsizeof(self.fut.obj)

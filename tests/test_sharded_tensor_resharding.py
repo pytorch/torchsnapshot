@@ -96,7 +96,7 @@ async def test_sharded_tensor_resharding(
     entry, write_reqs = ShardedTensorIOPreparer.prepare_write(
         storage_path="src", obj=src
     )
-    read_reqs = ShardedTensorIOPreparer.prepare_read(entry=entry, obj_out=dst)
+    read_reqs, _ = ShardedTensorIOPreparer.prepare_read(entry=entry, obj_out=dst)
 
     # Fulfill the dst's read requests with src's write requests
     path_to_buf = {wr.path: await wr.buffer_stager.stage_buffer() for wr in write_reqs}

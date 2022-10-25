@@ -21,6 +21,7 @@ from torchsnapshot.io_types import (
     BufferConsumer,
     BufferStager,
     BufferType,
+    Future,
     ReadReq,
     WriteReq,
 )
@@ -91,33 +92,44 @@ class TensorIOPreparer:
         entry: TensorEntry,
         tensor_out: Optional[torch.Tensor] = None,
         buffer_size_limit_bytes: Optional[int] = None,
-    ) -> List[ReadReq]:
+    ) -> Tuple[List[ReadReq], Future[torch.Tensor]]:
         # TODO: When the output tensor is a CPU tensor, we should directly load
         # into its storage buffer. This is an important optimization because:
         # - We eliminate an allocation and a copy
         # - With the extra allocation, the I/O concurrency will be severely
         # reduced by the scheduler in a memory constrained environment
-        if tensor_out is None:
-            raise RuntimeError(
-                "Reading a Tensor without a runtime object is not yet supported."
-            )
+        if tensor_out is None or not cls.can_load_inplace(entry=entry, obj=tensor_out):
+            tensor_out = cls.empty_tensor_from_entry(entry)
 
         if (
-            buffer_size_limit_bytes is None
-            or entry.serializer != Serializer.BUFFER_PROTOCOL.value
+            buffer_size_limit_bytes is not None
+            and entry.serializer == Serializer.BUFFER_PROTOCOL.value
         ):
-            buffer_consumer = TensorBufferConsumer(
-                tensor=tensor_out,
+            return cls.prepare_read_tiled(
                 entry=entry,
+                tensor_out=tensor_out,
+                buffer_size_limit_bytes=buffer_size_limit_bytes,
             )
-            return [
-                ReadReq(
-                    path=entry.location,
-                    byte_range=entry.byte_range_tuple,
-                    buffer_consumer=buffer_consumer,
-                )
-            ]
 
+        buffer_consumer = TensorBufferConsumer(
+            tensor=tensor_out,
+            entry=entry,
+        )
+        return [
+            ReadReq(
+                path=entry.location,
+                byte_range=entry.byte_range_tuple,
+                buffer_consumer=buffer_consumer,
+            )
+        ], Future(obj=tensor_out)
+
+    @classmethod
+    def prepare_read_tiled(
+        cls,
+        entry: TensorEntry,
+        tensor_out: torch.Tensor,
+        buffer_size_limit_bytes: int,
+    ) -> Tuple[List[ReadReq], Future[torch.Tensor]]:
         num_chunks = math.ceil(
             cls.get_tensor_size_from_entry(entry) / buffer_size_limit_bytes
         )
@@ -164,7 +176,7 @@ class TensorIOPreparer:
                 )
             )
             offset += chunk_sz_bytes
-        return read_reqs
+        return read_reqs, Future(obj=tensor_out)
 
     @staticmethod
     def get_tensor_size_from_entry(entry: TensorEntry) -> int:

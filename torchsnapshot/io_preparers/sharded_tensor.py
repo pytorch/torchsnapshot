@@ -34,7 +34,7 @@ from torchsnapshot.io_preparers.tensor import (
     TensorIOPreparer,
 )
 
-from torchsnapshot.io_types import BufferConsumer, ReadReq, WriteReq
+from torchsnapshot.io_types import BufferConsumer, Future, ReadReq, WriteReq
 from torchsnapshot.knobs import get_max_shard_size_bytes
 from torchsnapshot.manifest import Shard, ShardedTensorEntry, TensorEntry
 from torchsnapshot.serialization import Serializer
@@ -196,12 +196,11 @@ class ShardedTensorIOPreparer:
     def prepare_read(
         cls,
         entry: ShardedTensorEntry,
-        obj_out: Optional[torch.Tensor] = None,
-    ) -> List[ReadReq]:
+        obj_out: Optional[ShardedTensor] = None,
+    ) -> Tuple[List[ReadReq], Future[ShardedTensor]]:
         if obj_out is None:
-            # TODO: support loading sharded tensor without obj_out
             raise RuntimeError(
-                "Reading a ShardedTensor without a runtime object is not yet supported."
+                "Reading a ShardedTensor without a runtime object is not supported."
             )
 
         global_shape = cls._get_global_shape(entry=entry)
@@ -266,7 +265,7 @@ class ShardedTensorIOPreparer:
                     byte_range=shard.tensor.byte_range_tuple,
                 )
             )
-        return read_reqs
+        return read_reqs, Future(obj=obj_out)
 
 
 @dataclass

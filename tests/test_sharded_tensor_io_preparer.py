@@ -169,7 +169,7 @@ async def test_sharded_tensor_io_preparer(
 
     # Consume the buffers with dst and verify that src == dst
     assert not tensor_eq(src, dst)
-    read_reqs = ShardedTensorIOPreparer.prepare_read(entry=entry, obj_out=dst)
+    read_reqs, _ = ShardedTensorIOPreparer.prepare_read(entry=entry, obj_out=dst)
     for rr in read_reqs:
         await rr.buffer_consumer.consume_buffer(buf=location_to_buf[rr.path])
     assert tensor_eq(src, dst)
