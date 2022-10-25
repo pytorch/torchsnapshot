@@ -36,6 +36,12 @@ class Entry:
 
     type: str
 
+    @classmethod
+    def from_yaml_obj(cls, yaml_obj: Any) -> "Entry":
+        if "type" in yaml_obj:
+            del yaml_obj["type"]
+        return cls(**yaml_obj)
+
 
 @dataclass
 class TensorEntry(Entry):
@@ -78,6 +84,11 @@ class Shard:
     sizes: List[int]
     tensor: TensorEntry
 
+    @classmethod
+    def from_yaml_obj(cls, yaml_obj: Any) -> "Shard":
+        yaml_obj["tensor"] = TensorEntry.from_yaml_obj(yaml_obj["tensor"])
+        return cls(**yaml_obj)
+
 
 @dataclass
 class ShardedTensorEntry(Entry):
@@ -88,23 +99,13 @@ class ShardedTensorEntry(Entry):
         self.shards = shards
 
     @classmethod
-    def from_yaml(cls, entry: Any) -> "ShardedTensorEntry":
-        shards = [
-            Shard(
-                offsets=shard["offsets"],
-                sizes=shard["sizes"],
-                tensor=TensorEntry(
-                    location=shard["tensor"]["location"],
-                    serializer=shard["tensor"]["serializer"],
-                    dtype=shard["tensor"]["dtype"],
-                    shape=shard["tensor"]["shape"],
-                    replicated=shard["tensor"]["replicated"],
-                    byte_range=shard["tensor"].get("byte_range"),
-                ),
-            )
-            for shard in entry["shards"]
+    def from_yaml_obj(cls, yaml_obj: Any) -> "ShardedTensorEntry":
+        if "type" in yaml_obj:
+            del yaml_obj["type"]
+        yaml_obj["shards"] = [
+            Shard.from_yaml_obj(shard) for shard in yaml_obj["shards"]
         ]
-        return cls(shards=shards)
+        return cls(**yaml_obj)
 
 
 @dataclass
@@ -124,31 +125,13 @@ class ChunkedTensorEntry(Entry):
         self.replicated = replicated
 
     @classmethod
-    def from_yaml(cls, entry: Any) -> "ChunkedTensorEntry":
-        dtype = entry["dtype"]
-        replicated = entry["replicated"]
-        chunks = [
-            Shard(
-                offsets=chunk["offsets"],
-                sizes=chunk["sizes"],
-                tensor=TensorEntry(
-                    location=chunk["tensor"]["location"],
-                    serializer=chunk["tensor"]["serializer"],
-                    dtype=chunk["tensor"]["dtype"],
-                    shape=chunk["tensor"]["shape"],
-                    replicated=chunk["tensor"]["replicated"],
-                    byte_range=chunk["tensor"].get("byte_range"),
-                ),
-            )
-            for chunk in entry["chunks"]
+    def from_yaml_obj(cls, yaml_obj: Any) -> "ChunkedTensorEntry":
+        if "type" in yaml_obj:
+            del yaml_obj["type"]
+        yaml_obj["chunks"] = [
+            Shard.from_yaml_obj(shard) for shard in yaml_obj["chunks"]
         ]
-        shape = entry["shape"]
-        return cls(
-            dtype=dtype,
-            shape=shape,
-            chunks=chunks,
-            replicated=replicated,
-        )
+        return cls(**yaml_obj)
 
 
 @dataclass
@@ -275,17 +258,15 @@ class PrimitiveEntry(Entry):
         return PrimitiveEntry(type_name, serialized_value, False, readable_value)
 
     @classmethod
-    def from_serialized(
+    def from_yaml_obj(
         cls,
-        type_name: str,
-        serialized_value: str,
-        replicated: bool,
-        readable: Optional[str],
+        yaml_obj: Any,
     ) -> "PrimitiveEntry":
+        type_name = yaml_obj["type"]
         if type_name not in cls.supported_types:
             raise TypeError(f"Unsupported primitive obj of type {type_name}")
-
-        return PrimitiveEntry(type_name, serialized_value, replicated)
+        del yaml_obj["readable"]
+        return cls(**yaml_obj)
 
 
 T = TypeVar("T", bound=Entry)
@@ -305,25 +286,24 @@ class SnapshotMetadata:
     def from_yaml(cls, yaml_str: str) -> "SnapshotMetadata":
         d = yaml.load(yaml_str, Loader=Loader)
         manifest: Manifest = {}
-        for path, entry in d["manifest"].items():
-            type_name = entry["type"]
-            del entry["type"]
+        for path, yaml_obj in d["manifest"].items():
+            type_name = yaml_obj["type"]
             if type_name == "list":
-                manifest[path] = ListEntry(**entry)
+                manifest[path] = ListEntry.from_yaml_obj(yaml_obj)
             elif type_name == "dict":
-                manifest[path] = DictEntry(**entry)
+                manifest[path] = DictEntry.from_yaml_obj(yaml_obj)
             elif type_name == "OrderedDict":
-                manifest[path] = OrderedDictEntry(**entry)
+                manifest[path] = OrderedDictEntry.from_yaml_obj(yaml_obj)
             elif type_name in PrimitiveEntry.supported_types:
-                manifest[path] = PrimitiveEntry.from_serialized(type_name, **entry)
+                manifest[path] = PrimitiveEntry.from_yaml_obj(yaml_obj)
             elif type_name == "Tensor":
-                manifest[path] = TensorEntry(**entry)
+                manifest[path] = TensorEntry.from_yaml_obj(yaml_obj)
             elif type_name == "ShardedTensor":
-                manifest[path] = ShardedTensorEntry.from_yaml(entry=entry)
+                manifest[path] = ShardedTensorEntry.from_yaml_obj(yaml_obj)
             elif type_name == "ChunkedTensor":
-                manifest[path] = ChunkedTensorEntry.from_yaml(entry=entry)
+                manifest[path] = ChunkedTensorEntry.from_yaml_obj(yaml_obj)
             elif type_name == "object":
-                manifest[path] = ObjectEntry(**entry)
+                manifest[path] = ObjectEntry.from_yaml_obj(yaml_obj)
         d["manifest"] = manifest
         return cls(**d)
 
