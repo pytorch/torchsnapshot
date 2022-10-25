@@ -59,7 +59,9 @@ class GCSStoragePlugin(StoragePlugin):
         "{bucket}/o/{blob_name}?alt=media"
     )
 
-    def __init__(self, root: str, storage_options: Dict[str, Any]) -> None:
+    def __init__(
+        self, root: str, storage_options: Optional[Dict[str, Any]] = None
+    ) -> None:
         components = root.split("/")
         if len(components) < 2:
             raise RuntimeError(
