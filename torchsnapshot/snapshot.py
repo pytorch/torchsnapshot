@@ -562,7 +562,7 @@ class Snapshot:
         entry = manifest[unranked_path]
         if isinstance(entry, PrimitiveEntry):
             return cast(T, entry.get_value())
-        read_reqs = prepare_read(
+        read_reqs, fut = prepare_read(
             entry=entry,
             obj_out=obj_out,
             # TODO: find a suitable buffer_size_limit_bytes to enable chunked
@@ -571,15 +571,6 @@ class Snapshot:
             # reading a single tensor.
             buffer_size_limit_bytes=memory_budget_bytes,
         )
-        box = []
-        for read_req in read_reqs:
-            buffer_consumer = read_req.buffer_consumer
-            if isinstance(buffer_consumer, ObjectBufferConsumer):
-                # ObjectBufferConsumer deals with objects that can not be
-                # in-place restored. We need to replace the original object
-                # in the flattened dictionary with the object materialized
-                # by the buffer consumer.
-                buffer_consumer.set_consume_callback(functools.partial(box.append))
 
         if not is_batching_disabled():
             read_reqs = batch_read_requests(read_reqs=read_reqs)
@@ -594,14 +585,7 @@ class Snapshot:
         )
         storage.sync_close(event_loop=event_loop)
         event_loop.close()
-        if len(box) != 0:
-            if len(box) != 1:
-                raise AssertionError(
-                    f"Expect to load a single object from an entry (got {len(box)})."
-                )
-            return box[0]
-        else:
-            return cast(T, obj_out)
+        return fut.obj
 
     def get_manifest(self) -> Dict[str, Entry]:
         """
@@ -693,51 +677,27 @@ class Snapshot:
         }
 
         container_entries = {}
-        loaded_flattened = {}
         read_reqs: List[ReadReq] = []
+        futs = {}
         for logical_path, entry in manifest.items():
             if is_container_entry(entry):
                 container_entries[logical_path] = entry
                 continue
 
-            # For primitive types, directly materialize from PrimitiveEntry
-            if isinstance(entry, PrimitiveEntry):
-                loaded_flattened[logical_path] = entry.get_value()
+            obj_out = flattened.get(logical_path)
+            if obj_out is None and isinstance(entry, ShardedTensorEntry):
                 continue
 
-            # Try to load directly into already allocated object
-            if isinstance(entry, (TensorEntry, ChunkedTensorEntry)):
-                obj_out = flattened.get(logical_path)
-                if not TensorIOPreparer.can_load_inplace(entry=entry, obj=obj_out):
-                    obj_out = TensorIOPreparer.empty_tensor_from_entry(entry)
-            elif isinstance(entry, ShardedTensorEntry):
-                obj_out = flattened.get(logical_path)
-                if obj_out is None:
-                    continue
-            else:
-                obj_out = None
-
-            loaded_flattened[logical_path] = obj_out
-            if logical_path in flattened:
-                del flattened[logical_path]
-
-            rrs = prepare_read(
+            rrs, fut = prepare_read(
                 entry=entry,
                 obj_out=obj_out,
             )
-            for rr in rrs:
-                buffer_consumer = rr.buffer_consumer
-                if isinstance(buffer_consumer, ObjectBufferConsumer):
-                    # ObjectBufferConsumer deals with objects that can not be
-                    # in-place restored. We need to replace the original object
-                    # in the flattened dictionary with the object materialized
-                    # by the buffer consumer.
-                    buffer_consumer.set_consume_callback(
-                        functools.partial(
-                            dict.__setitem__, loaded_flattened, logical_path
-                        )
-                    )
             read_reqs += rrs
+            futs[logical_path] = fut
+
+            # Free memory in case the items is a copy
+            if logical_path in flattened:
+                del flattened[logical_path]
 
         if not is_batching_disabled():
             read_reqs = batch_read_requests(read_reqs=read_reqs)
@@ -753,7 +713,9 @@ class Snapshot:
 
         # Build the originally saved state dict and use it to restore the stateful
         state_dict = inflate(
-            manifest=container_entries, flattened=loaded_flattened, prefix=stateful_key
+            manifest=container_entries,
+            flattened={k: fut.obj for k, fut in futs.items()},
+            prefix=stateful_key,
         )
         stateful.load_state_dict(state_dict)
 
