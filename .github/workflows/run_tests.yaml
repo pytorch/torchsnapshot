@@ -26,14 +26,14 @@ jobs:
           conda install pytorch cpuonly -c pytorch-nightly
           pip install -r requirements.txt
           pip install -r dev-requirements.txt
-          coverage run -a ./setup.py sdist bdist_wheel
+          ./setup.py sdist bdist_wheel
           pip install dist/*.whl
       - name: Run unit tests with coverage
         shell: bash -l {0}
         run: |
           set -eux
           conda activate test
-          pytest --timeout=300 --cov=. --cov-append --cov-report xml -vv -rA -m "not gpu_only" tests
+          pytest --timeout=300 --cov=. --cov-report xml -vv -rA -m "not gpu_only" tests
       - name: Upload coverage to codecov
         uses: codecov/codecov-action@v2
 
@@ -98,14 +98,14 @@ jobs:
 
           pip install -r requirements.txt
           pip install -r dev-requirements.txt
-          coverage run -a ./setup.py sdist bdist_wheel
+          ./setup.py sdist bdist_wheel
           pip install dist/*.whl
       - name: Run unit tests with coverage
         shell: bash -l {0}
         run: |
           set -eux
           conda activate test
-          pytest --timeout=60 --cov=. --cov-append --cov-report xml -vv -rA -m "gpu_only or cpu_and_gpu" tests
+          pytest --timeout=60 --cov=. --cov-report xml -vv -rA -m "gpu_only or cpu_and_gpu" tests
       - name: Upload coverage to codecov
         uses: codecov/codecov-action@v2
 
@@ -143,14 +143,14 @@ jobs:
           conda install pytorch cpuonly -c pytorch-nightly
           pip install -r requirements.txt
           pip install -r dev-requirements.txt
-          coverage run -a ./setup.py sdist bdist_wheel
+          ./setup.py sdist bdist_wheel
           pip install dist/*.whl
       - name: Run unit tests with coverage
         shell: bash -l {0}
         run: |
           set -eux
           conda activate test
-          pytest --timeout=300 --cov=. --cov-append --cov-report xml -vv -rA -m s3_integration_test tests
+          pytest --timeout=300 --cov=. --cov-report xml -vv -rA -m s3_integration_test tests
       - name: Upload coverage to codecov
         uses: codecov/codecov-action@v2
 
@@ -185,13 +185,13 @@ jobs:
           conda install pytorch cpuonly -c pytorch-nightly
           pip install -r requirements.txt
           pip install -r dev-requirements.txt
-          coverage run -a ./setup.py sdist bdist_wheel
+          ./setup.py sdist bdist_wheel
           pip install dist/*.whl
       - name: Run unit tests with coverage
         shell: bash -l {0}
         run: |
           set -eux
           conda activate test
-          pytest --timeout=300 --cov=. --cov-append --cov-report xml -vv -rA -m gcs_integration_test tests
+          pytest --timeout=300 --cov=. --cov-report xml -vv -rA -m gcs_integration_test tests
       - name: Upload coverage to codecov
         uses: codecov/codecov-action@v2
