@@ -261,7 +261,7 @@ async def test_partitioner(  # noqa
         assert not tensor_eq(tensor, dst_tensor)
 
         entry = partitioned_entries[logical_path]
-        rrs = prepare_read(entry, obj_out=dst_tensor)
+        rrs, _ = prepare_read(entry, obj_out=dst_tensor)
         for rr in rrs:
             read_io = ReadIO(path=rr.path, byte_range=rr.byte_range)
             await plugin.read(read_io)

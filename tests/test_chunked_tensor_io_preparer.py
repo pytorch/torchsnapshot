@@ -226,7 +226,7 @@ class ChunkedTensorIOPreparerTest(unittest.TestCase):
             await pending_io_work.complete()
 
             buffer_size_limit_bytes = src.nelement() * src.element_size() // 4
-            read_reqs = ChunkedTensorIOPreparer.prepare_read(
+            read_reqs, _ = ChunkedTensorIOPreparer.prepare_read(
                 entry=entry,
                 tensor_out=dst,
                 buffer_size_limit_bytes=buffer_size_limit_bytes,

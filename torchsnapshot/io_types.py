@@ -10,7 +10,7 @@ import asyncio
 import io
 from concurrent.futures import Executor
 from dataclasses import dataclass, field
-from typing import Optional, Tuple, Union
+from typing import Generic, Optional, Tuple, TypeVar, Union
 
 
 BufferType = Union[bytes, memoryview]
@@ -49,6 +49,14 @@ class ReadReq:
     path: str
     buffer_consumer: BufferConsumer
     byte_range: Optional[Tuple[int, int]] = None
+
+
+T = TypeVar("T")
+
+
+@dataclass
+class Future(Generic[T]):
+    obj: Optional[T] = None
 
 
 @dataclass

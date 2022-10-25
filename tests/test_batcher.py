@@ -296,7 +296,7 @@ async def test_batcher(
     # Prepare read requests for the dst tensors
     read_reqs = []
     for entry, obj_out in zip(entries, dst_tensors + [None] * NUM_TENSORS):
-        rrs = prepare_read(
+        rrs, _ = prepare_read(
             entry=entry,
             obj_out=obj_out,
             buffer_size_limit_bytes=read_chunk_size_bytes
