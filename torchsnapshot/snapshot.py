@@ -148,6 +148,7 @@ class Snapshot:
         self,
         path: str,
         pg: Optional[dist.ProcessGroup] = None,
+        storage_options: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         Initializes the reference to an existing snapshot.
@@ -158,10 +159,13 @@ class Snapshot:
                 When unspecified:
                     - If distributed is initialized, the global process group will be used.
                     - If distributed is not initialized, single process is assumed.
+            storage_options: Additional keyword options for the StoragePlugin to use.
+                See each StoragePlugin's documentation for customizations.
         """
         self.path: str = path
         self.pg: Optional[dist.ProcessGroup] = pg
         self._metadata: Optional[SnapshotMetadata] = None
+        self._storage_options = storage_options
 
     @classmethod
     def take(
@@ -170,6 +174,7 @@ class Snapshot:
         app_state: AppState,
         pg: Optional[dist.ProcessGroup] = None,
         replicated: Optional[List[str]] = None,
+        storage_options: Optional[Dict[str, Any]] = None,
         _custom_tensor_prepare_func: Optional[
             Callable[[str, torch.Tensor, bool], torch.Tensor]
         ] = None,
@@ -187,6 +192,8 @@ class Snapshot:
             replicated: A list of glob patterns for hinting the matching paths
                 as replicated. Note that patterns not specified by all ranks
                 are ignored.
+            storage_options: Additional keyword options for the StoragePlugin to use.
+                See each StoragePlugin's documentation for customizations.
 
         Returns:
             The newly taken snapshot.
@@ -204,7 +211,7 @@ class Snapshot:
             replicated=replicated or [],
         )
         storage = url_to_storage_plugin_in_event_loop(
-            url_path=path, event_loop=event_loop
+            url_path=path, event_loop=event_loop, storage_options=storage_options
         )
         pending_io_work, metadata = cls._take_impl(
             path=path,
@@ -229,7 +236,7 @@ class Snapshot:
 
         storage.sync_close(event_loop=event_loop)
         event_loop.close()
-        snapshot = cls(path=path, pg=pg)
+        snapshot = cls(path=path, pg=pg, storage_options=storage_options)
         snapshot._metadata = metadata
         return snapshot
 
@@ -240,6 +247,7 @@ class Snapshot:
         app_state: AppState,
         pg: Optional[dist.ProcessGroup] = None,
         replicated: Optional[List[str]] = None,
+        storage_options: Optional[Dict[str, Any]] = None,
         _custom_tensor_prepare_func: Optional[
             Callable[[str, torch.Tensor, bool], torch.Tensor]
         ] = None,
@@ -262,6 +270,8 @@ class Snapshot:
             replicated: A list of glob patterns for hinting the matching paths
                 as replicated. Note that patterns not specified by all ranks
                 are ignored.
+            storage_options: Additional keyword options for the StoragePlugin to use.
+                See each StoragePlugin's documentation for customizations.
 
         Returns:
             A handle with which the newly taken snapshot can be obtained via
@@ -281,7 +291,7 @@ class Snapshot:
             replicated=replicated or [],
         )
         storage = url_to_storage_plugin_in_event_loop(
-            url_path=path, event_loop=event_loop
+            url_path=path, event_loop=event_loop, storage_options=storage_options
         )
 
         pending_io_work, metadata = cls._take_impl(
@@ -302,6 +312,7 @@ class Snapshot:
             metadata=metadata,
             storage=storage,
             event_loop=event_loop,
+            storage_options=storage_options,
         )
 
     @classmethod
@@ -430,6 +441,7 @@ class Snapshot:
 
         Args:
             app_state: The program state to restore from the snapshot.
+
         """
         torch._C._log_api_usage_once("torchsnapshot.Snapshot.restore")
         self._validate_app_state(app_state)
@@ -438,7 +450,9 @@ class Snapshot:
         pg_wrapper = PGWrapper(self.pg)
         rank = pg_wrapper.get_rank()
         storage = url_to_storage_plugin_in_event_loop(
-            url_path=self.path, event_loop=event_loop
+            url_path=self.path,
+            event_loop=event_loop,
+            storage_options=self._storage_options,
         )
 
         app_state = app_state.copy()
@@ -480,7 +494,9 @@ class Snapshot:
         if self._metadata is None:
             event_loop = asyncio.new_event_loop()
             storage = url_to_storage_plugin_in_event_loop(
-                url_path=self.path, event_loop=event_loop
+                url_path=self.path,
+                event_loop=event_loop,
+                storage_options=self._storage_options,
             )
             self._metadata = self._read_snapshot_metadata(
                 storage=storage, event_loop=event_loop
@@ -550,7 +566,9 @@ class Snapshot:
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(self.pg)
         storage = url_to_storage_plugin_in_event_loop(
-            url_path=self.path, event_loop=event_loop
+            url_path=self.path,
+            event_loop=event_loop,
+            storage_options=self._storage_options,
         )
         entry = manifest[unranked_path]
         if isinstance(entry, PrimitiveEntry):
@@ -848,12 +866,14 @@ class PendingSnapshot:
         metadata: SnapshotMetadata,
         storage: StoragePlugin,
         event_loop: asyncio.AbstractEventLoop,
+        storage_options: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.path = path
         self.pg: Optional[dist.ProcessGroup] = pg_wrapper.pg
         # pyre-ignore
         self.exc_info: Optional[Any] = None
         self._done = False
+        self._storage_options = storage_options
 
         self.thread = Thread(
             target=self._complete_snapshot,
@@ -921,7 +941,9 @@ class PendingSnapshot:
             raise RuntimeError(
                 f"Encountered exception while taking snapshot asynchronously:\n{formatted}"
             )
-        return Snapshot(path=self.path, pg=self.pg)
+        return Snapshot(
+            path=self.path, pg=self.pg, storage_options=self._storage_options
+        )
 
     def done(self) -> bool:
         return self._done

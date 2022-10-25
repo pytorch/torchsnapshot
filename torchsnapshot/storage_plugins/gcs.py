@@ -16,7 +16,7 @@ import os
 import random
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Awaitable, Callable, Optional, TypeVar
+from typing import Any, Awaitable, Callable, Dict, Optional, TypeVar
 from urllib.parse import quote
 
 import google.auth.exceptions  # @manual
@@ -59,7 +59,9 @@ class GCSStoragePlugin(StoragePlugin):
         "{bucket}/o/{blob_name}?alt=media"
     )
 
-    def __init__(self, root: str) -> None:
+    def __init__(
+        self, root: str, storage_options: Optional[Dict[str, Any]] = None
+    ) -> None:
         components = root.split("/")
         if len(components) < 2:
             raise RuntimeError(
