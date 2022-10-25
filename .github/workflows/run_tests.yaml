@@ -33,7 +33,7 @@ jobs:
         run: |
           set -eux
           conda activate test
-          pytest --timeout=300 --cov=. --cov-report --cov-append xml -vv -rA -m "not gpu_only" tests
+          pytest --timeout=300 --cov=. --cov-append --cov-report xml -vv -rA -m "not gpu_only" tests
       - name: Upload coverage to codecov
         uses: codecov/codecov-action@v2
 
@@ -105,7 +105,7 @@ jobs:
         run: |
           set -eux
           conda activate test
-          pytest --timeout=60 --cov=. --cov-report --cov-append xml -vv -rA -m "gpu_only or cpu_and_gpu" tests
+          pytest --timeout=60 --cov=. --cov-append --cov-report xml -vv -rA -m "gpu_only or cpu_and_gpu" tests
       - name: Upload coverage to codecov
         uses: codecov/codecov-action@v2
 
@@ -150,7 +150,7 @@ jobs:
         run: |
           set -eux
           conda activate test
-          pytest --timeout=300 --cov=. --cov-report --cov-append xml -vv -rA -m s3_integration_test tests
+          pytest --timeout=300 --cov=. --cov-append --cov-report xml -vv -rA -m s3_integration_test tests
       - name: Upload coverage to codecov
         uses: codecov/codecov-action@v2
 
@@ -192,6 +192,6 @@ jobs:
         run: |
           set -eux
           conda activate test
-          pytest --timeout=300 --cov=. --cov-report --cov-append xml -vv -rA -m gcs_integration_test tests
+          pytest --timeout=300 --cov=. --cov-append --cov-report xml -vv -rA -m gcs_integration_test tests
       - name: Upload coverage to codecov
         uses: codecov/codecov-action@v2
