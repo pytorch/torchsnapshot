@@ -1,11 +1,13 @@
 [run]
 omit =
+    setup.py
     *tests/*
     *examples/*
     *benchmarks/*
 
 [report]
 omit =
+    setup.py
     *tests/*
     *examples/*
     *benchmarks/*
