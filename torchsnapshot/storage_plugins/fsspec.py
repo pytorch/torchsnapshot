@@ -34,8 +34,8 @@ class FSSpecStoragePlugin(StoragePlugin):
 
     async def _init_session(self) -> None:
         async with self._lock:
+            self.fs = fsspec.filesystem(protocol=self._protocol, **self._storage_options)
             if self._session is None:
-                self.fs = fsspec.filesystem(protocol=self._protocol, **self._storage_options)
                 self._session = await self.fs.set_session()
 
     async def write(self, write_io: WriteIO) -> None:
