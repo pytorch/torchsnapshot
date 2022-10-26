@@ -26,7 +26,7 @@ class FSSpecStoragePlugin(StoragePlugin):
             raise ValueError(
                 f"Invalid protocol: {protocol}, Only fsspec-* protocols are supported"
             )
-        self._protocol = protocol.removeprefix("fsspec-")
+        self._protocol = protocol[len("fsspec-"):]
         self.fs = fsspec.filesystem(protocol=self._protocol, **storage_options)
         self._session = None
         self._lock = asyncio.Lock()
