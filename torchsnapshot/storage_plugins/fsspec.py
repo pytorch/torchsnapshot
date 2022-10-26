@@ -51,7 +51,12 @@ class FSSpecStoragePlugin(StoragePlugin):
     async def read(self, read_io: ReadIO) -> None:
         await self._init_session()
         path = os.path.join(self.root, read_io.path)
-        read_io.buf = io.BytesIO(await self.fs._cat_file(path))
+        data = await self.fs._cat_file(path)
+        if read_io.byte_range is None:
+            read_io.buf = io.BytesIO(data)
+        else:
+            start, end = read_io.byte_range
+            read_io.buf = io.BytesIO(data[start:end])
 
     async def delete(self, path: str) -> None:
         await self._init_session()
