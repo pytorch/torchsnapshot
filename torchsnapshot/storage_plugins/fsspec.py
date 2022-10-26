@@ -7,7 +7,7 @@
 import asyncio
 import io
 import os
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 import fsspec
 
@@ -17,7 +17,7 @@ __all__ = ["FSSpecStoragePlugin"]
 
 
 class FSSpecStoragePlugin(StoragePlugin):
-    def __init__(self, root: str, storage_options: Dict[str, Any]) -> None:
+    def __init__(self, root: str, storage_options: Optional[Dict[str, Any]]) -> None:
         root_items = root.split("://")
         if len(root_items) != 2:
             raise ValueError("only protocol://path is supported by fsspec plugin")

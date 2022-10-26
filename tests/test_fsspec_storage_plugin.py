@@ -12,13 +12,32 @@ import uuid
 import pytest
 import torch
 
+import torchsnapshot
 from torchsnapshot.io_types import ReadIO, WriteIO
 from torchsnapshot.storage_plugins.fsspec import FSSpecStoragePlugin
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 _TEST_BUCKET = "torchsnapshot-test"
-_TENSOR_SZ = int(100_000_000 / 4)
+_TENSOR_SZ = int(1_000_000 / 4)
+
+
+@pytest.mark.s3_integration_test
+@pytest.mark.skipif(os.environ.get("TORCHSNAPSHOT_ENABLE_AWS_TEST") is None, reason="")
+@pytest.mark.usefixtures("s3_health_check")
+def test_fsspec_s3_read_write_via_snapshot() -> None:
+    path = f"fsspec-s3://{_TEST_BUCKET}/{uuid.uuid4()}"
+    logger.info(path)
+
+    tensor = torch.rand((_TENSOR_SZ,))
+    app_state = {"state": torchsnapshot.StateDict(tensor=tensor)}
+    snapshot = torchsnapshot.Snapshot.take(path=path, app_state=app_state)
+
+    app_state["state"]["tensor"] = torch.rand((_TENSOR_SZ,))
+    assert not torch.allclose(tensor, app_state["state"]["tensor"])
+
+    snapshot.restore(app_state)
+    assert torch.allclose(tensor, app_state["state"]["tensor"])
 
 
 @pytest.mark.s3_integration_test
