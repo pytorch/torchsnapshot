@@ -31,24 +31,17 @@ from .batcher import batch_read_requests, batch_write_requests
 from .dist_store import get_or_create_store, LinearBarrier
 
 from .flatten import flatten, inflate
-from .io_preparer import (
-    ObjectBufferConsumer,
-    prepare_read,
-    prepare_write,
-    TensorIOPreparer,
-)
+from .io_preparer import prepare_read, prepare_write
 from .io_types import ReadIO, ReadReq, StoragePlugin, WriteIO, WriteReq
 from .knobs import is_batching_disabled
 
 from .manifest import (
-    ChunkedTensorEntry,
     Entry,
     is_container_entry,
     Manifest,
     PrimitiveEntry,
     ShardedTensorEntry,
     SnapshotMetadata,
-    TensorEntry,
 )
 from .manifest_ops import get_manifest_for_rank
 from .partitioner import consolidate_replicated_entries, partition_write_reqs

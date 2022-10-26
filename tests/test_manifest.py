@@ -5,12 +5,13 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-import json
 from dataclasses import asdict
 from typing import Dict, Generator
 from unittest.mock import patch
 
 import pytest
+
+import yaml
 
 from _pytest.fixtures import SubRequest  # @manual
 
@@ -27,6 +28,12 @@ from torchsnapshot.manifest import (
     TensorEntry,
 )
 from torchsnapshot.manifest_ops import _insert_entry, get_manifest_for_rank
+
+try:
+    from yaml import CSafeDumper as Dumper
+except ImportError:
+    from yaml import SafeDumper as Dumper
+
 
 _WORLD_SIZE = 2
 _MANIFEST_0: Dict[str, Entry] = {
@@ -227,17 +234,15 @@ _MANIFEST_1: Dict[str, Entry] = {
 @pytest.fixture(params=[True, False])
 def use_cyaml(request: SubRequest) -> Generator[None, None, None]:
     if request.param:
-        from yaml import CSafeDumper, CSafeLoader
+        from yaml import CSafeLoader
 
-        with patch("torchsnapshot.manifest.Dumper", CSafeDumper):
-            with patch("torchsnapshot.manifest.Loader", CSafeLoader):
-                yield
+        with patch("torchsnapshot.manifest.Loader", CSafeLoader):
+            yield
     else:
-        from yaml import SafeDumper, SafeLoader
+        from yaml import SafeLoader
 
-        with patch("torchsnapshot.manifest.Dumper", SafeDumper):
-            with patch("torchsnapshot.manifest.Loader", SafeLoader):
-                yield
+        with patch("torchsnapshot.manifest.Loader", SafeLoader):
+            yield
 
 
 @pytest.mark.usefixtures("use_cyaml")
@@ -255,26 +260,19 @@ def test_manifest_yaml_serialization(manifest: Dict[str, Entry]) -> None:
 
 @pytest.mark.usefixtures("use_cyaml")
 @pytest.mark.parametrize("manifest", [_MANIFEST_0, _MANIFEST_1])
-def test_manifest_json_serialization(manifest: Dict[str, Entry]) -> None:
+def test_manifest_yaml_dumper(manifest: Dict[str, Entry]) -> None:
     """
-    Verify that when the metadata is serialized via json, it is load-able with
-    the yaml loader.
-
-    When the number of entries in the snapshot metadata is very large, yaml
-    serialization becomes a bottleneck and there's little we can do to
-    optimize. We likely need to switch to json to overcome this. Fortunately,
-    when our metadata is serialized via json, it is compatible with the yaml
-    loader, so we can make the switch in a backward compatible fashion. This
-    test makes sure that we don't do anything crazy with the metadata to break
-    this compatibility.
+    :func:`SnapshotMetadata.to_yaml` switched to :func:`json.dumps`` to help
+    with the serialization performance. This test verifies that old snapshot
+    metadata serialized with :func:`yaml.dump` are still loadable.
     """
     metadata = SnapshotMetadata(
         version="0.0.0",
         world_size=_WORLD_SIZE,
         manifest=manifest,
     )
-    yaml_str = metadata.to_yaml()
-    json_str = json.dumps(asdict(metadata))
+    yaml_str = yaml.dump(asdict(metadata), sort_keys=False, Dumper=Dumper)
+    json_str = metadata.to_yaml()
     metadata_from_yaml = SnapshotMetadata.from_yaml(yaml_str=yaml_str)
     metadata_from_json = SnapshotMetadata.from_yaml(yaml_str=json_str)
     assert metadata_from_json == metadata_from_yaml

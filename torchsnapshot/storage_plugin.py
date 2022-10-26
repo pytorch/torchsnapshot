@@ -60,7 +60,7 @@ def url_to_storage_plugin(
     if protocol in registered_plugins:
         entry = registered_plugins[protocol]
         factory = entry.load()
-        plugin = factory(path)
+        plugin = factory(path, storage_options)
         if not isinstance(plugin, StoragePlugin):
             raise RuntimeError(
                 f"The factory function for {protocol} ({entry.value}) "

@@ -8,6 +8,7 @@
 # pyre-ignore-all-errors[2]: Allow `Any` in type annotations
 
 import base64
+import json
 import logging
 import struct
 from dataclasses import asdict, dataclass
@@ -17,9 +18,9 @@ from typing import Any, ClassVar, Dict, List, Optional, Tuple, TypeVar, Union
 import yaml
 
 try:
-    from yaml import CSafeDumper as Dumper, CSafeLoader as Loader
+    from yaml import CSafeLoader as Loader
 except ImportError:
-    from yaml import SafeDumper as Dumper, SafeLoader as Loader
+    from yaml import SafeLoader as Loader
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -280,7 +281,12 @@ class SnapshotMetadata:
     manifest: Manifest
 
     def to_yaml(self) -> str:
-        return yaml.dump(asdict(self), sort_keys=False, Dumper=Dumper)
+        # When the number of entries in the snapshot metadata is large, yaml
+        # serialization becomes slow and there's little room for optimization.
+        # Since the snapshot metadata can be dumped as json and json is a
+        # subset of yaml, using json.dumps() here to help with the
+        # serialization performance without needing to deprecate yaml.
+        return json.dumps(asdict(self), sort_keys=False, indent=2)
 
     @classmethod
     def from_yaml(cls, yaml_str: str) -> "SnapshotMetadata":
