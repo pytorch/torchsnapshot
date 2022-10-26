@@ -14,7 +14,7 @@ from typing import Callable, cast, List
 
 import torch
 
-from torchsnapshot.io_preparer import tensor_copy, TensorIOPreparer
+from torchsnapshot.io_preparers.tensor import tensor_copy, TensorIOPreparer
 from torchsnapshot.io_types import ReadReq, WriteReq
 from torchsnapshot.scheduler import execute_read_reqs, execute_write_reqs
 from torchsnapshot.serialization import (
@@ -92,7 +92,7 @@ class TensorIOPreparerTest(unittest.TestCase):
             dtype in BUFFER_PROTOCOL_SUPPORTED_DTYPES,
         )
 
-        read_reqs = TensorIOPreparer.prepare_read(entry=entry, tensor_out=bar)
+        read_reqs, _ = TensorIOPreparer.prepare_read(entry=entry, tensor_out=bar)
         self._fulfill_read_reqs_with_write_reqs(
             read_reqs=read_reqs, write_reqs=write_reqs
         )
@@ -140,7 +140,7 @@ class TensorIOPreparerTest(unittest.TestCase):
             await pending_io_work.complete()
 
             buffer_size_limit_bytes = src.nelement() * src.element_size() // 4
-            read_reqs = TensorIOPreparer.prepare_read(
+            read_reqs, _ = TensorIOPreparer.prepare_read(
                 entry=entry,
                 tensor_out=dst,
                 buffer_size_limit_bytes=buffer_size_limit_bytes,

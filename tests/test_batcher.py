@@ -279,7 +279,7 @@ async def test_batcher(
 
     # Batch the write requests
     entries, batched_write_reqs = batch_write_requests(
-        entries=entries, write_reqs=write_reqs
+        entries=entries, write_reqs=copy.deepcopy(write_reqs)
     )
     assert len(batched_write_reqs) < len(write_reqs)
     write_reqs = batched_write_reqs
@@ -296,7 +296,7 @@ async def test_batcher(
     # Prepare read requests for the dst tensors
     read_reqs = []
     for entry, obj_out in zip(entries, dst_tensors + [None] * NUM_TENSORS):
-        rrs = prepare_read(
+        rrs, _ = prepare_read(
             entry=entry,
             obj_out=obj_out,
             buffer_size_limit_bytes=read_chunk_size_bytes

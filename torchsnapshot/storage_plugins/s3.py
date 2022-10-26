@@ -7,14 +7,16 @@
 
 import io
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from torchsnapshot.io_types import ReadIO, StoragePlugin, WriteIO
 from torchsnapshot.memoryview_stream import MemoryviewStream
 
 
 class S3StoragePlugin(StoragePlugin):
-    def __init__(self, root: str, storage_options: Dict[str, Any]) -> None:
+    def __init__(
+        self, root: str, storage_options: Optional[Dict[str, Any]] = None
+    ) -> None:
         try:
             from aiobotocore.session import get_session  # @manual
         except ImportError:

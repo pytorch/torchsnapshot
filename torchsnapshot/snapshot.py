@@ -32,27 +32,25 @@ from .dist_store import get_or_create_store, LinearBarrier
 
 from .flatten import flatten, inflate
 from .io_preparer import (
-    _identity_tensor_prepare_func,
     ObjectBufferConsumer,
     prepare_read,
     prepare_write,
     TensorIOPreparer,
 )
 from .io_types import ReadIO, ReadReq, StoragePlugin, WriteIO, WriteReq
-from .knobs import get_is_batching_enabled
+from .knobs import is_batching_disabled
 
 from .manifest import (
     ChunkedTensorEntry,
     Entry,
-    get_manifest_for_rank,
     is_container_entry,
-    is_replicated,
     Manifest,
     PrimitiveEntry,
     ShardedTensorEntry,
     SnapshotMetadata,
     TensorEntry,
 )
+from .manifest_ops import get_manifest_for_rank
 from .partitioner import consolidate_replicated_entries, partition_write_reqs
 from .pg_wrapper import PGWrapper
 from .rng_state import RNGState
@@ -342,9 +340,6 @@ class Snapshot:
         rng_state_item = cls._pop_rng_state(app_state=app_state)
         rng_state_dict = None
 
-        if not _custom_tensor_prepare_func:
-            _custom_tensor_prepare_func = _identity_tensor_prepare_func
-
         manifest: Manifest = {}
         flattened: Dict[str, Any] = {}
 
@@ -422,13 +417,10 @@ class Snapshot:
             wr for wrs in logical_path_to_write_reqs.values() for wr in wrs
         ]
 
-        if get_is_batching_enabled():
-            entry_keys = list(object_entries.keys())
-            entries = list(object_entries.values())
-            entries, write_reqs = batch_write_requests(
-                entries=entries, write_reqs=write_reqs
+        if not is_batching_disabled():
+            _, write_reqs = batch_write_requests(
+                entries=list(object_entries.values()), write_reqs=write_reqs
             )
-            object_entries = dict(zip(entry_keys, entries))
 
         all_entries = dict(**primitive_entries, **object_entries)
 
@@ -476,13 +468,13 @@ class Snapshot:
         global_keys = self._gather_keys(
             keys=list(app_state.keys()), pg_wrapper=pg_wrapper
         )
-        available_entries = get_manifest_for_rank(metadata=self.metadata, rank=rank)
+        manifest = get_manifest_for_rank(metadata=self.metadata, rank=rank)
         for key in global_keys:
             self._load_stateful(
                 rank=rank,
                 stateful_key=key,
                 stateful=app_state.get(key),
-                available_entries=available_entries,
+                manifest=manifest,
                 storage=storage,
                 pg=pg_wrapper,
                 event_loop=event_loop,
@@ -496,7 +488,7 @@ class Snapshot:
                 rank=rank,
                 stateful_key=key,
                 stateful=stateful,
-                available_entries=available_entries,
+                manifest=manifest,
                 storage=storage,
                 pg=pg_wrapper,
                 event_loop=event_loop,
@@ -588,7 +580,7 @@ class Snapshot:
         entry = manifest[unranked_path]
         if isinstance(entry, PrimitiveEntry):
             return cast(T, entry.get_value())
-        read_reqs = prepare_read(
+        read_reqs, fut = prepare_read(
             entry=entry,
             obj_out=obj_out,
             # TODO: find a suitable buffer_size_limit_bytes to enable chunked
@@ -597,17 +589,8 @@ class Snapshot:
             # reading a single tensor.
             buffer_size_limit_bytes=memory_budget_bytes,
         )
-        box = []
-        for read_req in read_reqs:
-            buffer_consumer = read_req.buffer_consumer
-            if isinstance(buffer_consumer, ObjectBufferConsumer):
-                # ObjectBufferConsumer deals with objects that can not be
-                # in-place restored. We need to replace the original object
-                # in the flattened dictionary with the object materialized
-                # by the buffer consumer.
-                buffer_consumer.set_consume_callback(functools.partial(box.append))
 
-        if get_is_batching_enabled():
+        if not is_batching_disabled():
             read_reqs = batch_read_requests(read_reqs=read_reqs)
 
         sync_execute_read_reqs(
@@ -620,14 +603,7 @@ class Snapshot:
         )
         storage.sync_close(event_loop=event_loop)
         event_loop.close()
-        if len(box) != 0:
-            if len(box) != 1:
-                raise AssertionError(
-                    f"Expect to load a single object from an entry (got {len(box)})."
-                )
-            return box[0]
-        else:
-            return cast(T, obj_out)
+        return fut.obj
 
     def get_manifest(self) -> Dict[str, Entry]:
         """
@@ -689,7 +665,7 @@ class Snapshot:
         rank: int,
         stateful_key: str,
         stateful: Optional[Stateful],
-        available_entries: Manifest,
+        manifest: Manifest,
         storage: StoragePlugin,
         pg: PGWrapper,
         event_loop: asyncio.AbstractEventLoop,
@@ -715,57 +691,33 @@ class Snapshot:
             # ShardedTensor became a subclass of torch.Tensor since PyTorch
             # 1.13. We can drop the check for ShardedTensor once PyTorch 1.12.1
             # is no longer supported.
-            if k in available_entries and isinstance(v, (torch.Tensor, ShardedTensor))
+            if k in manifest and isinstance(v, (torch.Tensor, ShardedTensor))
         }
 
         container_entries = {}
-        loaded_flattened = {}
         read_reqs: List[ReadReq] = []
-        for logical_path, entry in available_entries.items():
+        futs = {}
+        for logical_path, entry in manifest.items():
             if is_container_entry(entry):
                 container_entries[logical_path] = entry
                 continue
 
-            # For primitive types, directly materialize from PrimitiveEntry
-            if isinstance(entry, PrimitiveEntry):
-                loaded_flattened[logical_path] = entry.get_value()
+            obj_out = flattened.get(logical_path)
+            if obj_out is None and isinstance(entry, ShardedTensorEntry):
                 continue
 
-            # Try to load directly into already allocated object
-            if isinstance(entry, (TensorEntry, ChunkedTensorEntry)):
-                obj_out = flattened.get(logical_path)
-                if not TensorIOPreparer.can_load_inplace(entry=entry, obj=obj_out):
-                    obj_out = TensorIOPreparer.empty_tensor_from_entry(entry)
-            elif isinstance(entry, ShardedTensorEntry):
-                obj_out = flattened.get(logical_path)
-                if obj_out is None:
-                    continue
-            else:
-                obj_out = None
-
-            loaded_flattened[logical_path] = obj_out
-            if logical_path in flattened:
-                del flattened[logical_path]
-
-            rrs = prepare_read(
+            rrs, fut = prepare_read(
                 entry=entry,
                 obj_out=obj_out,
             )
-            for rr in rrs:
-                buffer_consumer = rr.buffer_consumer
-                if isinstance(buffer_consumer, ObjectBufferConsumer):
-                    # ObjectBufferConsumer deals with objects that can not be
-                    # in-place restored. We need to replace the original object
-                    # in the flattened dictionary with the object materialized
-                    # by the buffer consumer.
-                    buffer_consumer.set_consume_callback(
-                        functools.partial(
-                            dict.__setitem__, loaded_flattened, logical_path
-                        )
-                    )
             read_reqs += rrs
+            futs[logical_path] = fut
 
-        if get_is_batching_enabled():
+            # Free memory in case the items is a copy
+            if logical_path in flattened:
+                del flattened[logical_path]
+
+        if not is_batching_disabled():
             read_reqs = batch_read_requests(read_reqs=read_reqs)
 
         memory_budget_bytes = get_process_memory_budget_bytes(pg=pg)
@@ -779,7 +731,9 @@ class Snapshot:
 
         # Build the originally saved state dict and use it to restore the stateful
         state_dict = inflate(
-            manifest=container_entries, flattened=loaded_flattened, prefix=stateful_key
+            manifest=container_entries,
+            flattened={k: fut.obj for k, fut in futs.items()},
+            prefix=stateful_key,
         )
         stateful.load_state_dict(state_dict)
 
@@ -900,17 +854,6 @@ class Snapshot:
         manifests: List[Dict[str, Entry]] = [None] * pg.get_world_size()
         pg.all_gather_object(manifests, manifest)
         manifests = consolidate_replicated_entries(rank_to_entries=manifests)
-
-        # Remove replicated entries from non-zero ranks to reduce the size and
-        # serialization time of the yaml. In restore()/read_object(),
-        # replicated entries will be made available to all ranks via
-        # get_manifest_for_rank().
-        for rank, manifest in enumerate(manifests):
-            if rank == 0:
-                continue
-            manifests[rank] = {
-                k: v for k, v in manifest.items() if not is_replicated(v)
-            }
 
         global_manifest = {}
         for rank, manifest in enumerate(manifests):

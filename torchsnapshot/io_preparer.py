@@ -5,7 +5,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-# pyre-ignore-all-errors[2]: Allow `Any` in type annotations
+# pyre-ignore-all-errors[2, 3]: Allow `Any` in type annotations
 
 import logging
 import os
@@ -29,7 +29,8 @@ from .io_preparers.tensor import (
     TensorIOPreparer,
 )
 
-from .io_types import ReadReq, WriteReq
+from .io_types import Future, ReadReq, WriteReq
+from .knobs import get_max_chunk_size_bytes
 from .manifest import (
     ChunkedTensorEntry,
     Entry,
@@ -40,12 +41,6 @@ from .manifest import (
 )
 
 logger: logging.Logger = logging.getLogger(__name__)
-
-
-def _identity_tensor_prepare_func(
-    path: str, tensor: torch.Tensor, tracing: bool
-) -> torch.Tensor:
-    return tensor
 
 
 def get_storage_path(obj: Any, logical_path: str, rank: int, replicated: bool) -> str:
@@ -61,7 +56,7 @@ class PrimitivePreparer:
     @staticmethod
     def should_inline(obj: Any) -> bool:
         type_name = type(obj).__name__
-        if type_name not in PrimitiveEntry.supported_types():
+        if type_name not in PrimitiveEntry.supported_types:
             return False
         # TODO for long str/bytes, return False to fall back to ObjectEntry
         return True
@@ -69,6 +64,10 @@ class PrimitivePreparer:
     @staticmethod
     def prepare_write(obj: Any) -> PrimitiveEntry:
         return PrimitiveEntry.from_object(obj)
+
+    @staticmethod
+    def prepare_read(entry: PrimitiveEntry) -> Tuple[List[ReadReq], Future[Any]]:
+        return [], Future(obj=entry.get_value())
 
 
 def prepare_write(
@@ -106,8 +105,8 @@ def prepare_write(
             _tensor_prepare_func=_tensor_prepare_func,
         )
     elif isinstance(obj, torch.Tensor):
-        chunking_instruction = ChunkedTensorIOPreparer.chunk_tensor(obj)
-        if len(chunking_instruction) > 1:
+        if obj.nelement() * obj.element_size() > get_max_chunk_size_bytes():
+            chunking_instruction = ChunkedTensorIOPreparer.chunk_tensor(obj)
             entry, obj_write_req = ChunkedTensorIOPreparer.prepare_write(
                 storage_path=storage_path,
                 tensor=obj,
@@ -133,7 +132,7 @@ def prepare_read(
     entry: Entry,
     obj_out: Optional[Any] = None,
     buffer_size_limit_bytes: Optional[int] = None,
-) -> List[ReadReq]:
+) -> Tuple[List[ReadReq], Future[Any]]:
     """
     Prepare read for an object.
 
@@ -146,9 +145,8 @@ def prepare_read(
     """
     if isinstance(entry, ShardedTensorEntry):
         if obj_out is None:
-            # TODO: support loading sharded tensor without obj_out
             raise RuntimeError(
-                "Reading a ShardedTensor without a runtime object is not yet supported."
+                "Reading a ShardedTensor without a runtime object is not supported."
             )
         return ShardedTensorIOPreparer.prepare_read(entry, obj_out)
     elif isinstance(entry, ChunkedTensorEntry):
@@ -162,8 +160,7 @@ def prepare_read(
     elif isinstance(entry, ObjectEntry):
         return ObjectIOPreparer.prepare_read(entry, obj_out)
     elif isinstance(entry, PrimitiveEntry):
-        # primitive types are stored inline in snapshot metadata
-        return []
+        return PrimitivePreparer.prepare_read(entry)
     else:
         raise Exception(f"Unsupported entry type: {entry} ({entry.type}).")
 

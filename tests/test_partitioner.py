@@ -219,7 +219,7 @@ async def test_partitioner(  # noqa
         partitioned_write_reqs = batched_write_reqs
 
     partitioned_entries = consolidate_replicated_entries_dist(
-        partitioned_entries, pg=PGWrapper(pg=None)
+        partitioned_entries, pg=PGWrapper(pg=None), dedup=False
     )
 
     # Verify that all logical paths are still present
@@ -261,7 +261,7 @@ async def test_partitioner(  # noqa
         assert not tensor_eq(tensor, dst_tensor)
 
         entry = partitioned_entries[logical_path]
-        rrs = prepare_read(entry, obj_out=dst_tensor)
+        rrs, _ = prepare_read(entry, obj_out=dst_tensor)
         for rr in rrs:
             read_io = ReadIO(path=rr.path, byte_range=rr.byte_range)
             await plugin.read(read_io)

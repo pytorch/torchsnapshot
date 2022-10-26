@@ -12,7 +12,7 @@ import logging
 import struct
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union
+from typing import Any, ClassVar, Dict, List, Optional, Tuple, TypeVar, Union
 
 import yaml
 
@@ -35,6 +35,12 @@ class Entry:
     """
 
     type: str
+
+    @classmethod
+    def from_yaml_obj(cls, yaml_obj: Any) -> "Entry":
+        if "type" in yaml_obj:
+            del yaml_obj["type"]
+        return cls(**yaml_obj)
 
 
 @dataclass
@@ -78,6 +84,11 @@ class Shard:
     sizes: List[int]
     tensor: TensorEntry
 
+    @classmethod
+    def from_yaml_obj(cls, yaml_obj: Any) -> "Shard":
+        yaml_obj["tensor"] = TensorEntry.from_yaml_obj(yaml_obj["tensor"])
+        return cls(**yaml_obj)
+
 
 @dataclass
 class ShardedTensorEntry(Entry):
@@ -88,23 +99,13 @@ class ShardedTensorEntry(Entry):
         self.shards = shards
 
     @classmethod
-    def from_yaml(cls, entry: Any) -> "ShardedTensorEntry":
-        shards = [
-            Shard(
-                offsets=shard["offsets"],
-                sizes=shard["sizes"],
-                tensor=TensorEntry(
-                    location=shard["tensor"]["location"],
-                    serializer=shard["tensor"]["serializer"],
-                    dtype=shard["tensor"]["dtype"],
-                    shape=shard["tensor"]["shape"],
-                    replicated=shard["tensor"]["replicated"],
-                    byte_range=shard["tensor"].get("byte_range"),
-                ),
-            )
-            for shard in entry["shards"]
+    def from_yaml_obj(cls, yaml_obj: Any) -> "ShardedTensorEntry":
+        if "type" in yaml_obj:
+            del yaml_obj["type"]
+        yaml_obj["shards"] = [
+            Shard.from_yaml_obj(shard) for shard in yaml_obj["shards"]
         ]
-        return cls(shards=shards)
+        return cls(**yaml_obj)
 
 
 @dataclass
@@ -124,31 +125,13 @@ class ChunkedTensorEntry(Entry):
         self.replicated = replicated
 
     @classmethod
-    def from_yaml(cls, entry: Any) -> "ChunkedTensorEntry":
-        dtype = entry["dtype"]
-        replicated = entry["replicated"]
-        chunks = [
-            Shard(
-                offsets=chunk["offsets"],
-                sizes=chunk["sizes"],
-                tensor=TensorEntry(
-                    location=chunk["tensor"]["location"],
-                    serializer=chunk["tensor"]["serializer"],
-                    dtype=chunk["tensor"]["dtype"],
-                    shape=chunk["tensor"]["shape"],
-                    replicated=chunk["tensor"]["replicated"],
-                    byte_range=chunk["tensor"].get("byte_range"),
-                ),
-            )
-            for chunk in entry["chunks"]
+    def from_yaml_obj(cls, yaml_obj: Any) -> "ChunkedTensorEntry":
+        if "type" in yaml_obj:
+            del yaml_obj["type"]
+        yaml_obj["chunks"] = [
+            Shard.from_yaml_obj(shard) for shard in yaml_obj["chunks"]
         ]
-        shape = entry["shape"]
-        return cls(
-            dtype=dtype,
-            shape=shape,
-            chunks=chunks,
-            replicated=replicated,
-        )
+        return cls(**yaml_obj)
 
 
 @dataclass
@@ -185,9 +168,9 @@ class DictEntry(Entry):
 
 @dataclass
 class OrderedDictEntry(Entry):
-    keys: List[str]
+    keys: List[Union[str, int]]
 
-    def __init__(self, keys: List[str]) -> None:
+    def __init__(self, keys: List[Union[str, int]]) -> None:
         super().__init__(type="OrderedDict")
         self.keys = keys
 
@@ -209,6 +192,8 @@ class PrimitiveEntry(Entry):
     serialized_value: value of the builtin type in serialized format.
     readable: for ease of inspection for certain types
     """
+
+    supported_types: ClassVar[List[str]] = [t.value for t in PrimitiveType]
 
     serialized_value: str
     replicated: bool
@@ -247,10 +232,6 @@ class PrimitiveEntry(Entry):
         )
 
     @classmethod
-    def supported_types(cls) -> List[str]:
-        return [t.value for t in PrimitiveType]
-
-    @classmethod
     def _serialize(cls, type_name: str, obj: Any) -> str:
         if type_name == "int":
             return str(obj)
@@ -269,7 +250,7 @@ class PrimitiveEntry(Entry):
     @classmethod
     def from_object(cls, obj: Any) -> "PrimitiveEntry":
         type_name = type(obj).__name__
-        if type_name not in cls.supported_types():
+        if type_name not in cls.supported_types:
             raise TypeError(f"Unsupported primitive obj of type {type_name}")
 
         serialized_value = cls._serialize(type_name, obj)
@@ -277,17 +258,15 @@ class PrimitiveEntry(Entry):
         return PrimitiveEntry(type_name, serialized_value, False, readable_value)
 
     @classmethod
-    def from_serialized(
+    def from_yaml_obj(
         cls,
-        type_name: str,
-        serialized_value: str,
-        replicated: bool,
-        readable: Optional[str],
+        yaml_obj: Any,
     ) -> "PrimitiveEntry":
-        if type_name not in cls.supported_types():
+        type_name = yaml_obj["type"]
+        if type_name not in cls.supported_types:
             raise TypeError(f"Unsupported primitive obj of type {type_name}")
-
-        return PrimitiveEntry(type_name, serialized_value, replicated)
+        del yaml_obj["readable"]
+        return cls(**yaml_obj)
 
 
 T = TypeVar("T", bound=Entry)
@@ -307,116 +286,26 @@ class SnapshotMetadata:
     def from_yaml(cls, yaml_str: str) -> "SnapshotMetadata":
         d = yaml.load(yaml_str, Loader=Loader)
         manifest: Manifest = {}
-        for path, entry in d["manifest"].items():
-            type_name = entry["type"]
-            del entry["type"]
+        for path, yaml_obj in d["manifest"].items():
+            type_name = yaml_obj["type"]
             if type_name == "list":
-                manifest[path] = ListEntry(**entry)
+                manifest[path] = ListEntry.from_yaml_obj(yaml_obj)
             elif type_name == "dict":
-                manifest[path] = DictEntry(**entry)
+                manifest[path] = DictEntry.from_yaml_obj(yaml_obj)
             elif type_name == "OrderedDict":
-                manifest[path] = OrderedDictEntry(**entry)
-            elif type_name in PrimitiveEntry.supported_types():
-                manifest[path] = PrimitiveEntry.from_serialized(type_name, **entry)
+                manifest[path] = OrderedDictEntry.from_yaml_obj(yaml_obj)
+            elif type_name in PrimitiveEntry.supported_types:
+                manifest[path] = PrimitiveEntry.from_yaml_obj(yaml_obj)
             elif type_name == "Tensor":
-                manifest[path] = TensorEntry(**entry)
+                manifest[path] = TensorEntry.from_yaml_obj(yaml_obj)
             elif type_name == "ShardedTensor":
-                manifest[path] = ShardedTensorEntry.from_yaml(entry=entry)
+                manifest[path] = ShardedTensorEntry.from_yaml_obj(yaml_obj)
             elif type_name == "ChunkedTensor":
-                manifest[path] = ChunkedTensorEntry.from_yaml(entry=entry)
+                manifest[path] = ChunkedTensorEntry.from_yaml_obj(yaml_obj)
             elif type_name == "object":
-                manifest[path] = ObjectEntry(**entry)
+                manifest[path] = ObjectEntry.from_yaml_obj(yaml_obj)
         d["manifest"] = manifest
         return cls(**d)
-
-
-def get_manifest_for_rank(metadata: SnapshotMetadata, rank: int) -> Manifest:
-    """
-    Prepare available entries to load from for the rank.
-
-    Given a global manifest, prepare available entries to load from for the
-    rank according to the following rules:
-
-        per-rank: The entry is only made available to the rank saved it.
-        replicated: The entry is made available to all ranks.
-        sharded: Entries are first merged across all ranks then made available
-            to all ranks.
-
-    Args:
-        manifest: The global manifest.
-        rank: The rank of the current process.
-
-    Returns:
-        The local manifest for the rank.
-    """
-    rank_to_manifest: Dict[int, Dict[str, Entry]] = {
-        i: {} for i in range(metadata.world_size)
-    }
-
-    for path, entry in metadata.manifest.items():
-        tokens = path.split("/")
-        rnk = int(tokens.pop(0))
-        logical_path = "/".join(tokens)
-        rank_to_manifest[rnk][logical_path] = entry
-
-    local_manifest = rank_to_manifest.get(rank, {})
-
-    _copy_replicated_entries(
-        dst_manifest=local_manifest, src_manifest=rank_to_manifest[0]
-    )
-    for rnk, manifest in rank_to_manifest.items():
-        if rnk == rank:
-            continue
-        _copy_sharded_tensor_entries(dst_manifest=local_manifest, src_manifest=manifest)
-    return local_manifest
-
-
-def _copy_replicated_entries(dst_manifest: Manifest, src_manifest: Manifest) -> None:
-    for logical_path, entry in src_manifest.items():
-        if is_replicated(entry) and logical_path not in dst_manifest:
-            _copy_entry(dst_manifest, src_manifest, logical_path)
-
-
-def _copy_sharded_tensor_entries(
-    dst_manifest: Manifest, src_manifest: Manifest
-) -> None:
-    for logical_path, entry in src_manifest.items():
-        if not isinstance(entry, ShardedTensorEntry):
-            continue
-        if logical_path not in dst_manifest:
-            _copy_entry(dst_manifest, src_manifest, logical_path)
-        else:
-            dst_manifest[logical_path] = ShardedTensorEntry(
-                shards=sorted(
-                    dst_manifest[logical_path].shards + entry.shards,
-                    key=lambda s: s.offsets,
-                )
-            )
-
-
-def _copy_entry(
-    dst_manifest: Manifest, src_manifest: Manifest, logical_path: str
-) -> None:
-    if logical_path in dst_manifest:
-        return
-
-    dst_manifest[logical_path] = src_manifest[logical_path]
-
-    tokens = logical_path.split("/")
-    key = tokens.pop()
-    path = "/".join(tokens)
-    while path not in dst_manifest:
-        entry = src_manifest[path]
-        if is_dict_entry(entry):
-            entry.keys = [key]
-        dst_manifest[path] = entry
-        key = tokens.pop()
-        path = "/".join(tokens)
-        if len(tokens) == 0:
-            break
-
-    if path in dst_manifest and is_dict_entry(dst_manifest[path]):
-        dst_manifest[path].keys.append(key)
 
 
 def is_dict_entry(entry: Entry) -> bool:

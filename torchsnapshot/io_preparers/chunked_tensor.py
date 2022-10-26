@@ -14,7 +14,7 @@ import torch
 
 from torchsnapshot.io_preparers.tensor import TensorIOPreparer
 
-from torchsnapshot.io_types import ReadReq, WriteReq
+from torchsnapshot.io_types import Future, ReadReq, WriteReq
 from torchsnapshot.knobs import get_max_chunk_size_bytes
 from torchsnapshot.manifest import ChunkedTensorEntry, Shard
 
@@ -111,16 +111,16 @@ class ChunkedTensorIOPreparer:
         entry: ChunkedTensorEntry,
         tensor_out: Optional[torch.Tensor] = None,
         buffer_size_limit_bytes: Optional[int] = None,
-    ) -> List[ReadReq]:
-        if tensor_out is None:
-            raise RuntimeError(
-                "Reading a Tensor without a runtime object is not yet supported."
-            )
+    ) -> Tuple[List[ReadReq], Future[torch.Tensor]]:
+        if tensor_out is None or not TensorIOPreparer.can_load_inplace(
+            entry=entry, obj=tensor_out
+        ):
+            tensor_out = TensorIOPreparer.empty_tensor_from_entry(entry)
         read_reqs = []
         for chunk in entry.chunks:
             tensor_out_chunk = cls._get_subtensor_view(tensor_out, chunk)
-            chunk_read_reqs = TensorIOPreparer.prepare_read(
+            chunk_read_reqs, _ = TensorIOPreparer.prepare_read(
                 chunk.tensor, tensor_out_chunk, buffer_size_limit_bytes
             )
             read_reqs += chunk_read_reqs
-        return read_reqs
+        return read_reqs, Future(obj=tensor_out)
