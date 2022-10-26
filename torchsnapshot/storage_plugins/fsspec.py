@@ -27,16 +27,16 @@ class FSSpecStoragePlugin(StoragePlugin):
                 f"Invalid protocol: {protocol}, Only fsspec-* protocols are supported"
             )
         self._protocol = protocol[len("fsspec-"):]
-        self.fs = fsspec.filesystem(protocol=self._protocol, **storage_options)
+        self._fs = None
         self._session = None
         self._lock = asyncio.Lock()
         self._storage_options = storage_options
 
     async def _init_session(self) -> None:
         async with self._lock:
-            self.fs = fsspec.filesystem(protocol=self._protocol, **self._storage_options)
             if self._session is None:
-                self._session = await self.fs.set_session()
+                self._fs = fsspec.filesystem(protocol=self._protocol, **self._storage_options)
+                self._session = await self._fs.set_session(refresh=True)
 
     async def write(self, write_io: WriteIO) -> None:
         await self._init_session()
@@ -44,14 +44,14 @@ class FSSpecStoragePlugin(StoragePlugin):
         splits = path.split("/")
         for i in range(len(splits)):
             dir_path = "/".join(splits[:i])
-            if dir_path and not await self.fs._exists(dir_path):
-                await self.fs._mkdir(dir_path)
-        await self.fs._pipe_file(path, bytes(write_io.buf))
+            if dir_path and not await self._fs._exists(dir_path):
+                await self._fs._mkdir(dir_path)
+        await self._fs._pipe_file(path, bytes(write_io.buf))
 
     async def read(self, read_io: ReadIO) -> None:
         await self._init_session()
         path = os.path.join(self.root, read_io.path)
-        data = await self.fs._cat_file(path)
+        data = await self._fs._cat_file(path)
         if read_io.byte_range is None:
             read_io.buf = io.BytesIO(data)
         else:
@@ -61,10 +61,11 @@ class FSSpecStoragePlugin(StoragePlugin):
     async def delete(self, path: str) -> None:
         await self._init_session()
         path = os.path.join(self.root, path)
-        await self.fs._rm(path, recursive=True)
+        await self._fs._rm(path, recursive=True)
 
     async def close(self) -> None:
         async with self._lock:
             if self._session is not None:
                 await self._session.close()
                 self._session = None
+                self._fs = None
