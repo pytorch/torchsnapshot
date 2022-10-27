@@ -99,7 +99,7 @@ Objects within a snapshot can be efficiently accessed without fetching the entir
 Taking a Snapshot Asynchronously
 --------------------------------
 
-When host memory is abundant, users can leverage it with :func:`Snapshot.async_take() <torchsnapshot.Snapshot.async_take>` to allow training to resume before all storage I/O completes. :func:`Snapshot.async_take() <torchsnapshot.Snapshot.async_take>` return as soon as it stages the snapshot content in host RAM and schedules storage I/O in background. This can drastically reduce the time blocked for checkpointing especially when the underly storage is slow.
+When host memory is abundant, users can leverage it with :func:`Snapshot.async_take() <torchsnapshot.Snapshot.async_take>` to allow training to resume before all storage I/O completes. :func:`Snapshot.async_take() <torchsnapshot.Snapshot.async_take>` returns as soon as it stages the snapshot content in host RAM and schedules storage I/O in background. This can drastically reduce the time blocked for checkpointing especially when the underly storage is slow.
 
 
 .. code-block:: Python
@@ -124,8 +124,7 @@ When host memory is abundant, users can leverage it with :func:`Snapshot.async_t
 Reproducibility
 ---------------
 
-TorchSnapshot provides a utility called :class:`RNGState <torchsnapshot.rng_state.RNGState>` to help users manage reproducibility. If an :class:`RNGState <torchsnapshot.rng_state.RNGState>` object is captured in the application state, TorchSnapshot ensures that the global RNG state is set to the same values after taking the snapshot and after restoring from the snapshot.
-
+TorchSnapshot provides a utility called :class:`RNGState <torchsnapshot.rng_state.RNGState>` to help users manage reproducibility. If an :class:`RNGState <torchsnapshot.rng_state.RNGState>` object is captured in the application state, TorchSnapshot ensures that the global RNG state is set to the same values after restoring from the snapshot as it was after taking the snapshot.
 
 .. code-block:: Python
 

@@ -12,26 +12,12 @@ from typing import Any, Dict
 # pyre-fixme[24]: Python <3.9 doesn't support typing on UserDict
 class StateDict(UserDict):
     """
-    A dict that implements the Stateful protocol. It is handy for capturing
-    stateful objects that do not already implement the Stateful protocol or
-    can't implement the protocol (i.e. primitive types).
+    A dictionary that exposes ``.state_dict()`` and ``.load_state_dict()``
+    methods.
 
-    ::
-
-        model = Model()
-        progress = StateDict(current_epoch=0)
-        app_state = {"model": model, "progress": progress}
-
-        # Load from the last snapshot if available
-        ...
-
-        while progress["current_epoch"] < NUM_EPOCHS:
-            # Train for an epoch
-            ...
-            progress["current_epoch"] += 1
-
-            # progress is captured by the snapshot
-            Snapshot.take("foo/bar", app_state, backend=...)
+    It can be used to capture objects that do not expose ``.state_dict()`` and
+    ``.load_state_dict()`` methods (e.g. Tensors, Python primitive types) as
+    part of the application state.
     """
 
     def state_dict(self) -> Dict[str, Any]:
