@@ -11,7 +11,7 @@ import os
 import sys
 
 from pathlib import Path
-from typing import cast, Dict, List
+from typing import Any, cast, Dict, List
 
 import pytest
 
@@ -19,7 +19,8 @@ import torch
 import torch.distributed as dist
 import torchsnapshot
 
-from torch.distributed._shard.sharded_tensor import ShardedTensor
+from torch.distributed._shard.sharded_tensor import Shard, ShardedTensor
+from torchsnapshot.flatten import flatten
 from torchsnapshot.knobs import override_max_shard_size_bytes
 from torchsnapshot.test_utils import run_with_pet
 
@@ -121,50 +122,60 @@ def _initialize_dmp(
     )
 
 
-def _gather_dmp_state_dict(dmp: DistributedModelParallel) -> Dict[str, torch.Tensor]:
-    """
-    Gather a class::`DistributedDataParallel`'s state dict from all ranks.
+def _copy_shard_to_global_tensor(shard: Shard, global_tensor: torch.Tensor) -> None:
+    offsets = shard.metadata.shard_offsets
+    sizes = shard.metadata.shard_sizes
+    view = global_tensor
+    for dim, (offset, size) in enumerate(zip(offsets, sizes)):
+        view = torch.narrow(view, dim, offset, size)
+    view.copy_(shard.tensor)
 
-    In the gathered state dict, class::`ShardedTensor`s are converted to
-    class::`Tensor`s.
+
+def _gather_state_dict(
+    state_dict: Dict[str, Any], prefix: str
+) -> Dict[str, torch.Tensor]:
     """
-    state_dict = dmp.state_dict().copy()
+    Gather a distributed state dict for comparison purposes.
+    """
+    _, state_dict = flatten(state_dict, prefix=prefix)
     for k, v in state_dict.items():
-        # This covers both tensors and sharded tensors
-        if isinstance(v, torch.Tensor):
+        if isinstance(v, (torch.Tensor, ShardedTensor)):
             state_dict[k] = v.cpu()
 
-    key_to_shards = {
-        k: v.local_shards()
+    key_to_shape_and_shards = {
+        k: (v.shape, v.local_shards())
         for k, v in state_dict.items()
         if isinstance(v, ShardedTensor)
     }
     key_to_val = {
-        f"{dist.get_rank()}/dmp/{k}": v
+        f"{dist.get_rank()}/{k}": v
         for k, v in state_dict.items()
         if not isinstance(v, ShardedTensor)
     }
 
     object_list = [None] * dist.get_world_size()
-    dist.all_gather_object(object_list, (key_to_shards, key_to_val))
+    dist.all_gather_object(object_list, (key_to_shape_and_shards, key_to_val))
 
     gathered = {}
-    key_to_shards = {}
     # pyre-ignore
-    for key_to_shards, key_to_val in object_list:
+    for key_to_shape_and_shards, key_to_val in object_list:
         gathered.update(key_to_val)
-        for key, shards in key_to_shards.items():
-            full_key = f"{dist.get_rank()}/dmp/{key}"
-            gathered.setdefault(full_key, torch.empty(_NUM_EMBEDDINGS, _EMBEDDING_DIM))
+        for key, (shape, shards) in key_to_shape_and_shards.items():
+            full_key = f"{dist.get_rank()}/{key}"
+            gathered.setdefault(full_key, torch.empty(shape))
             for shard in shards:
-                offsets = shard.metadata.shard_offsets
-                sizes = shard.metadata.shard_sizes
-                # Assume 2D tensor
-                gathered[full_key][
-                    offsets[0] : offsets[0] + sizes[0],
-                    offsets[1] : offsets[1] + sizes[1],
-                ].copy_(shard.tensor)
+                _copy_shard_to_global_tensor(shard, gathered[full_key])
     return gathered
+
+
+def _randomize_state_dict(state_dict: Dict[str, Any]) -> None:
+    _, state_dict = flatten(state_dict, prefix="foo")
+    for val in state_dict.values():
+        if isinstance(val, ShardedTensor):
+            for shard in val.local_shards():
+                shard.tensor.random_()
+        elif isinstance(val, torch.Tensor):
+            val.random_()
 
 
 def _sharding_types() -> List[str]:
@@ -229,8 +240,8 @@ def test_torchrec(
     dst_dmp = _initialize_dmp(device=device, sharding_type=dst_sharding_type)
 
     # Sanity check that the state dicts of the two dmps are different
-    src_gathered = _gather_dmp_state_dict(src_dmp)
-    dst_gathered = _gather_dmp_state_dict(dst_dmp)
+    src_gathered = _gather_state_dict(src_dmp.state_dict(), "dmp")
+    dst_gathered = _gather_state_dict(dst_dmp.state_dict(), "dmp")
     for key, src_tensor in src_gathered.items():
         assert not torch.allclose(src_tensor, dst_gathered[key])
 
@@ -238,9 +249,9 @@ def test_torchrec(
     # the two dmps should be the same
     snapshot.restore(app_state={"dmp": dst_dmp})
 
-    dst_gathered = _gather_dmp_state_dict(dst_dmp)
+    dst_gathered = _gather_state_dict(dst_dmp.state_dict(), "dmp")
     for key, src_tensor in src_gathered.items():
-        assert torch.allclose(src_tensor, dst_gathered[key])
+        assert torch.allclose(src_tensor, dst_gathered[key]), key
 
     # Test reading tensor/sharded tensor into tensor with read_object
     for key, src in src_gathered.items():
@@ -249,3 +260,45 @@ def test_torchrec(
 
         snapshot.read_object(path=key, obj_out=dst)
         assert torch.allclose(src, dst)
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="The test requires GPUs to run."
+)
+@pytest.mark.gpu_only
+@pytest.mark.parametrize("sharding_type", _sharding_types())
+@run_with_pet(nproc=2)
+def test_torchrec_optimizer(
+    sharding_type: str,
+    tmp_path: Path,
+) -> None:
+    dist.init_process_group(backend="nccl")
+    local_rank = int(os.environ["LOCAL_RANK"])
+    device = torch.device(f"cuda:{local_rank}")
+    torch.cuda.set_device(device)
+
+    # First, initialize a dmp with a certain random seed
+    # IMPORTANT: seed different rank differently
+    torch.manual_seed(42 + dist.get_rank())
+    src_dmp = _initialize_dmp(device=device, sharding_type=sharding_type)
+    _randomize_state_dict(src_dmp.fused_optimizer.state_dict())
+
+    torch.manual_seed(777 + dist.get_rank())
+    dst_dmp = _initialize_dmp(device=device, sharding_type=sharding_type)
+    _randomize_state_dict(dst_dmp.fused_optimizer.state_dict())
+
+    src_gathered = _gather_state_dict(src_dmp.fused_optimizer.state_dict(), "optim")
+    dst_gathered = _gather_state_dict(dst_dmp.fused_optimizer.state_dict(), "optim")
+    for key, src_tensor in src_gathered.items():
+        assert not torch.allclose(src_tensor, dst_gathered[key])
+
+    snapshot = torchsnapshot.Snapshot.take(
+        path=str(tmp_path), app_state={"optim": src_dmp.fused_optimizer}
+    )
+
+    snapshot.restore(app_state={"optim": dst_dmp.fused_optimizer})
+
+    src_gathered = _gather_state_dict(src_dmp.fused_optimizer.state_dict(), "optim")
+    dst_gathered = _gather_state_dict(dst_dmp.fused_optimizer.state_dict(), "optim")
+    for key, src_tensor in src_gathered.items():
+        assert torch.allclose(src_tensor, dst_gathered[key])

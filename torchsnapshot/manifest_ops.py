@@ -7,7 +7,8 @@
 
 
 import copy
-from typing import Dict, List
+from collections import defaultdict
+from typing import Dict, List, Tuple
 
 from .manifest import (
     Entry,
@@ -20,157 +21,159 @@ from .manifest import (
 )
 
 
-def get_manifest_for_rank(metadata: SnapshotMetadata, rank: int) -> Manifest:
+def get_manifest_for_rank(
+    metadata: SnapshotMetadata, rank: int
+) -> Tuple[Manifest, Dict[str, ShardedTensorEntry]]:
     """
-    Prepare the manifest for a rank according to the following rules:
-
-        - Replicated entries are made available to all ranks.
-        - Sharded entries are first merged across all ranks, then made available
-              to all ranks.
-        - Other entries are made available to a rank only if the rank produced
-              the entry in the first place.
+    Get the local manifest for the rank from the snapshot metadata.
 
     Args:
-        manifest: The global manifest.
+        metadata: The snapshot metadata.
         rank: The target rank.
 
     Returns:
-        The local manifest for the rank.
+        The local manifest for the rank and merged sharded tensor entries.
     """
-    rank_to_manifest: List[Dict[str, Entry]] = [{} for _ in range(metadata.world_size)]
-
-    for path, entry in metadata.manifest.items():
-        tokens = path.split("/")
-        rnk = int(tokens.pop(0))
-        logical_path = "/".join(tokens)
-        rank_to_manifest[rnk][logical_path] = entry
-
+    rank_to_manifest = _get_rank_to_manifest(metadata=metadata)
+    merged_sd_entries = _get_merged_sharded_tensor_entries(rank_to_manifest)
     if rank < metadata.world_size:
-        return _get_manifest_for_existing_rank(
-            rank_to_manifest=rank_to_manifest, rank=rank
+        return (
+            _get_manifest_for_existing_rank(
+                rank_to_manifest=rank_to_manifest,
+                merged_sd_entries=merged_sd_entries,
+                rank=rank,
+            ),
+            merged_sd_entries,
         )
     else:
-        return _get_manifest_for_new_rank(rank_to_manifest=rank_to_manifest)
+        return (
+            _get_manifest_for_new_rank(rank_to_manifest=rank_to_manifest),
+            merged_sd_entries,
+        )
 
 
 def _get_manifest_for_existing_rank(
-    rank_to_manifest: List[Dict[str, Entry]], rank: int
+    rank_to_manifest: List[Dict[str, Entry]],
+    merged_sd_entries: Dict[str, ShardedTensorEntry],
+    rank: int,
 ) -> Manifest:
-    local_manifest = copy.deepcopy(rank_to_manifest[rank])
+    local_manifest = rank_to_manifest[rank].copy()
 
     # Replicated entries are removed from the global manifest
     for logical_path, entry in rank_to_manifest[0].items():
         if is_replicated(entry):
             local_manifest[logical_path] = entry
 
-    # Make all sharded tensor shards available to the local manifest
-    for rnk, manifest in enumerate(rank_to_manifest):
-        if rnk == rank:
-            continue
-        _copy_sharded_tensor_entries(
-            dst_manifest=local_manifest,
-            src_manifest=manifest,
-        )
+    for logical_path, entry in local_manifest.items():
+        if isinstance(entry, ShardedTensorEntry):
+            local_manifest[logical_path] = merged_sd_entries[logical_path]
+
     return local_manifest
 
 
 def _get_manifest_for_new_rank(rank_to_manifest: List[Dict[str, Entry]]) -> Manifest:
     # Use rank 0's manifest as the base
-    local_manifest = copy.deepcopy(rank_to_manifest[0])
+    local_manifest = rank_to_manifest[0].copy()
 
     # Remove non-replicated entries
     for logical_path in list(local_manifest.keys()):
         entry = local_manifest[logical_path]
-        if (is_container_entry(entry) or is_replicated(entry)) or isinstance(
-            entry, ShardedTensorEntry
-        ):
+        if is_container_entry(entry) or is_replicated(entry):
             continue
         _remove_entry(manifest=local_manifest, logical_path=logical_path)
-
-    # Make all sharded tensor shards available to the local manifest
-    for manifest in rank_to_manifest[1:]:
-        _copy_sharded_tensor_entries(
-            dst_manifest=local_manifest,
-            src_manifest=manifest,
-        )
     return local_manifest
 
 
-def _copy_sharded_tensor_entries(
-    dst_manifest: Manifest, src_manifest: Manifest
-) -> None:
-    for logical_path, entry in src_manifest.items():
-        if not isinstance(entry, ShardedTensorEntry):
-            continue
-        if logical_path not in dst_manifest:
-            _insert_entry(dst_manifest, src_manifest, logical_path)
-        else:
-            dst_manifest[logical_path] = ShardedTensorEntry(
-                shards=sorted(
-                    dst_manifest[logical_path].shards + entry.shards,
-                    key=lambda s: s.offsets,
-                )
-            )
+def _get_rank_to_manifest(metadata: SnapshotMetadata) -> List[Dict[str, Entry]]:
+    rank_to_manifest: List[Dict[str, Entry]] = [{} for _ in range(metadata.world_size)]
+    for path, entry in metadata.manifest.items():
+        tokens = path.split("/")
+        rnk = int(tokens.pop(0))
+        logical_path = "/".join(tokens)
+        rank_to_manifest[rnk][logical_path] = entry
+    return copy.deepcopy(rank_to_manifest)
 
 
-def _insert_entry(
-    dst_manifest: Manifest, src_manifest: Manifest, logical_path: str
+def _get_merged_sharded_tensor_entries(
+    rank_to_manifest: List[Dict[str, Entry]]
+) -> Dict[str, ShardedTensorEntry]:
+    groups = defaultdict(list)
+    for manifest in rank_to_manifest:
+        for logical_path, entry in manifest.items():
+            if isinstance(entry, ShardedTensorEntry):
+                groups[logical_path].append(entry)
+
+    sd_entries = {}
+    for logical_path, group in groups.items():
+        shards = sorted(
+            (shard for entry in group for shard in entry.shards),
+            key=lambda shard: shard.offsets,
+        )
+        sd_entries[logical_path] = ShardedTensorEntry(
+            shards=shards,
+        )
+    return sd_entries
+
+
+def handle_sharded_tensor_elasticity(
+    manifest: Manifest,
+    merged_sd_entries: Dict[str, ShardedTensorEntry],
+    tensor_requests: List[str],
 ) -> None:
     """
-    Insert an entry from src_manifest and dst_manifest.
+    Handles the elastic behavior of :class:`ShardedTensor`.
 
-    Example:
+    :class:`ShardedTensor` can be elastic in several ways:
 
-        dst_manifest (before):
-        {
-            "foo": DictEntry(keys=["baz"]),
-            "foo/baz: ...
-        }
+    - A rank loads a portion of a sharded tensor different from what it saved
+    - A rank loads a sharded tensor that it did not participate in saving
+    - A rank doesn't load a sharded tensor that it participated in saving
 
-        src_manifest:
-        {
-            "foo": DictEntry(keys=["bar", "baz"]),
-            "foo/bar": DictEntry(keys=["qux", "quux"]),
-            "foo/bar/qux": ...
-            "foo/bar/quux": ...
-            "foo/baz": ...
-        }
+    The first scenario is taken care of by :func:`get_manifest_for_rank`, which
+    makes all shards available to all instances of :class:`ShardedTensorEntry`.
 
-        logical_path: "foo/quux"
+    The second and the third scenarios require manipulating the presence of a
+    sharded tensor in the loaded state dict, which is handled by this function:
 
-        dst_manifest (after):
-        {
-            "foo": DictEntry(keys=["baz", "bar"]),
-            "foo/bar": DictEntry(keys=["quux"]),
-            "foo/bar/quux": ...
-            "foo/baz": ...
-        }
+    - If the sharded tensor entry is missing from the local manifest (i.e. the
+      rank did not participate in saving it), this function adds the entry to
+      the local manifest.
+    - If the sharded tensor is missing from the model's state dict, the
+      function removes the corresponding entry from the local manifest.
+
+    NOTE: this function only takes effect if all sharded tensors are at the
+    root of the state dict. This means the elastic behavior is supported for
+    most model but not supported for most optimizers.
+
+    Args:
+        manifest: The local manifest for the rank.
+        merged_sd_entries: The merged sharded tensor entries.
+        tensor_requests: The logical paths of tensors in the target stateful
+            object's state dict.
     """
-    if logical_path in dst_manifest:
+    # Only manipulate the presence of sharded tensors if all sharded tensors
+    # are at the root of the state dict.
+    if not all(len(logical_path.split("/")) == 2 for logical_path in merged_sd_entries):
         return
 
-    dst_manifest[logical_path] = src_manifest[logical_path]
+    # Filter out tensor requests that will not be fulfilled by a ShardedTensorEntry
+    tensor_requests = [tr for tr in tensor_requests if tr in merged_sd_entries]
 
-    # Find the first ancestor that exists and create missing
-    # containers along the way.
-    tokens = logical_path.split("/")
-    anc_path = logical_path
-    while True:
-        key = tokens.pop()
-        anc_path = "/".join(tokens)
-        if len(anc_path) == 0 or anc_path in dst_manifest:
-            break
-        # anc_path must exist in a valid manifest
-        container = copy.deepcopy(src_manifest[anc_path])
-        if is_dict_entry(container):
-            container.keys = [key]
-        dst_manifest[anc_path] = container
+    # Add missing sharded tensor entries that are requested to the manifest
+    for logical_path in tensor_requests:
+        if logical_path not in manifest:
+            manifest[logical_path] = merged_sd_entries[logical_path]
+            tokens = logical_path.split("/")
+            key = tokens.pop()
+            manifest["/".join(tokens)].keys.append(key)
 
-    if anc_path not in dst_manifest:
-        return
-
-    if is_dict_entry(dst_manifest[anc_path]):
-        dst_manifest[anc_path].keys.append(key)
+    # Remove sharded tensor entries that are not requested from the manifest
+    for logical_path in list(manifest.keys()):
+        if (
+            isinstance(manifest[logical_path], ShardedTensorEntry)
+            and logical_path not in tensor_requests
+        ):
+            del manifest[logical_path]
 
 
 def _remove_entry(manifest: Manifest, logical_path: str) -> None:

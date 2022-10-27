@@ -40,10 +40,9 @@ from .manifest import (
     is_container_entry,
     Manifest,
     PrimitiveEntry,
-    ShardedTensorEntry,
     SnapshotMetadata,
 )
-from .manifest_ops import get_manifest_for_rank
+from .manifest_ops import get_manifest_for_rank, handle_sharded_tensor_elasticity
 from .partitioner import consolidate_replicated_entries, partition_write_reqs
 from .pg_wrapper import PGWrapper
 from .rng_state import RNGState
@@ -448,7 +447,6 @@ class Snapshot:
 
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(self.pg)
-        rank = pg_wrapper.get_rank()
         storage = url_to_storage_plugin_in_event_loop(
             url_path=self.path,
             event_loop=event_loop,
@@ -461,13 +459,10 @@ class Snapshot:
         global_keys = self._gather_keys(
             keys=list(app_state.keys()), pg_wrapper=pg_wrapper
         )
-        manifest = get_manifest_for_rank(metadata=self.metadata, rank=rank)
         for key in global_keys:
             self._load_stateful(
-                rank=rank,
                 stateful_key=key,
                 stateful=app_state.get(key),
-                manifest=manifest,
                 storage=storage,
                 pg=pg_wrapper,
                 event_loop=event_loop,
@@ -478,10 +473,8 @@ class Snapshot:
         if rng_state_item is not None:
             key, stateful = rng_state_item
             self._load_stateful(
-                rank=rank,
                 stateful_key=key,
                 stateful=stateful,
-                manifest=manifest,
                 storage=storage,
                 pg=pg_wrapper,
                 event_loop=event_loop,
@@ -549,9 +542,11 @@ class Snapshot:
         # available to the rank (2) sharded tensor shards saved by all ranks
         # are made available to the rank. The availability of the entries is
         # determined from the perspective of the rank specified in the path.
-        manifest = get_manifest_for_rank(metadata=self.metadata, rank=rank)
+        manifest, merged_sd_entries = get_manifest_for_rank(
+            metadata=self.metadata, rank=rank
+        )
 
-        if unranked_path not in manifest:
+        if unranked_path not in merged_sd_entries and unranked_path not in manifest:
             # TODO: show candidates based on edit distance
             raise RuntimeError(
                 f'The supplied path "{path}" does not exist in the snapshot\'s manifest. '
@@ -570,7 +565,7 @@ class Snapshot:
             event_loop=event_loop,
             storage_options=self._storage_options,
         )
-        entry = manifest[unranked_path]
+        entry = merged_sd_entries.get(unranked_path) or manifest[unranked_path]
         if isinstance(entry, PrimitiveEntry):
             return cast(T, entry.get_value())
         read_reqs, fut = prepare_read(
@@ -652,19 +647,20 @@ class Snapshot:
                     f"Expected Stateful in app_state for key {key}, got {value_type}."
                 )
 
-    @classmethod
     def _load_stateful(  # noqa
-        cls,
-        rank: int,
+        self,
         stateful_key: str,
         stateful: Optional[Stateful],
-        manifest: Manifest,
         storage: StoragePlugin,
         pg: PGWrapper,
         event_loop: asyncio.AbstractEventLoop,
     ) -> None:
         if stateful is None:
             return
+
+        manifest, merged_sd_entries = get_manifest_for_rank(
+            metadata=self.metadata, rank=pg.get_rank()
+        )
 
         # In most cases (e.g. when the stateful is an nn.Module), the stateful
         # has already allocated memory for its tensors. Materializing the
@@ -684,8 +680,14 @@ class Snapshot:
             # ShardedTensor became a subclass of torch.Tensor since PyTorch
             # 1.13. We can drop the check for ShardedTensor once PyTorch 1.12.1
             # is no longer supported.
-            if k in manifest and isinstance(v, (torch.Tensor, ShardedTensor))
+            if isinstance(v, (torch.Tensor, ShardedTensor))
         }
+
+        handle_sharded_tensor_elasticity(
+            manifest=manifest,
+            merged_sd_entries=merged_sd_entries,
+            tensor_requests=list(flattened.keys()),
+        )
 
         container_entries = {}
         read_reqs: List[ReadReq] = []
@@ -695,13 +697,9 @@ class Snapshot:
                 container_entries[logical_path] = entry
                 continue
 
-            obj_out = flattened.get(logical_path)
-            if obj_out is None and isinstance(entry, ShardedTensorEntry):
-                continue
-
             rrs, fut = prepare_read(
                 entry=entry,
-                obj_out=obj_out,
+                obj_out=flattened.get(logical_path),
             )
             read_reqs += rrs
             futs[logical_path] = fut

@@ -20,14 +20,13 @@ from torchsnapshot.manifest import (
     DictEntry,
     Entry,
     is_replicated,
-    ListEntry,
     ObjectEntry,
     Shard,
     ShardedTensorEntry,
     SnapshotMetadata,
     TensorEntry,
 )
-from torchsnapshot.manifest_ops import _insert_entry, get_manifest_for_rank
+from torchsnapshot.manifest_ops import get_manifest_for_rank
 
 try:
     from yaml import CSafeDumper as Dumper
@@ -286,41 +285,44 @@ def test_get_local_manifest(manifest: Dict[str, Entry], rank: int) -> None:
         world_size=_WORLD_SIZE,
         manifest=manifest,
     )
-    local_manifest = get_manifest_for_rank(metadata=metadata, rank=rank)
+    local_manifest, merged_sd_entries = get_manifest_for_rank(
+        metadata=metadata, rank=rank
+    )
     expected_local_manifest = {}
     for path, entry in manifest.items():
         local_path = "/".join(path.split("/")[1:])
         if path.startswith(f"{rank}/") or is_replicated(entry):
             expected_local_manifest[local_path] = entry
 
-    expected_local_manifest["foo/qux"] = ShardedTensorEntry(
-        shards=[
-            Shard(
-                offsets=[0, 0],
-                sizes=[4, 4],
-                tensor=TensorEntry(
-                    location="sharded/foo/qux.0",
-                    serializer="torch_save",
-                    dtype="float32",
-                    shape=[2, 8],
-                    replicated=False,
+    if "foo/qux" in local_manifest:
+        expected_local_manifest["foo/qux"] = ShardedTensorEntry(
+            shards=[
+                Shard(
+                    offsets=[0, 0],
+                    sizes=[4, 4],
+                    tensor=TensorEntry(
+                        location="sharded/foo/qux.0",
+                        serializer="torch_save",
+                        dtype="float32",
+                        shape=[2, 8],
+                        replicated=False,
+                    ),
                 ),
-            ),
-            Shard(
-                offsets=[4, 0],
-                sizes=[4, 4],
-                tensor=TensorEntry(
-                    location="sharded/foo/qux.1",
-                    serializer="torch_save",
-                    dtype="float32",
-                    shape=[2, 8],
-                    replicated=False,
+                Shard(
+                    offsets=[4, 0],
+                    sizes=[4, 4],
+                    tensor=TensorEntry(
+                        location="sharded/foo/qux.1",
+                        serializer="torch_save",
+                        dtype="float32",
+                        shape=[2, 8],
+                        replicated=False,
+                    ),
                 ),
-            ),
-        ]
-    )
+            ]
+        )
     if rank >= _WORLD_SIZE:
-        expected_local_manifest["foo"] = DictEntry(keys=["baz", "qux", "qux_chunked"])
+        expected_local_manifest["foo"] = DictEntry(keys=["baz", "qux_chunked"])
     assert local_manifest == expected_local_manifest
 
 
@@ -348,74 +350,3 @@ def test_replicated_entries_only_on_rank_0(rank: int) -> None:
         rank=rank,
     )
     assert local_manifest_0 == local_manifest_1
-
-
-def test_insert_entry() -> None:
-    src_manifest = {
-        "foo": DictEntry(keys=["bar", "baz"]),
-        "foo/bar": ListEntry(),
-        "foo/bar/0": DictEntry(keys=["qux"]),
-        "foo/bar/0/qux": ObjectEntry(
-            location="",
-            serializer="torch_save",
-            obj_type="",
-            replicated=True,
-        ),
-        "foo/baz": ObjectEntry(
-            location="",
-            serializer="torch_save",
-            obj_type="",
-            replicated=False,
-        ),
-    }
-    dst_manifest = {}
-    expected_dst_manifest = {
-        "foo": DictEntry(keys=["bar"]),
-        "foo/bar": ListEntry(),
-        "foo/bar/0": DictEntry(keys=["qux"]),
-        "foo/bar/0/qux": ObjectEntry(
-            location="",
-            serializer="torch_save",
-            obj_type="",
-            replicated=True,
-        ),
-    }
-    _insert_entry(
-        dst_manifest=dst_manifest,
-        src_manifest=src_manifest,
-        logical_path="foo/bar/0/qux",
-    )
-    assert dst_manifest == expected_dst_manifest
-
-    dst_manifest = {
-        "foo": DictEntry(keys=["baz"]),
-        "foo/baz": ObjectEntry(
-            location="",
-            serializer="torch_save",
-            obj_type="",
-            replicated=True,
-        ),
-    }
-    expected_dst_manifest = {
-        "foo": DictEntry(keys=["baz", "bar"]),
-        "foo/baz": ObjectEntry(
-            location="",
-            serializer="torch_save",
-            obj_type="",
-            replicated=True,
-        ),
-        "foo/bar": ListEntry(),
-        "foo/bar/0": DictEntry(keys=["qux"]),
-        "foo/bar/0/qux": ObjectEntry(
-            location="",
-            serializer="torch_save",
-            obj_type="",
-            replicated=True,
-        ),
-    }
-    _insert_entry(
-        dst_manifest=dst_manifest,
-        src_manifest=src_manifest,
-        logical_path="foo/bar/0/qux",
-    )
-    assert dst_manifest == expected_dst_manifest
