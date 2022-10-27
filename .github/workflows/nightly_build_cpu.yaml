@@ -10,13 +10,13 @@ on:
       append_to_version:
         description: "Optional value to append to version string"
 
-
 jobs:
   run_tests:
-    uses: pytorch/torchsnapshot/.github/workflows/run_tests.yaml
+    uses: ./.github/workflows/run_tests.yaml
+    secrets: inherit
 
   upload_to_pypi:
-    needs: unit_tests
+    needs: run_tests
     runs-on: ubuntu-latest
     steps:
       - name: Check out repo

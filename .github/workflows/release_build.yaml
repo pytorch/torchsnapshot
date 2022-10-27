@@ -5,10 +5,11 @@ on:
 
 jobs:
   run_tests:
-    uses: pytorch/torchsnapshot/.github/workflows/tests.yaml
+    uses: ./.github/workflows/tests.yaml
+    secrets: inherit
 
   upload_to_pypi:
-    needs: unit_tests
+    needs: run_tests
     runs-on: ubuntu-latest
     steps:
       - name: Check out repo

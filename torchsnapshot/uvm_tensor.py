@@ -12,7 +12,7 @@ _UVM_TENSOR_AVAILABLE = False
 
 try:
     import fbgemm_gpu  # @manual  # noqa
-except ImportError:
+except Exception:
     pass
 
 try:
