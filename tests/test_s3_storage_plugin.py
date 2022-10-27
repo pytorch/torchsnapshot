@@ -75,7 +75,7 @@ async def test_s3_write_read_delete() -> None:
     tensor = torch.rand((_TENSOR_SZ,))
     buf = io.BytesIO()
     torch.save(tensor, buf)
-    write_io = WriteIO(path="tensor", buf=memoryview(buf.getvalue()))
+    write_io = WriteIO(path="tensor", buf=buf.getbuffer())
 
     await plugin.write(write_io=write_io)
 
