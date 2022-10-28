@@ -47,7 +47,10 @@ class FSSpecStoragePlugin(StoragePlugin):
         for i in range(len(splits)):
             dir_path = "/".join(splits[:i])
             if dir_path and not await self._fs._exists(dir_path):
-                await self._fs._mkdir(dir_path)
+                try:
+                    await self._fs._mkdir(dir_path)
+                except AttributeError:
+                    break
         await self._fs._pipe_file(path, bytes(write_io.buf))
 
     async def read(self, read_io: ReadIO) -> None:
