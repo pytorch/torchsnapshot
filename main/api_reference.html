@@ -32,7 +32,6 @@
   <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
-    <link rel="next" title="Utilities" href="utilities.html" />
     <link rel="prev" title="Getting Started" href="getting_started.html" />
   <!-- Google Analytics -->
   
@@ -246,7 +245,6 @@
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="getting_started.html">Getting Started</a></li>
 <li class="toctree-l1 current"><a class="current reference internal" href="#">API Reference</a></li>
-<li class="toctree-l1"><a class="reference internal" href="utilities.html">Utilities</a></li>
 </ul>
 
             
@@ -324,150 +322,135 @@
 <dl class="py class">
 <dt class="sig sig-object py" id="torchsnapshot.Snapshot">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">Snapshot</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pg</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">ProcessGroup</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">storage_options</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#torchsnapshot.Snapshot" title="Permalink to this definition">¶</a></dt>
-<dd><p>Snapshot represents the persisted program state at one point in time.</p>
-<p>Basic usage:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Define the program state</span>
-<span class="n">app_state</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;model&quot;</span><span class="p">:</span> <span class="n">model</span><span class="p">,</span> <span class="s2">&quot;optimizer&quot;</span><span class="p">:</span> <span class="n">optimizer</span><span class="s2">&quot;}</span>
-
-<span class="c1"># At an appropriate time, persist the program state as a snapshot</span>
-<span class="n">snapshot</span> <span class="o">=</span> <span class="n">Snapshot</span><span class="o">.</span><span class="n">take</span><span class="p">(</span><span class="n">path</span><span class="o">=</span><span class="n">path</span><span class="p">,</span> <span class="n">app_state</span><span class="o">=</span><span class="n">app_state</span><span class="p">)</span>
-
-<span class="c1"># On resuming, restore the program state from a snapshot</span>
-<span class="n">snapshot</span><span class="o">.</span><span class="n">restore</span><span class="p">(</span><span class="n">app_state</span><span class="p">)</span>
-</pre></div>
-</div>
-<p>Overview:</p>
-<blockquote>
-<div><p>At high level, torchsnapshot saves each value in state dicts as a
-file/object in the corresponding storage system. It also saves a manifest
-describing the persisted values and the structure of the original state
-dict.</p>
-<p>Comparing with <a class="reference external" href="https://pytorch.org/docs/stable/generated/torch.save.html#torch.save" title="(in PyTorch v1.13)"><code class="xref py py-func docutils literal notranslate"><span class="pre">torch.save()</span></code></a> and <a class="reference external" href="https://pytorch.org/docs/stable/generated/torch.load.html#torch.load" title="(in PyTorch v1.13)"><code class="xref py py-func docutils literal notranslate"><span class="pre">torch.load()</span></code></a>, torchsnapshot:</p>
-<ul>
-<li><p>Enables efficient random access of persisted model weights.</p></li>
-<li><p>Accelerates persistence by parallelizing writes.</p>
-<blockquote>
-<div><ul class="simple">
-<li><p>For replicated values, persistence is parallelized across ranks.</p></li>
-</ul>
-</div></blockquote>
-</li>
-<li><p>Enables flexible yet robust elasticity (changing world size on
-restore).</p></li>
-</ul>
-</div></blockquote>
-<p>Elasticity:</p>
-<blockquote>
-<div><p>Elasticity is implemented via correctly making persisted values
-available to a newly joined rank, and having it correctly restores the
-corresponding runtime objects from the persisted values.</p>
-<p>For the purpose of elasticity, all persisted values fall into one of
-the categories in [per-rank, replicated, sharded].</p>
-<p>per-rank:</p>
-<blockquote>
-<div><p>By default, all non-sharded values are treated as per-rank.</p>
-<p>On save, the value is only saved by the owning rank.</p>
-<p>On load, the value is only made available to the same rank.</p>
-</div></blockquote>
-<p>replicated:</p>
-<blockquote>
-<div><p>A user can suggest any non-sharded value as replicated via glob
-patterns.</p>
-<p>On save, the value is only saved once (can be by any rank).</p>
-<p>On load, the value is made available to all ranks, including newly
-joined ranks.</p>
-</div></blockquote>
-<p>sharded:</p>
-<blockquote>
-<div><p>Specific types are always treated as sharded (e.g. ShardedTensor).</p>
-<p>On save, all shard-owning ranks save their shards.</p>
-<p>On load, all shards are made available to all ranks, including
-newly joined rank. All ranks can read from all shards for
-restoring the runtime object from persisted values.
-(ShardedTensor resharding is powered by torch.dist.checkpoint).</p>
-</div></blockquote>
-<p>If all values within a snapshot are either replicated or sharded, the
-snapshot is automatically reshard-able.</p>
-<p>If a snapshot contains per-rank values, it cannot be resharded unless
-the per-rank values are explicitly coerced to replicated on load.</p>
-</div></blockquote>
-<dl class="py method">
-<dt class="sig sig-object py" id="torchsnapshot.Snapshot.async_take">
-<em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">async_take</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">app_state</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">T</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pg</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">ProcessGroup</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replicated</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">storage_options</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_custom_tensor_prepare_func</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">Callable</span><span class="p"><span class="pre">[</span></span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v1.13)"><span class="pre">Tensor</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">bool</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v1.13)"><span class="pre">Tensor</span></a><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">PendingSnapshot</span></span></span><a class="headerlink" href="#torchsnapshot.Snapshot.async_take" title="Permalink to this definition">¶</a></dt>
-<dd><p>Asynchronously take a snapshot from the program state.</p>
-<p>This method creates a consistent snapshot of the app state (i.e.
-changes to the app state after this method returns have no effect on
-the snapshot). The asynchronicity is a result of performing storage I/O
-in the background.</p>
+<dd><p>Create a reference to an existing snapshot.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>app_state</strong> – The program state to take the snapshot from.</p></li>
-<li><p><strong>path</strong> – The location to save the snapshot.</p></li>
-<li><p><strong>pg</strong> – The process group for the processes taking the snapshot.</p></li>
-<li><p><strong>unspecified</strong> (<em>When</em>) – <ul>
-<li><p>If distributed is initialized, the global process group will be used.</p></li>
-<li><p>If distributed is not initialized, single process is assumed.</p></li>
+<li><p><strong>path</strong> (<em>str</em>) – The path to the snapshot. This should be the same as the
+<code class="docutils literal notranslate"><span class="pre">path</span></code> argument used for <a class="reference internal" href="#torchsnapshot.Snapshot.take" title="torchsnapshot.Snapshot.take"><code class="xref py py-func docutils literal notranslate"><span class="pre">Snapshot.take()</span></code></a> when the snapshot
+was taken.</p></li>
+<li><p><strong>pg</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group for the participants of
+<a class="reference internal" href="#torchsnapshot.Snapshot.restore" title="torchsnapshot.Snapshot.restore"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Snapshot.restore()</span></code></a>. If none, the default process group will be
+used.</p></li>
+<li><p><strong>storage_options</strong> (<em>Dict</em><em>[</em><em>str</em><em>, </em><em>Any</em><em>]</em><em>, </em><em>optional</em>) – Additional keyword options
+for the storage plugin to use. See each storage plugin’s documentation
+for customizations.</p></li>
 </ul>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="torchsnapshot.Snapshot.take">
+<em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">take</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">app_state</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">T</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pg</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">ProcessGroup</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replicated</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">storage_options</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_custom_tensor_prepare_func</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">Callable</span><span class="p"><span class="pre">[</span></span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v1.13)"><span class="pre">Tensor</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">bool</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v1.13)"><span class="pre">Tensor</span></a><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#torchsnapshot.Snapshot" title="torchsnapshot.snapshot.Snapshot"><span class="pre">Snapshot</span></a></span></span><a class="headerlink" href="#torchsnapshot.Snapshot.take" title="Permalink to this definition">¶</a></dt>
+<dd><p>Takes a snapshot of the application state.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>app_state</strong> (<em>Dict</em><em>[</em><em>str</em><em>, </em><em>Stateful</em><em>]</em>) – The application state to persist.
+It takes the form of a dictionary, with the keys being
+user-defined strings and the values being stateful objects.
+Stateful objects are objects that exposes <code class="docutils literal notranslate"><span class="pre">.state_dict()</span></code> and
+<code class="docutils literal notranslate"><span class="pre">.load_state_dict()</span></code> methods. Common PyTorch objects such as
+<a class="reference external" href="https://pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module" title="(in PyTorch v1.13)"><code class="xref py py-class docutils literal notranslate"><span class="pre">torch.nn.Module</span></code></a>, <a class="reference external" href="https://pytorch.org/docs/stable/optim.html#torch.optim.Optimizer" title="(in PyTorch v1.13)"><code class="xref py py-class docutils literal notranslate"><span class="pre">torch.optim.Optimizer</span></code></a>, and
+LR schedulers all qualify as stateful objects.</p></li>
+<li><p><strong>path</strong> (<em>str</em>) – <p>The location to save the snapshot. <code class="docutils literal notranslate"><span class="pre">path</span></code> can have a
+URI prefix (e.g. <code class="docutils literal notranslate"><span class="pre">s3://</span></code>) that specifies a storage backend.
+If no URI prefix is supplied, <code class="docutils literal notranslate"><span class="pre">path</span></code> is assumed to be a file
+system location. For distributed snapshot, if <code class="docutils literal notranslate"><span class="pre">path</span></code> is
+inconsistent across participating ranks, the value specified by
+rank 0 will be used. For multi-host snapshot, <code class="docutils literal notranslate"><span class="pre">path</span></code> needs to
+be a location accessible by all hosts.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p><code class="docutils literal notranslate"><span class="pre">path</span></code> must <strong>not</strong> point to an existing snapshot.</p>
+</div>
 </p></li>
-<li><p><strong>replicated</strong> – A list of glob patterns for hinting the matching paths
-as replicated. Note that patterns not specified by all ranks
-are ignored.</p></li>
-<li><p><strong>storage_options</strong> – Additional keyword options for the StoragePlugin to use.
-See each StoragePlugin’s documentation for customizations.</p></li>
+<li><p><strong>pg</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group for the participants
+of <a class="reference internal" href="#torchsnapshot.Snapshot.take" title="torchsnapshot.Snapshot.take"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Snapshot.take()</span></code></a>. If none, the default process group will
+be used.</p></li>
+<li><p><strong>replicated</strong> (<em>List</em><em>[</em><em>str</em><em>]</em><em>, </em><em>optional</em>) – <p>Glob patterns for marking
+checkpoint content as replicated. Matching objects will be deduped
+and load-balanced across ranks.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The replication property is automatically inferred
+for <code class="docutils literal notranslate"><span class="pre">DistributedDataParallel</span></code>. Only specify this argument
+if your model has fully replicated states but does not use
+<code class="docutils literal notranslate"><span class="pre">DistributedDataParallel</span></code>.</p>
+</div>
+</p></li>
+<li><p><strong>storage_options</strong> (<em>Dict</em><em>[</em><em>str</em><em>, </em><em>Any</em><em>]</em><em>, </em><em>optional</em>) – Additional keyword
+options for the storage plugin to use. See each storage plugin’s
+documentation for customizations.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p>A handle with which the newly taken snapshot can be obtained via
-<cite>.wait()</cite>. Note that waiting on the handle is optional. The
-snapshot will be committed regardless of whether <cite>.wait()</cite> is
-invoked.</p>
+<dd class="field-even"><p>The newly taken snapshot.</p>
 </dd>
 </dl>
 </dd></dl>
 
 <dl class="py method">
-<dt class="sig sig-object py" id="torchsnapshot.Snapshot.get_manifest">
-<span class="sig-name descname"><span class="pre">get_manifest</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Entry</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#torchsnapshot.Snapshot.get_manifest" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the snapshot’s manifest.</p>
+<dt class="sig sig-object py" id="torchsnapshot.Snapshot.async_take">
+<em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">async_take</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">app_state</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">T</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pg</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">ProcessGroup</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replicated</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">storage_options</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_custom_tensor_prepare_func</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">Callable</span><span class="p"><span class="pre">[</span></span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v1.13)"><span class="pre">Tensor</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">bool</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v1.13)"><span class="pre">Tensor</span></a><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">PendingSnapshot</span></span></span><a class="headerlink" href="#torchsnapshot.Snapshot.async_take" title="Permalink to this definition">¶</a></dt>
+<dd><p>Asynchronously takes a snapshot from the application state.</p>
+<p>This function is identical to <a class="reference internal" href="#torchsnapshot.Snapshot.take" title="torchsnapshot.Snapshot.take"><code class="xref py py-func docutils literal notranslate"><span class="pre">Snapshot.take()</span></code></a>, except that it
+returns early and performs as much I/O operations in the background as
+possible, allowing training to resume early.</p>
 <dl class="field-list simple">
-<dt class="field-odd">Returns<span class="colon">:</span></dt>
-<dd class="field-odd"><p>The snapshot’s manifest.</p>
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>app_state</strong> (<em>Dict</em><em>[</em><em>str</em><em>, </em><em>Stateful</em><em>]</em>) – Same as the <code class="docutils literal notranslate"><span class="pre">app_state</span></code> argument of <a class="reference internal" href="#torchsnapshot.Snapshot.take" title="torchsnapshot.Snapshot.take"><code class="xref py py-func docutils literal notranslate"><span class="pre">Snapshot.take()</span></code></a>.</p></li>
+<li><p><strong>path</strong> (<em>str</em>) – Same as the <code class="docutils literal notranslate"><span class="pre">path</span></code> argument of <a class="reference internal" href="#torchsnapshot.Snapshot.take" title="torchsnapshot.Snapshot.take"><code class="xref py py-func docutils literal notranslate"><span class="pre">Snapshot.take()</span></code></a>.</p></li>
+<li><p><strong>pg</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – Same as the <code class="docutils literal notranslate"><span class="pre">pg</span></code> argument of <a class="reference internal" href="#torchsnapshot.Snapshot.take" title="torchsnapshot.Snapshot.take"><code class="xref py py-func docutils literal notranslate"><span class="pre">Snapshot.take()</span></code></a>.</p></li>
+<li><p><strong>replicated</strong> (<em>List</em><em>[</em><em>str</em><em>]</em><em>, </em><em>optional</em>) – Same as the <code class="docutils literal notranslate"><span class="pre">replicated</span></code> argument of <a class="reference internal" href="#torchsnapshot.Snapshot.take" title="torchsnapshot.Snapshot.take"><code class="xref py py-func docutils literal notranslate"><span class="pre">Snapshot.take()</span></code></a>.</p></li>
+<li><p><strong>storage_options</strong> (<em>Dict</em><em>[</em><em>str</em><em>, </em><em>Any</em><em>]</em><em>, </em><em>optional</em>) – Same as the <code class="docutils literal notranslate"><span class="pre">storage_options</span></code> argument of <a class="reference internal" href="#torchsnapshot.Snapshot.take" title="torchsnapshot.Snapshot.take"><code class="xref py py-func docutils literal notranslate"><span class="pre">Snapshot.take()</span></code></a>.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A handle to the pending snapshot. The handle has exposes a
+<code class="docutils literal notranslate"><span class="pre">.done()</span></code> method for querying the progress and a <code class="docutils literal notranslate"><span class="pre">.wait()</span></code>
+method for waiting for the snapshot’s completion.</p>
 </dd>
 </dl>
 </dd></dl>
 
-<dl class="py property">
-<dt class="sig sig-object py" id="torchsnapshot.Snapshot.metadata">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">SnapshotMetadata</span></em><a class="headerlink" href="#torchsnapshot.Snapshot.metadata" title="Permalink to this definition">¶</a></dt>
-<dd></dd></dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="torchsnapshot.Snapshot.restore">
+<span class="sig-name descname"><span class="pre">restore</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">app_state</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">T</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#torchsnapshot.Snapshot.restore" title="Permalink to this definition">¶</a></dt>
+<dd><p>Restores the application state from the snapshot.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>app_state</strong> (<em>Dict</em><em>[</em><em>str</em><em>, </em><em>Stateful</em><em>]</em>) – The application state to restore.
+<code class="docutils literal notranslate"><span class="pre">app_state</span></code> needs to be either identical to or a subset of the
+<code class="docutils literal notranslate"><span class="pre">app_state</span></code> used for <a class="reference internal" href="#torchsnapshot.Snapshot.take" title="torchsnapshot.Snapshot.take"><code class="xref py py-func docutils literal notranslate"><span class="pre">Snapshot.take()</span></code></a> when the snapshot was
+taken.</p>
+</dd>
+</dl>
+</dd></dl>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="torchsnapshot.Snapshot.read_object">
 <span class="sig-name descname"><span class="pre">read_object</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">obj_out</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">T</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_budget_bytes</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">T</span></span></span><a class="headerlink" href="#torchsnapshot.Snapshot.read_object" title="Permalink to this definition">¶</a></dt>
-<dd><p>Read a persisted object from the snapshot’s content.</p>
-<p>The persisted object to read is specified by its path in the snapshot
-metadata. Available paths can be obtained via <cite>snapshot.get_manifest()</cite>.</p>
-<p>A path in snapshot metadata follows the following format:</p>
-<blockquote>
-<div><p><code class="docutils literal notranslate"><span class="pre">RANK/STATEFUL_NAME/STATE_DICT_KEY[/NESTED_CONTAINER_KEY...]</span></code></p>
-</div></blockquote>
-<p>The rank only matters when the persisted object is “per-rank”.
-Arbitrary rank can be used when the persisted object is “replicated” or
-“sharded”.</p>
-<p>If the persisted object is a sharded tensor, <cite>obj_out</cite> must be
-supplied. The supplied tensor can be either a tensor or sharded tensor.
-<cite>read_object</cite> will correctly populate <cite>obj_out</cite>’s data according to
-sharding spec.</p>
+<dd><p>Reads an object from the snapshot’s content.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>path</strong> – The path to the persisted object.</p></li>
-<li><p><strong>obj_out</strong> – If specified and the object type supports in-place load,
-<cite>read_object</cite> will directly read the persisted object into
-<cite>obj_out</cite>’s buffer.</p></li>
-<li><p><strong>memory_budget_bytes</strong> – When specified, the read operation will keep
-the temporary memory buffer size below this threshold.</p></li>
+<li><p><strong>path</strong> (<em>str</em>) – The path to the target object within the snapshot.
+<code class="docutils literal notranslate"><span class="pre">path</span></code> is equivalent to the target object’s key in the
+snapshot manifest and can be obtained via
+<a class="reference internal" href="#torchsnapshot.Snapshot.get_manifest" title="torchsnapshot.Snapshot.get_manifest"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Snapshot.get_manifest()</span></code></a>.</p></li>
+<li><p><strong>obj_out</strong> (<em>Any</em><em>, </em><em>optional</em>) – <p>When specified, load the object in-place
+into <code class="docutils literal notranslate"><span class="pre">obj_out</span></code> if in-place load is supported for the object’s
+type. Otherwise, <code class="docutils literal notranslate"><span class="pre">obj_out</span></code> is ignored.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>When the target object is a <code class="docutils literal notranslate"><span class="pre">ShardedTensor</span></code>, <code class="docutils literal notranslate"><span class="pre">obj_out</span></code>
+must be specified.</p>
+</div>
+</p></li>
+<li><p><strong>memory_budget_bytes</strong> (<em>int</em><em>, </em><em>optional</em>) – When specified, the read
+operation will keep the temporary memory buffer size below this
+threshold.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span></dt>
@@ -477,44 +460,54 @@ the temporary memory buffer size below this threshold.</p></li>
 </dd></dl>
 
 <dl class="py method">
-<dt class="sig sig-object py" id="torchsnapshot.Snapshot.restore">
-<span class="sig-name descname"><span class="pre">restore</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">app_state</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">T</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#torchsnapshot.Snapshot.restore" title="Permalink to this definition">¶</a></dt>
-<dd><p>Restores the program state from the snapshot.</p>
+<dt class="sig sig-object py" id="torchsnapshot.Snapshot.get_manifest">
+<span class="sig-name descname"><span class="pre">get_manifest</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Entry</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#torchsnapshot.Snapshot.get_manifest" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the snapshot manifest.</p>
+<p>Each entry in the dictionary corresponds to an object in the snapshot,
+with the keys being the logical paths to the objects and the values
+being the metadata describing the object. For distributed snapshots,
+the manifest contain entries for objects saved by all ranks.</p>
 <dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><p><strong>app_state</strong> – The program state to restore from the snapshot.</p>
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p>The snapshot manifest.</p>
 </dd>
 </dl>
 </dd></dl>
 
-<dl class="py method">
-<dt class="sig sig-object py" id="torchsnapshot.Snapshot.take">
-<em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">take</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">app_state</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">T</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pg</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">ProcessGroup</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replicated</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">storage_options</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_custom_tensor_prepare_func</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">Callable</span><span class="p"><span class="pre">[</span></span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v1.13)"><span class="pre">Tensor</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">bool</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://pytorch.org/docs/stable/tensors.html#torch.Tensor" title="(in PyTorch v1.13)"><span class="pre">Tensor</span></a><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#torchsnapshot.Snapshot" title="torchsnapshot.snapshot.Snapshot"><span class="pre">Snapshot</span></a></span></span><a class="headerlink" href="#torchsnapshot.Snapshot.take" title="Permalink to this definition">¶</a></dt>
-<dd><p>Take a snapshot from the program state.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>app_state</strong> – The program state to take the snapshot from.</p></li>
-<li><p><strong>path</strong> – The location to save the snapshot.</p></li>
-<li><p><strong>pg</strong> – The process group for the processes taking the snapshot.</p></li>
-<li><p><strong>unspecified</strong> (<em>When</em>) – <ul>
-<li><p>If distributed is initialized, the global process group will be used.</p></li>
-<li><p>If distributed is not initialized, single process is assumed.</p></li>
-</ul>
-</p></li>
-<li><p><strong>replicated</strong> – A list of glob patterns for hinting the matching paths
-as replicated. Note that patterns not specified by all ranks
-are ignored.</p></li>
-<li><p><strong>storage_options</strong> – Additional keyword options for the StoragePlugin to use.
-See each StoragePlugin’s documentation for customizations.</p></li>
-</ul>
-</dd>
-<dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p>The newly taken snapshot.</p>
-</dd>
-</dl>
 </dd></dl>
 
+<dl class="py class">
+<dt class="sig sig-object py" id="torchsnapshot.StateDict">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">StateDict</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dict</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">/</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#torchsnapshot.StateDict" title="Permalink to this definition">¶</a></dt>
+<dd><p>A dictionary that exposes <code class="docutils literal notranslate"><span class="pre">.state_dict()</span></code> and <code class="docutils literal notranslate"><span class="pre">.load_state_dict()</span></code>
+methods.</p>
+<p>It can be used to capture objects that do not expose <code class="docutils literal notranslate"><span class="pre">.state_dict()</span></code> and
+<code class="docutils literal notranslate"><span class="pre">.load_state_dict()</span></code> methods (e.g. Tensors, Python primitive types) as
+part of the application state.</p>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="torchsnapshot.RNGState">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">RNGState</span></span><a class="headerlink" href="#torchsnapshot.RNGState" title="Permalink to this definition">¶</a></dt>
+<dd><p>A special stateful object for saving and restoring global RNG state.</p>
+<p>When captured in the application state, it is guaranteed that the global
+RNG state is set to the same values after restoring from the snapshot as it
+was after taking the snapshot.</p>
+<p>Example:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">Snapshot</span><span class="o">.</span><span class="n">take</span><span class="p">(</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="n">path</span><span class="o">=</span><span class="s2">&quot;foo/bar&quot;</span><span class="p">,</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="n">app_state</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;rng_state&quot;</span><span class="p">:</span> <span class="n">RNGState</span><span class="p">()},</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">after_take</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+<span class="gp">&gt;&gt;&gt; </span><span class="c1"># In the same process or in another process</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">snapshot</span> <span class="o">=</span> <span class="n">Snapshot</span><span class="p">(</span><span class="n">path</span><span class="o">=</span><span class="s2">&quot;foo/bar&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">snapshot</span><span class="o">.</span><span class="n">restore</span><span class="p">(</span><span class="n">app_state</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">after_restore</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+<span class="gp">&gt;&gt;&gt; </span><span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">after_take</span><span class="p">,</span> <span class="n">after_restore</span><span class="p">)</span>
+</pre></div>
+</div>
 </dd></dl>
 
 </section>
@@ -526,8 +519,6 @@ See each StoragePlugin’s documentation for customizations.</p></li>
             <footer>
   
     <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
-      
-        <a href="utilities.html" class="btn btn-neutral float-right" title="Utilities" accesskey="n" rel="next">Next <img src="_static/images/chevron-right-orange.svg" class="next-page"></a>
       
       
         <a href="getting_started.html" class="btn btn-neutral" title="Getting Started" accesskey="p" rel="prev"><img src="_static/images/chevron-right-orange.svg" class="previous-page"> Previous</a>
@@ -564,14 +555,15 @@ See each StoragePlugin’s documentation for customizations.</p></li>
               <ul>
 <li><a class="reference internal" href="#">API Reference</a><ul>
 <li><a class="reference internal" href="#torchsnapshot.Snapshot"><code class="docutils literal notranslate"><span class="pre">Snapshot</span></code></a><ul>
-<li><a class="reference internal" href="#torchsnapshot.Snapshot.async_take"><code class="docutils literal notranslate"><span class="pre">Snapshot.async_take()</span></code></a></li>
-<li><a class="reference internal" href="#torchsnapshot.Snapshot.get_manifest"><code class="docutils literal notranslate"><span class="pre">Snapshot.get_manifest()</span></code></a></li>
-<li><a class="reference internal" href="#torchsnapshot.Snapshot.metadata"><code class="docutils literal notranslate"><span class="pre">Snapshot.metadata</span></code></a></li>
-<li><a class="reference internal" href="#torchsnapshot.Snapshot.read_object"><code class="docutils literal notranslate"><span class="pre">Snapshot.read_object()</span></code></a></li>
-<li><a class="reference internal" href="#torchsnapshot.Snapshot.restore"><code class="docutils literal notranslate"><span class="pre">Snapshot.restore()</span></code></a></li>
 <li><a class="reference internal" href="#torchsnapshot.Snapshot.take"><code class="docutils literal notranslate"><span class="pre">Snapshot.take()</span></code></a></li>
+<li><a class="reference internal" href="#torchsnapshot.Snapshot.async_take"><code class="docutils literal notranslate"><span class="pre">Snapshot.async_take()</span></code></a></li>
+<li><a class="reference internal" href="#torchsnapshot.Snapshot.restore"><code class="docutils literal notranslate"><span class="pre">Snapshot.restore()</span></code></a></li>
+<li><a class="reference internal" href="#torchsnapshot.Snapshot.read_object"><code class="docutils literal notranslate"><span class="pre">Snapshot.read_object()</span></code></a></li>
+<li><a class="reference internal" href="#torchsnapshot.Snapshot.get_manifest"><code class="docutils literal notranslate"><span class="pre">Snapshot.get_manifest()</span></code></a></li>
 </ul>
 </li>
+<li><a class="reference internal" href="#torchsnapshot.StateDict"><code class="docutils literal notranslate"><span class="pre">StateDict</span></code></a></li>
+<li><a class="reference internal" href="#torchsnapshot.RNGState"><code class="docutils literal notranslate"><span class="pre">RNGState</span></code></a></li>
 </ul>
 </li>
 </ul>

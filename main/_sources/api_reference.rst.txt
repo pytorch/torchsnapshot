@@ -3,4 +3,7 @@ API Reference
 
 .. autoclass:: torchsnapshot.Snapshot
    :members:
-   :undoc-members:
+
+.. autoclass:: torchsnapshot.StateDict
+
+.. autoclass:: torchsnapshot.RNGState
