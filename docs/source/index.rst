@@ -15,7 +15,6 @@ TorchSnapshot API
 
    getting_started.rst
    api_reference.rst
-   utilities.rst
 
 Examples
 --------

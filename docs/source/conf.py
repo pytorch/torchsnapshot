@@ -82,3 +82,4 @@ intersphinx_mapping = {
 }
 
 add_module_names = False
+autodoc_member_order = "bysource"
