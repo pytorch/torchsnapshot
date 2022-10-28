@@ -1,4 +1,4 @@
-# torchsnapshot
+# torchsnapshot<sup>β</sup>
 
 <p align="center">
 <a href="https://github.com/pytorch/torchsnapshot/actions?query=branch%3Amain"><img src="https://img.shields.io/github/workflow/status/pytorch/torchsnapshot/Unit%20tests/main" alt="build status"></a>
@@ -7,8 +7,6 @@
 <a href="https://codecov.io/gh/pytorch/torchsnapshot"><img src="https://codecov.io/gh/pytorch/torchsnapshot/branch/main/graph/badge.svg?token=DR67Q6T7YF" alt="codecov"></a>
 <a href="https://github.com/pytorch/torchsnapshot/blob/main/LICENSE"><img src="https://img.shields.io/pypi/l/torchsnapshot" alt="bsd license"></a>
 </div>
-
-**This library is currently in Alpha and currently does not have a stable release. The API may change and may not be backward compatible. If you have suggestions for improvements, please open a GitHub issue. We'd love to hear your feedback.**
 
 A performant, memory-efficient checkpointing library for PyTorch applications, designed with large, complex distributed workloads in mind.
 
@@ -20,8 +18,10 @@ Requires Python >= 3.7 and PyTorch >= 1.12
 From pip:
 
 ```bash
-pip install --pre torchsnapshot-nightly
+pip install torchsnapshot
+# for nightly, pip install --pre torchsnapshot-nightly
 ```
+
 
 From source:
 
