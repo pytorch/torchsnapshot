@@ -5,7 +5,7 @@ on:
 
 jobs:
   run_tests:
-    uses: ./.github/workflows/tests.yaml
+    uses: ./.github/workflows/run_tests.yaml
     secrets: inherit
 
   upload_to_pypi:
