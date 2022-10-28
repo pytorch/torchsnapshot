@@ -5,6 +5,12 @@ Getting Started
 :class:`~torchsnapshot.Snapshot` is the core API of TorchSnapshot. The class represents application state persisted in storage. A user can take a snapshot of an application via :meth:`Snapshot.take() <torchsnapshot.Snapshot.take>` (a.k.a saving a checkpoint), and restore the state of an application from a snapshot via :meth:`Snapshot.restore() <torchsnapshot.Snapshot.restore>` (a.k.a loading a checkpoint).
 
 
+Installation
+------------
+
+Please refer to `README.md <https://github.com/pytorch/torchsnapshot#install>`_ for installation instructions.
+
+
 .. _app-state:
 
 
