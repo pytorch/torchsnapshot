@@ -1,4 +1,4 @@
-# torchsnapshot<sup>β</sup>
+# TorchSnapshot (Beta Release)
 
 <p align="center">
 <a href="https://github.com/pytorch/torchsnapshot/actions?query=branch%3Amain"><img src="https://img.shields.io/github/workflow/status/pytorch/torchsnapshot/Unit%20tests/main" alt="build status"></a>
@@ -18,8 +18,11 @@ Requires Python >= 3.7 and PyTorch >= 1.12
 From pip:
 
 ```bash
+# Stable
 pip install torchsnapshot
-# for nightly, pip install --pre torchsnapshot-nightly
+
+# Nightly
+pip install --pre torchsnapshot-nightly
 ```
 
 
