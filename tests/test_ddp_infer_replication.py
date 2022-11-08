@@ -60,7 +60,7 @@ class DDPInferReplicatedTest(unittest.TestCase):
     ) -> None:
         dist.init_process_group(backend="gloo")
         model = torch.nn.Sequential(torch.nn.Linear(4, 2), torch.nn.Linear(2, 1))
-        DDP._set_params_and_buffers_to_ignore_for_model(  # pyre-ignore[16]
+        DDP._set_params_and_buffers_to_ignore_for_model(
             model, ["module.0.bias", "module.0.weight"]
         )
         ddp_model = DDP(model)
@@ -86,7 +86,7 @@ class DDPInferReplicatedTest(unittest.TestCase):
     ) -> None:
         dist.init_process_group(backend="gloo")
         model = torch.nn.Sequential(torch.nn.Linear(4, 2), torch.nn.Linear(2, 1))
-        DDP._set_params_and_buffers_to_ignore_for_model(  # pyre-ignore[16]
+        DDP._set_params_and_buffers_to_ignore_for_model(
             model, ["module.0.bias", "module.0.weight"]
         )
         ddp_model = DDP(model)
