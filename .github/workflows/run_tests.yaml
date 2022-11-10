@@ -53,24 +53,8 @@ jobs:
           miniconda-version: "latest"
           activate-environment: test
           python-version: ${{ matrix.python-version }}
-      - name: Clean up previous CUDA driver installations
-        shell: bash
-        run: |
-          set -x
-          yum list installed | grep nvidia || true
-          yum list installed | grep cuda || true
-          sudo yum remove -y cuda || true
-          sudo yum remove -y cuda-drivers || true
-          sudo yum remove -y "*nvidia*" || true
       - name: Install nvidia driver, nvidia-docker runtime, set GPU_FLAG
-        uses: nick-fields/retry@71062288b76e2b6214ebde0e673ce0de1755740a
-        with:
-          timeout_minutes: 10
-          max_attempts: 3
-          command: |
-            set -ex
-            bash .github/scripts/install_nvidia_utils_linux.sh
-            echo "GPU_FLAG=--gpus all" >> "${GITHUB_ENV}"
+        uses: pytorch/test-infra/.github/actions/setup-nvidia@main
       - name: Display EC2 information
         shell: bash
         run: |
