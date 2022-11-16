@@ -42,7 +42,7 @@ class BenchmarkType(Enum):
     TORCH_SAVE_PATH_MANAGER = "torch_save_path_manager"
     TORCH_SAVE_FSSPEC = "torch_save_fsspec"
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.value
 
 
@@ -85,6 +85,8 @@ def initialize_dmp(device: torch.device, mb_per_gpu: int) -> DistributedModelPar
     )
     model = DLRMTrain(dlrm_model)
 
+    pg = dist.group.WORLD
+    assert pg, "dist.group.WORLD set to None."
     plan = EmbeddingShardingPlanner(
         topology=Topology(
             world_size=dist.get_world_size(),
@@ -100,7 +102,7 @@ def initialize_dmp(device: torch.device, mb_per_gpu: int) -> DistributedModelPar
     ).collective_plan(
         module=model,
         sharders=sharders,
-        pg=dist.group.WORLD,
+        pg=pg,
     )
 
     dmp = DistributedModelParallel(
@@ -186,6 +188,11 @@ def benchmark_torch_save_path_manager(
     begin_ts = time.monotonic()
     path = os.path.join(work_dir, str(uuid.uuid4()))
     with pm.open(path, "wb") as f:
+        # pyre-ignore
+        # Type check ignored because
+        # PathManager.open is restricted to Union[IO[str], IO[bytes]]
+        # which conflicts with Union[str, os.PathLike, BinaryIO, IO[bytes]]
+        # required by torch.save.
         torch.save(dmp.state_dict(), f)
     dist.barrier()
     rank_0_print(
