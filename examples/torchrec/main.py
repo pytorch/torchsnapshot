@@ -25,6 +25,7 @@ from torchrec.distributed.planner.types import ParameterConstraints
 from torchrec.distributed.types import ShardingPlan, ShardingType
 from torchrec.models.dlrm import DLRM, DLRMTrain
 from torchrec.optim.keyed import KeyedOptimizerWrapper
+from torchrec.optim.optimizers import in_backward_optimizer_filter
 
 EPOCH_SIZE = 10
 BATCH_SIZE = 8
@@ -126,7 +127,7 @@ def train(work_dir: str, max_epochs: int, snapshot_path: Optional[str] = None) -
     )
 
     optimizer = KeyedOptimizerWrapper(
-        dict(dmp.named_parameters()),
+        dict(in_backward_optimizer_filter(dmp.named_parameters())),
         lambda params: torch.optim.SGD(params, lr=0.01),
     )
 
