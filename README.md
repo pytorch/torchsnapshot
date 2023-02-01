@@ -1,7 +1,7 @@
 # TorchSnapshot (Beta Release)
 
 <p align="center">
-<a href="https://github.com/pytorch/torchsnapshot/actions?query=branch%3Amain"><img src="https://img.shields.io/github/workflow/status/pytorch/torchsnapshot/Unit%20tests/main" alt="build status"></a>
+<a href="https://github.com/pytorch/torchsnapshot/actions?query=branch%3Amain"><img src="https://img.shields.io/github/actions/workflow/status/pytorch/torchsnapshot/.github/workflows/run_tests.yaml?branch=main" alt="build status"></a>
 <a href="https://pypi.org/project/torchsnapshot"><img src="https://img.shields.io/pypi/v/torchsnapshot" alt="pypi version"></a>
 <a href="https://pypi.org/project/torchsnapshot-nightly"><img src="https://img.shields.io/pypi/v/torchsnapshot-nightly?label=nightly" alt="pypi nightly version"></a>
 <a href="https://codecov.io/gh/pytorch/torchsnapshot"><img src="https://codecov.io/gh/pytorch/torchsnapshot/branch/main/graph/badge.svg?token=DR67Q6T7YF" alt="codecov"></a>
