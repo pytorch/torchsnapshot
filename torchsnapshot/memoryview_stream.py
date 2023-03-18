@@ -9,6 +9,7 @@ import io
 from typing import Optional
 
 
+# pyre-fixme[13]: Attribute `write` is never initialized.
 class MemoryviewStream(io.IOBase):
     def __init__(self, mv: memoryview) -> None:
         self._mv: memoryview = mv.cast("b")
