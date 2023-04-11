@@ -40,6 +40,7 @@ class MemoryviewStream(io.IOBase):
         """This is the same as read."""
         return self.read(size)
 
+    # pyre-fixme[14]: `seek` overrides method defined in `IOBase` inconsistently.
     def seek(self, pos: int, whence: int = 0) -> int:
         if self.closed:
             raise ValueError("seek on closed file")
