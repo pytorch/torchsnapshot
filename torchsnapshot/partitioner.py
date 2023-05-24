@@ -131,8 +131,15 @@ def _partition_replicated_write_reqs(
     if pg.get_rank() == 0:
         # Rank 0 performs the partitioning
         partition_result = _partition_write_loads(
+            # pyre-fixme[6]: For 1st argument expected `List[Dict[str, Entry]]` but
+            #  got `Tuple[Union[Dict[str, List[_WriteLoad]], Dict[str, Entry], int]]`.
             rank_to_entries=rank_to_entries,
+            # pyre-fixme[6]: For 2nd argument expected `List[Dict[str,
+            #  List[_WriteLoad]]]` but got `Tuple[Union[Dict[str, List[_WriteLoad]],
+            #  Dict[str, Entry], int]]`.
             rank_to_write_loads=rank_to_write_loads,
+            # pyre-fixme[6]: For 3rd argument expected `List[int]` but got
+            #  `List[Union[Dict[str, List[_WriteLoad]], Dict[str, Entry], int]]`.
             rank_to_size=list(rank_to_size),
             world_size=pg.get_world_size(),
         )
