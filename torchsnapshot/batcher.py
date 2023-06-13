@@ -140,7 +140,6 @@ class GPUBatchedBufferStager(BatchedBufferStager):
 
     async def stage_buffer(self, executor: Optional[Executor] = None) -> BufferType:
         try:
-            # pyre-ignore
             gpu_buf = torch.cuda.ByteTensor(self.slab_sz_bytes)
         except torch.cuda.OutOfMemoryError:
             gpu_buf = None
