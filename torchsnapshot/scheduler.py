@@ -49,7 +49,7 @@ def get_process_memory_budget_bytes(pg: PGWrapper) -> int:
                 os.environ["TORCHSNAPSHOT_PER_RANK_MEMORY_BUDGET_BYTES"]
             )
             logger.info(
-                "Manually set process memory budget to {memory_budget_bytes} bytes."
+                f"Manually set process memory budget to {memory_budget_bytes} bytes."
             )
             return memory_budget_bytes
         except Exception as e:
