@@ -28,6 +28,7 @@ def _is_notebook() -> bool:
 
 # https://github.com/jupyter/notebook/issues/3397
 if _is_notebook():
+    # @manual=fbsource//third-party/pypi/nest-asyncio:nest-asyncio
     import nest_asyncio
 
     nest_asyncio.apply()
