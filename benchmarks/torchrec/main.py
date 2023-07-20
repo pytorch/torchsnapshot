@@ -188,11 +188,6 @@ def benchmark_torch_save_path_manager(
     begin_ts = time.monotonic()
     path = os.path.join(work_dir, str(uuid.uuid4()))
     with pm.open(path, "wb") as f:
-        # pyre-ignore
-        # Type check ignored because
-        # PathManager.open is restricted to Union[IO[str], IO[bytes]]
-        # which conflicts with Union[str, os.PathLike, BinaryIO, IO[bytes]]
-        # required by torch.save.
         torch.save(dmp.state_dict(), f)
     dist.barrier()
     rank_0_print(
