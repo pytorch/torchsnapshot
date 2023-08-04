@@ -5,11 +5,11 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-import socket
 from datetime import timedelta
 from typing import Dict, Optional
 
 import torch.distributed as dist
+from torch.distributed.elastic.utils.distributed import get_socket_with_port
 
 from .pg_wrapper import PGWrapper
 
@@ -63,10 +63,8 @@ def create_store(pg_wrapper: PGWrapper) -> dist.Store:
     """
     if pg_wrapper.get_rank() == 0:
         # Find a free port
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind((socket.gethostname(), 0))
-        master_addr, master_port = sock.getsockname()
+        sock = get_socket_with_port()
+        master_addr, master_port, _, _ = sock.getsockname()
         sock.close()
         # Broadcast master address/port to peers
         obj_list = [master_addr, master_port]
