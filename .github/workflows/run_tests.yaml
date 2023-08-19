@@ -73,12 +73,12 @@ jobs:
         run: |
           set -eux
           conda activate test
-          pip install torch --extra-index-url https://download.pytorch.org/whl/cu116
+          conda install pytorch pytorch-cuda=11.8 -c pytorch-nightly -c nvidia
           pip install torchrec-nightly
 
           # Use stable fbgemm-gpu
-          pip uninstall -y fbgemm-gpu-nightly
-          pip install fbgemm-gpu
+          # pip uninstall -y fbgemm-gpu-nightly
+          # pip install fbgemm-gpu-nightly
 
           pip install -r requirements.txt
           pip install -r dev-requirements.txt
