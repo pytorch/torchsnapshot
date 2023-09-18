@@ -7,7 +7,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import logging
-from functools import cache
+from functools import lru_cache
 from typing import List
 
 from importlib_metadata import entry_points
@@ -27,7 +27,7 @@ class EventHandler(Protocol):
 _log_handlers: List[EventHandler] = []
 
 
-@cache
+@lru_cache(maxsize=None)
 def get_event_handlers() -> List[EventHandler]:
     global _log_handlers
 
@@ -47,3 +47,13 @@ def get_event_handlers() -> List[EventHandler]:
             )
         _log_handlers.append(handler)
     return _log_handlers
+
+
+def log_event(event: Event) -> None:
+    """
+    Handle an event.
+    Args:
+        event: The event to handle.
+    """
+    for handler in get_event_handlers():
+        handler.handle_event(event)

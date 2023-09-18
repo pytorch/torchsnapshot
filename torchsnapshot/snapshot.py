@@ -13,6 +13,7 @@ import functools
 import itertools
 import logging
 import os
+import random
 import sys
 import traceback
 
@@ -29,6 +30,9 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from .batcher import batch_read_requests, batch_write_requests
 
 from .dist_store import get_or_create_store, LinearBarrier
+
+from .event import Event
+from .event_handlers import log_event
 
 from .flatten import flatten, inflate
 from .io_preparer import prepare_read, prepare_write
@@ -92,6 +96,22 @@ class Snapshot:
         self._metadata: Optional[SnapshotMetadata] = None
         self._storage_options = storage_options
 
+    @property
+    def metadata(self) -> SnapshotMetadata:
+        if self._metadata is None:
+            event_loop = asyncio.new_event_loop()
+            storage = url_to_storage_plugin_in_event_loop(
+                url_path=self.path,
+                event_loop=event_loop,
+                storage_options=self._storage_options,
+            )
+            self._metadata = self._read_snapshot_metadata(
+                storage=storage, event_loop=event_loop
+            )
+            storage.sync_close(event_loop=event_loop)
+            event_loop.close()
+        return cast(SnapshotMetadata, self._metadata)
+
     @classmethod
     def take(
         cls,
@@ -152,6 +172,11 @@ class Snapshot:
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(pg=pg)
 
+        unique_id = _generate_random_int64()
+        log_event(
+            Event(name="take", metadata={"action": "start", "unique_id": unique_id})
+        )
+
         path, coalesced_replicated = cls._coalesce_path_and_replicated(
             path=path,
             pg_wrapper=pg_wrapper,
@@ -186,6 +211,10 @@ class Snapshot:
         event_loop.close()
         snapshot = cls(path=path, pg=pg, storage_options=storage_options)
         snapshot._metadata = metadata
+
+        log_event(
+            Event(name="take", metadata={"action": "end", "unique_id": unique_id})
+        )
         return snapshot
 
     @classmethod
@@ -224,6 +253,14 @@ class Snapshot:
 
         event_loop = asyncio.new_event_loop()
         pg_wrapper = PGWrapper(pg=pg)
+
+        unique_id = _generate_random_int64()
+        log_event(
+            Event(
+                name="async_take", metadata={"action": "start", "unique_id": unique_id}
+            )
+        )
+
         path, coalesced_replicated = cls._coalesce_path_and_replicated(
             path=path,
             pg_wrapper=pg_wrapper,
@@ -244,6 +281,11 @@ class Snapshot:
             is_async_snapshot=True,
             _custom_tensor_prepare_func=_custom_tensor_prepare_func,
         )
+
+        log_event(
+            Event(name="async_take", metadata={"action": "end", "unique_id": unique_id})
+        )
+
         # PendingSnapshot is responsible for closing `storage` and `event_loop`
         return PendingSnapshot(
             path=path,
@@ -254,6 +296,183 @@ class Snapshot:
             event_loop=event_loop,
             storage_options=storage_options,
         )
+
+    def restore(self, app_state: AppState) -> None:
+        """
+        Restores the application state from the snapshot.
+
+        Args:
+            app_state (Dict[str, Stateful]): The application state to restore.
+                ``app_state`` needs to be either identical to or a subset of the
+                ``app_state`` used for :func:`Snapshot.take` when the snapshot was
+                taken.
+        """
+        torch._C._log_api_usage_once("torchsnapshot.Snapshot.restore")
+        self._validate_app_state(app_state)
+
+        event_loop = asyncio.new_event_loop()
+        pg_wrapper = PGWrapper(self.pg)
+
+        unique_id = _generate_random_int64()
+        log_event(
+            Event(name="restore", metadata={"action": "start", "unique_id": unique_id})
+        )
+
+        storage = url_to_storage_plugin_in_event_loop(
+            url_path=self.path,
+            event_loop=event_loop,
+            storage_options=self._storage_options,
+        )
+
+        app_state = app_state.copy()
+        rng_state_item = self._pop_rng_state(app_state=app_state)
+
+        global_keys = self._gather_keys(
+            keys=list(app_state.keys()), pg_wrapper=pg_wrapper
+        )
+        for key in global_keys:
+            self._load_stateful(
+                stateful_key=key,
+                stateful=app_state.get(key),
+                storage=storage,
+                pg=pg_wrapper,
+                event_loop=event_loop,
+            )
+            pg_wrapper.barrier()
+
+        # Restore the RNG state last to avoid potential side effects.
+        if rng_state_item is not None:
+            key, stateful = rng_state_item
+            self._load_stateful(
+                stateful_key=key,
+                stateful=stateful,
+                storage=storage,
+                pg=pg_wrapper,
+                event_loop=event_loop,
+            )
+        storage.sync_close(event_loop=event_loop)
+        event_loop.close()
+
+        log_event(
+            Event(name="restore", metadata={"action": "end", "unique_id": unique_id})
+        )
+
+    def read_object(
+        self,
+        path: str,
+        obj_out: Optional[T] = None,
+        memory_budget_bytes: Optional[int] = None,
+    ) -> T:
+        """
+        Reads an object from the snapshot's content.
+
+        Args:
+            path (str): The path to the target object within the snapshot.
+                ``path`` is equivalent to the target object's key in the
+                snapshot manifest and can be obtained via
+                :meth:`Snapshot.get_manifest`.
+
+            obj_out (Any, optional): When specified, load the object in-place
+                into ``obj_out`` if in-place load is supported for the object's
+                type. Otherwise, ``obj_out`` is ignored.
+
+                .. note::
+                    When the target object is a ``ShardedTensor``, ``obj_out``
+                    must be specified.
+
+            memory_budget_bytes (int, optional): When specified, the read
+                operation will keep the temporary memory buffer size below this
+                threshold.
+
+        Returns:
+            The object read from the snapshot's content.
+        """
+        torch._C._log_api_usage_once("torchsnapshot.Snapshot.read_object")
+        unique_id = _generate_random_int64()
+        log_event(
+            Event(
+                name="read_object", metadata={"action": "start", "unique_id": unique_id}
+            )
+        )
+
+        # TODO: better message for malformatted path
+        rank_str, unranked_path = path.split("/", 1)
+        rank = int(rank_str)
+        # Transform the manifest such that (1) replicated entries are made
+        # available to the rank (2) sharded tensor shards saved by all ranks
+        # are made available to the rank. The availability of the entries is
+        # determined from the perspective of the rank specified in the path.
+        manifest, merged_sd_entries = get_manifest_for_rank(
+            metadata=self.metadata, rank=rank
+        )
+
+        if unranked_path not in merged_sd_entries and unranked_path not in manifest:
+            # TODO: show candidates based on edit distance
+            raise RuntimeError(
+                f'The supplied path "{path}" does not exist in the snapshot\'s manifest. '
+                "Please verify the available paths within the snapshot via `snapshot.get_manifest()`."
+            )
+        if not isinstance(obj_out, (torch.Tensor, ShardedTensor)):
+            logger.warning(
+                f"`obj_out` is of type {type(obj_out)}, which does not support in-place load. "
+                "Its state won't be changed after load. The loaded object will be returned."
+            )
+
+        event_loop = asyncio.new_event_loop()
+        pg_wrapper = PGWrapper(self.pg)
+        storage = url_to_storage_plugin_in_event_loop(
+            url_path=self.path,
+            event_loop=event_loop,
+            storage_options=self._storage_options,
+        )
+        entry = merged_sd_entries.get(unranked_path) or manifest[unranked_path]
+        if isinstance(entry, PrimitiveEntry):
+            return cast(T, entry.get_value())
+        read_reqs, fut = prepare_read(
+            entry=entry,
+            obj_out=obj_out,
+            # TODO: find a suitable buffer_size_limit_bytes to enable chunked
+            # read even when memory_budget_bytes is not specified, as chunked
+            # tensor read allows for pipelining HtoD copy and storage I/O when
+            # reading a single tensor.
+            buffer_size_limit_bytes=memory_budget_bytes,
+        )
+
+        if not is_batching_disabled():
+            read_reqs = batch_read_requests(read_reqs=read_reqs)
+
+        sync_execute_read_reqs(
+            read_reqs=read_reqs,
+            storage=storage,
+            memory_budget_bytes=memory_budget_bytes
+            or _MAX_PER_RANK_MEMORY_BUDGET_BYTES,
+            rank=pg_wrapper.get_rank(),
+            event_loop=event_loop,
+        )
+        storage.sync_close(event_loop=event_loop)
+        event_loop.close()
+
+        log_event(
+            Event(
+                name="read_object", metadata={"action": "end", "unique_id": unique_id}
+            )
+        )
+
+        return fut.obj
+
+    def get_manifest(self) -> Dict[str, Entry]:
+        """
+        Returns the snapshot manifest.
+
+        Each entry in the dictionary corresponds to an object in the snapshot,
+        with the keys being the logical paths to the objects and the values
+        being the metadata describing the object. For distributed snapshots,
+        the manifest contain entries for objects saved by all ranks.
+
+        Returns:
+            The snapshot manifest.
+        """
+        return copy.deepcopy(self.metadata.manifest)
 
     @classmethod
     def _take_impl(
@@ -374,175 +593,6 @@ class Snapshot:
             manifest=manifest,
         )
         return pending_io_work, metadata
-
-    def restore(self, app_state: AppState) -> None:
-        """
-        Restores the application state from the snapshot.
-
-        Args:
-            app_state (Dict[str, Stateful]): The application state to restore.
-                ``app_state`` needs to be either identical to or a subset of the
-                ``app_state`` used for :func:`Snapshot.take` when the snapshot was
-                taken.
-        """
-        torch._C._log_api_usage_once("torchsnapshot.Snapshot.restore")
-        self._validate_app_state(app_state)
-
-        event_loop = asyncio.new_event_loop()
-        pg_wrapper = PGWrapper(self.pg)
-        storage = url_to_storage_plugin_in_event_loop(
-            url_path=self.path,
-            event_loop=event_loop,
-            storage_options=self._storage_options,
-        )
-
-        app_state = app_state.copy()
-        rng_state_item = self._pop_rng_state(app_state=app_state)
-
-        global_keys = self._gather_keys(
-            keys=list(app_state.keys()), pg_wrapper=pg_wrapper
-        )
-        for key in global_keys:
-            self._load_stateful(
-                stateful_key=key,
-                stateful=app_state.get(key),
-                storage=storage,
-                pg=pg_wrapper,
-                event_loop=event_loop,
-            )
-            pg_wrapper.barrier()
-
-        # Restore the RNG state last to avoid potential side effects.
-        if rng_state_item is not None:
-            key, stateful = rng_state_item
-            self._load_stateful(
-                stateful_key=key,
-                stateful=stateful,
-                storage=storage,
-                pg=pg_wrapper,
-                event_loop=event_loop,
-            )
-        storage.sync_close(event_loop=event_loop)
-        event_loop.close()
-
-    @property
-    def metadata(self) -> SnapshotMetadata:
-        if self._metadata is None:
-            event_loop = asyncio.new_event_loop()
-            storage = url_to_storage_plugin_in_event_loop(
-                url_path=self.path,
-                event_loop=event_loop,
-                storage_options=self._storage_options,
-            )
-            self._metadata = self._read_snapshot_metadata(
-                storage=storage, event_loop=event_loop
-            )
-            storage.sync_close(event_loop=event_loop)
-            event_loop.close()
-        return cast(SnapshotMetadata, self._metadata)
-
-    def read_object(
-        self,
-        path: str,
-        obj_out: Optional[T] = None,
-        memory_budget_bytes: Optional[int] = None,
-    ) -> T:
-        """
-        Reads an object from the snapshot's content.
-
-        Args:
-            path (str): The path to the target object within the snapshot.
-                ``path`` is equivalent to the target object's key in the
-                snapshot manifest and can be obtained via
-                :meth:`Snapshot.get_manifest`.
-
-            obj_out (Any, optional): When specified, load the object in-place
-                into ``obj_out`` if in-place load is supported for the object's
-                type. Otherwise, ``obj_out`` is ignored.
-
-                .. note::
-                    When the target object is a ``ShardedTensor``, ``obj_out``
-                    must be specified.
-
-            memory_budget_bytes (int, optional): When specified, the read
-                operation will keep the temporary memory buffer size below this
-                threshold.
-
-        Returns:
-            The object read from the snapshot's content.
-        """
-        torch._C._log_api_usage_once("torchsnapshot.Snapshot.read_object")
-        # TODO: better message for malformatted path
-        rank_str, unranked_path = path.split("/", 1)
-        rank = int(rank_str)
-        # Transform the manifest such that (1) replicated entries are made
-        # available to the rank (2) sharded tensor shards saved by all ranks
-        # are made available to the rank. The availability of the entries is
-        # determined from the perspective of the rank specified in the path.
-        manifest, merged_sd_entries = get_manifest_for_rank(
-            metadata=self.metadata, rank=rank
-        )
-
-        if unranked_path not in merged_sd_entries and unranked_path not in manifest:
-            # TODO: show candidates based on edit distance
-            raise RuntimeError(
-                f'The supplied path "{path}" does not exist in the snapshot\'s manifest. '
-                "Please verify the available paths within the snapshot via `snapshot.get_manifest()`."
-            )
-        if not isinstance(obj_out, (torch.Tensor, ShardedTensor)):
-            logger.warning(
-                f"`obj_out` is of type {type(obj_out)}, which does not support in-place load. "
-                "Its state won't be changed after load. The loaded object will be returned."
-            )
-
-        event_loop = asyncio.new_event_loop()
-        pg_wrapper = PGWrapper(self.pg)
-        storage = url_to_storage_plugin_in_event_loop(
-            url_path=self.path,
-            event_loop=event_loop,
-            storage_options=self._storage_options,
-        )
-        entry = merged_sd_entries.get(unranked_path) or manifest[unranked_path]
-        if isinstance(entry, PrimitiveEntry):
-            return cast(T, entry.get_value())
-        read_reqs, fut = prepare_read(
-            entry=entry,
-            obj_out=obj_out,
-            # TODO: find a suitable buffer_size_limit_bytes to enable chunked
-            # read even when memory_budget_bytes is not specified, as chunked
-            # tensor read allows for pipelining HtoD copy and storage I/O when
-            # reading a single tensor.
-            buffer_size_limit_bytes=memory_budget_bytes,
-        )
-
-        if not is_batching_disabled():
-            read_reqs = batch_read_requests(read_reqs=read_reqs)
-
-        sync_execute_read_reqs(
-            read_reqs=read_reqs,
-            storage=storage,
-            memory_budget_bytes=memory_budget_bytes
-            or _MAX_PER_RANK_MEMORY_BUDGET_BYTES,
-            rank=pg_wrapper.get_rank(),
-            event_loop=event_loop,
-        )
-        storage.sync_close(event_loop=event_loop)
-        event_loop.close()
-        return fut.obj
-
-    def get_manifest(self) -> Dict[str, Entry]:
-        """
-        Returns the snapshot manifest.
-
-        Each entry in the dictionary corresponds to an object in the snapshot,
-        with the keys being the logical paths to the objects and the values
-        being the metadata describing the object. For distributed snapshots,
-        the manifest contain entries for objects saved by all ranks.
-
-        Returns:
-            The snapshot manifest.
-        """
-        return copy.deepcopy(self.metadata.manifest)
 
     @staticmethod
     def _calculate_replicated_entries(
@@ -887,3 +937,7 @@ class PendingSnapshot:
 
     def done(self) -> bool:
         return self._done
+
+
+def _generate_random_int64() -> int:
+    return random.randint(0, 2**63 - 1)
