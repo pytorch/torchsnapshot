@@ -20,7 +20,6 @@ from torchsnapshot import Snapshot
 from torchsnapshot.knobs import override_max_chunk_size_bytes
 from torchsnapshot.test_utils import check_state_dict_eq, run_with_pet
 
-
 WORLD_SIZE = 4
 
 
