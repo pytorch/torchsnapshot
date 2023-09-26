@@ -213,7 +213,10 @@ class Snapshot:
         snapshot._metadata = metadata
 
         log_event(
-            Event(name="take", metadata={"action": "end", "unique_id": unique_id})
+            Event(
+                name="take",
+                metadata={"action": "end", "unique_id": unique_id, "is_success": True},
+            )
         )
         return snapshot
 
@@ -283,7 +286,10 @@ class Snapshot:
         )
 
         log_event(
-            Event(name="async_take", metadata={"action": "end", "unique_id": unique_id})
+            Event(
+                name="async_take",
+                metadata={"action": "end_collection", "unique_id": unique_id},
+            )
         )
 
         # PendingSnapshot is responsible for closing `storage` and `event_loop`
@@ -295,6 +301,7 @@ class Snapshot:
             storage=storage,
             event_loop=event_loop,
             storage_options=storage_options,
+            unique_id=unique_id,
         )
 
     def restore(self, app_state: AppState) -> None:
@@ -354,7 +361,10 @@ class Snapshot:
         event_loop.close()
 
         log_event(
-            Event(name="restore", metadata={"action": "end", "unique_id": unique_id})
+            Event(
+                name="restore",
+                metadata={"action": "end", "unique_id": unique_id, "is_success": True},
+            )
         )
 
     def read_object(
@@ -454,7 +464,8 @@ class Snapshot:
 
         log_event(
             Event(
-                name="read_object", metadata={"action": "end", "unique_id": unique_id}
+                name="read_object",
+                metadata={"action": "end", "unique_id": unique_id, "is_success": True},
             )
         )
 
@@ -856,6 +867,7 @@ class PendingSnapshot:
         metadata: SnapshotMetadata,
         storage: StoragePlugin,
         event_loop: asyncio.AbstractEventLoop,
+        unique_id: int,
         storage_options: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.path = path
@@ -864,6 +876,7 @@ class PendingSnapshot:
         self.exc_info: Optional[Any] = None
         self._done = False
         self._storage_options = storage_options
+        self._unique_id = unique_id
 
         self.thread = Thread(
             target=self._complete_snapshot,
@@ -893,6 +906,7 @@ class PendingSnapshot:
     ) -> None:
         # WARNING: do not use any collectives in this method
 
+        succeeded = False
         # Use a dist.Store-based barrier for synchronization so that the
         # snapshot can be committed in the background thread.
         barrier = LinearBarrier(
@@ -913,6 +927,7 @@ class PendingSnapshot:
                     event_loop=event_loop,
                 )
             barrier.depart(timeout=self.DEFAULT_BARRIER_TIMEOUT)
+            succeeded = True
         except Exception as e:
             barrier.report_error(str(e))
             self.exc_info = sys.exc_info()
@@ -923,6 +938,16 @@ class PendingSnapshot:
             storage.sync_close(event_loop=event_loop)
             event_loop.close()
         self._done = True
+        log_event(
+            Event(
+                name="async_take",
+                metadata={
+                    "action": "end",
+                    "unique_id": self._unique_id,
+                    "is_success": succeeded,
+                },
+            )
+        )
 
     def wait(self) -> Snapshot:
         self.thread.join()
