@@ -10,6 +10,7 @@ import copy
 from collections import defaultdict
 from typing import Dict, List, Tuple
 
+from .knobs import is_sharded_tensor_elasticity_enabled_at_root_only
 from .manifest import (
     Entry,
     is_container_entry,
@@ -141,9 +142,11 @@ def handle_sharded_tensor_elasticity(
     - If the sharded tensor is missing from the model's state dict, the
       function removes the corresponding entry from the local manifest.
 
-    NOTE: this function only takes effect if all sharded tensors are at the
-    root of the state dict. This means the elastic behavior is supported for
-    most model but not supported for most optimizers.
+    This function works best effort to support elastic behavior for models and optimizers.
+
+    NOTE: By default, this assumes that all ranks contain a corresponding sharded tensor entry for the particular stateful.
+    In case not all ranks contain the sharded tensor entry for a particular stateful object, setting `TORCHSNAPSHOT_ENABLE_SHARDED_TENSOR_ELASTICITY_ROOT_ONLY=1`
+    will restrict manipulating the presence of sharded tensors only if all sharded tensors are at the root of the state dict.
 
     Args:
         manifest: The local manifest for the rank.
@@ -151,9 +154,15 @@ def handle_sharded_tensor_elasticity(
         tensor_requests: The logical paths of tensors in the target stateful
             object's state dict.
     """
-    # Only manipulate the presence of sharded tensors if all sharded tensors
+
+    # Some state dicts might be irregular, in that they have `foo/bar/sharded_tensor` on rank A but not have `foo` on rank B.
+    # To load a sharded tensor, every rank has to have `foo/bar/sharded_tensor`.
+    # This means that in order to support automatic resharding, we have to create foo/bar/sharded_tensor on ranks that don't have it.
+    # As a simplifying assumption, torchsnapshot exposes this knob to manipulate the presence of sharded tensors only if all sharded tensors
     # are at the root of the state dict.
-    if not all(len(logical_path.split("/")) == 2 for logical_path in merged_sd_entries):
+    if is_sharded_tensor_elasticity_enabled_at_root_only() and not all(
+        len(logical_path.split("/")) == 2 for logical_path in merged_sd_entries
+    ):
         return
 
     # Filter out tensor requests that will not be fulfilled by a ShardedTensorEntry

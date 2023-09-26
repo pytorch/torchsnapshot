@@ -101,6 +101,7 @@ def get_rowwise_sharding_plan(
 
 
 def train(work_dir: str, max_epochs: int, snapshot_path: Optional[str] = None) -> None:
+    os.environ["TORCHSNAPSHOT_ENABLE_SHARDED_TENSOR_ELASTICITY_ROOT_ONLY"] = "1"
     dist.init_process_group(backend="nccl")
     local_rank = int(os.environ["LOCAL_RANK"])
     device = torch.device(f"cuda:{local_rank}")
