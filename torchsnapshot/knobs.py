@@ -25,7 +25,10 @@ _SLAB_SIZE_THRESHOLD_ENV_VAR = "TORCHSNAPSHOT_SLAB_SIZE_THRESHOLD_BYTES_OVERRIDE
 _DEFAULT_MAX_CHUNK_SIZE_BYTES: int = 512 * 1024 * 1024
 _DEFAULT_MAX_SHARD_SIZE_BYTES: int = 512 * 1024 * 1024
 _DEFAULT_SLAB_SIZE_THRESHOLD_BYTES: int = 128 * 1024 * 1024
-_DISABLE_BATCHING_ENV_VAR = "TORCHSNAPSHOT_DISABLE_BATCHING"
+_DISABLE_BATCHING_ENV_VAR: str = "TORCHSNAPSHOT_DISABLE_BATCHING"
+_ENABLE_SHARDED_TENSOR_ELASTICITY_ROOT_ENV_VAR: str = (
+    "TORCHSNAPSHOT_ENABLE_SHARDED_TENSOR_ELASTICITY_ROOT_ONLY"
+)
 
 
 def get_max_chunk_size_bytes() -> int:
@@ -49,8 +52,17 @@ def get_slab_size_threshold_bytes() -> int:
     return _DEFAULT_SLAB_SIZE_THRESHOLD_BYTES
 
 
-def is_batching_disabled() -> int:
+def is_batching_disabled() -> bool:
     if os.getenv(_DISABLE_BATCHING_ENV_VAR, "False").lower() in ("true", "1"):
+        return True
+    return False
+
+
+def is_sharded_tensor_elasticity_enabled_at_root_only() -> bool:
+    if os.getenv(_ENABLE_SHARDED_TENSOR_ELASTICITY_ROOT_ENV_VAR, "False").lower() in (
+        "true",
+        "1",
+    ):
         return True
     return False
 
