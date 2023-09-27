@@ -19,8 +19,12 @@ from torch.nn.parallel import DistributedDataParallel
 from torchsnapshot import Snapshot
 from torchsnapshot.knobs import override_max_chunk_size_bytes
 from torchsnapshot.test_utils import check_state_dict_eq, run_with_pet
+from torchsnapshot.tricks.ddp import (
+    DDP_STATE_DICT_PREFIX,
+    DistributedDataParallelAdapter,
+)
 
-WORLD_SIZE = 4
+WORLD_SIZE: int = 4
 
 
 @pytest.fixture
@@ -130,3 +134,42 @@ def test_ddp_upscale(layer_shapes: List[List[int]], tmp_path: Path) -> None:
         snapshot.restore(app_state={"ddp": dst_ddp, "optim": dst_optim})
         assert check_state_dict_eq(dst.state_dict(), src.state_dict())
         assert check_state_dict_eq(dst_optim.state_dict(), src_optim.state_dict())
+
+
+@run_with_pet(nproc=WORLD_SIZE)
+def test_ddp_save_load_non_ddp(tmp_path: Path) -> None:
+    """
+    Randomly initialize one DDP-wrapped model, and one non-DDP-wrapped model. Take the snapshot of one
+    model and use the snapshot to restore the other model using the DDPWrapper helper class. Verify that the
+    two model's state dicts are equal after restoration.
+    """
+    dist.init_process_group(backend="gloo")
+
+    # Initialize src with the same seed across ranks
+    torch.manual_seed(42)
+    src = torch.nn.Linear(1, 1)
+    src_ddp = DistributedDataParallel(src)
+
+    # Initialize dst with the different seeds across ranks
+    torch.manual_seed(777 + dist.get_rank())
+    dst = torch.nn.Linear(1, 1)
+
+    assert not check_state_dict_eq(dst.state_dict(), src_ddp.state_dict())
+
+    snapshot = Snapshot.take(
+        path=str(tmp_path),
+        app_state={"ddp": src_ddp},
+    )
+
+    dst_adaptor = DistributedDataParallelAdapter(dst)
+    snapshot.restore(app_state={"ddp": dst_adaptor})
+    restored_state_dict = dst_adaptor.module.state_dict()
+
+    consumed_state_dict = src_ddp.state_dict()
+    torch.nn.modules.utils.consume_prefix_in_state_dict_if_present(
+        consumed_state_dict, DDP_STATE_DICT_PREFIX
+    )
+    # The utility consume_prefix_in_state_dict_if_present re-inserts keys into the state dict
+    # which changes the order they appear in the state dict, as it is an OrderedDict.
+    # to test for equality, explicitly sort the state dicts by key before comparison
+    assert check_state_dict_eq(sorted(restored_state_dict), sorted(consumed_state_dict))
