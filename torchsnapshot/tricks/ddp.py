@@ -27,9 +27,9 @@ class DistributedDataParallelAdapter:
 
         >>> # Restore the state
         >>> snapshot = Snapshot(path="foo/bar")
-        >>> adaptor = DistributedDataParallelAdapter(module)
-        >>> snapshot.restore({"module": adaptor})
-        >>> module = adaptor.module
+        >>> adapter = DistributedDataParallelAdapter(module)
+        >>> snapshot.restore({"module": adapter})
+        >>> module = adapter.module
     """
 
     def __init__(self, module: torch.nn.Module) -> None:
