@@ -91,6 +91,42 @@ def test_adagrad(tmp_path: Path) -> None:
     assert check_state_dict_eq(optim.state_dict(), expected)
 
 
+@pytest.mark.usefixtures("toggle_batching")
+def test_model_and_optim(tmp_path: Path) -> None:
+    torch.manual_seed(42)
+    foo = torch.nn.Sequential(
+        torch.nn.Linear(128, 64),
+        torch.nn.Linear(64, 32),
+        torch.nn.Linear(32, 16),
+    )
+
+    # Initialize dst with the different seeds across ranks
+    torch.manual_seed(24)
+    bar = torch.nn.Sequential(
+        torch.nn.Linear(128, 64),
+        torch.nn.Linear(64, 32),
+        torch.nn.Linear(32, 16),
+    )
+    assert not check_state_dict_eq(foo.state_dict(), bar.state_dict())
+
+    # Need to step and zero_grad in order to initialize all the optimizer parameters
+    foo_optim = torch.optim.AdamW(foo.parameters(), lr=0.01)
+    foo_optim.step(closure=None)
+    foo_optim.zero_grad(set_to_none=True)
+
+    bar_optim = torch.optim.AdamW(bar.parameters(), lr=0.02)
+    bar_optim.step(closure=None)
+    bar_optim.zero_grad(set_to_none=True)
+
+    assert not check_state_dict_eq(foo_optim.state_dict(), bar_optim.state_dict())
+
+    snapshot = Snapshot.take(str(tmp_path), {"foo": foo, "optim": foo_optim})
+    snapshot.restore({"foo": bar, "optim": bar_optim})
+
+    assert check_state_dict_eq(foo_optim.state_dict(), bar_optim.state_dict())
+    assert check_state_dict_eq(foo.state_dict(), bar.state_dict())
+
+
 def test_invalid_app_state(tmp_path: Path) -> None:
     not_stateful = 1
     app_state = {"optim": not_stateful}
