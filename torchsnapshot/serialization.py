@@ -219,7 +219,9 @@ def contiguous_view_as_untyped_storage(tensor: torch.Tensor) -> UntypedStorage:
             "contiguous_view_as_untyped_storage can be "
             "only used with contiguous tensors."
         )
-    if hasattr(tensor.storage(), "_untyped"):
+    if hasattr(tensor, "untyped_storage"):
+        untyped_storage = tensor.untyped_storage()
+    elif hasattr(tensor.storage(), "_untyped"):
         # TODO: drop this once PyTorch 1.12 is no longer supported
         # https://github.com/pytorch/pytorch/pull/82438
         untyped_storage = tensor.storage()._untyped()
