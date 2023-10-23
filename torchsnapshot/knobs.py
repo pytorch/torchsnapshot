@@ -21,6 +21,9 @@ from typing import Any, Generator
 _MAX_CHUNK_SIZE_ENV_VAR = "TORCHSNAPSHOT_MAX_CHUNK_SIZE_BYTES_OVERRIDE"
 _MAX_SHARD_SIZE_ENV_VAR = "TORCHSNAPSHOT_MAX_SHARD_SIZE_BYTES_OVERRIDE"
 _SLAB_SIZE_THRESHOLD_ENV_VAR = "TORCHSNAPSHOT_SLAB_SIZE_THRESHOLD_BYTES_OVERRIDE"
+_MAX_PER_RANK_IO_CONCURRENCY_ENV_VAR = (
+    "TORCHSNAPSHOT_MAX_PER_RANK_IO_CONCURRENCY_OVERRIDE"
+)
 
 _DEFAULT_MAX_CHUNK_SIZE_BYTES: int = 512 * 1024 * 1024
 _DEFAULT_MAX_SHARD_SIZE_BYTES: int = 512 * 1024 * 1024
@@ -29,6 +32,8 @@ _DISABLE_BATCHING_ENV_VAR: str = "TORCHSNAPSHOT_DISABLE_BATCHING"
 _ENABLE_SHARDED_TENSOR_ELASTICITY_ROOT_ENV_VAR: str = (
     "TORCHSNAPSHOT_ENABLE_SHARDED_TENSOR_ELASTICITY_ROOT_ONLY"
 )
+
+_DEFAULT_MAX_PER_RANK_IO_CONCURRENCY: int = 16
 
 
 def get_max_chunk_size_bytes() -> int:
@@ -50,6 +55,13 @@ def get_slab_size_threshold_bytes() -> int:
     if override is not None:
         return int(override)
     return _DEFAULT_SLAB_SIZE_THRESHOLD_BYTES
+
+
+def get_max_per_rank_io_concurrency() -> int:
+    override = os.environ.get(_MAX_PER_RANK_IO_CONCURRENCY_ENV_VAR)
+    if override is not None:
+        return int(override)
+    return _DEFAULT_MAX_PER_RANK_IO_CONCURRENCY
 
 
 def is_batching_disabled() -> bool:
@@ -105,4 +117,14 @@ def override_slab_size_threshold_bytes(
     max_shard_size_bytes: int,
 ) -> Generator[None, None, None]:
     with _override_env_var(_MAX_SHARD_SIZE_ENV_VAR, max_shard_size_bytes):
+        yield
+
+
+@contextmanager
+def override_max_per_rank_io_concurrency(
+    max_per_rank_io_concurrency: int,
+) -> Generator[None, None, None]:
+    with _override_env_var(
+        _MAX_PER_RANK_IO_CONCURRENCY_ENV_VAR, max_per_rank_io_concurrency
+    ):
         yield

@@ -19,6 +19,7 @@ from typing import cast, ClassVar, List, Optional, Set
 import psutil
 
 from .io_types import BufferType, ReadIO, ReadReq, StoragePlugin, WriteIO, WriteReq
+from .knobs import get_max_per_rank_io_concurrency
 from .pg_wrapper import PGWrapper
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -27,7 +28,6 @@ logger: logging.Logger = logging.getLogger(__name__)
 _MAX_PER_RANK_MEMORY_BUDGET_BYTES: int = 32 * 1024 * 1024 * 1024
 _AVAILABLE_MEMORY_MULTIPLIER: float = 0.6
 _MAX_PER_RANK_CPU_CONCURRENCY: int = 4
-_MAX_PER_RANK_IO_CONCURRENCY: int = 16
 
 
 def get_local_world_size(pg: PGWrapper) -> int:
@@ -204,7 +204,7 @@ class PendingIOWork:
                 )
                 self.io_tasks.remove(d)
                 for p in set(self.ready_for_io):
-                    if len(self.io_tasks) >= _MAX_PER_RANK_IO_CONCURRENCY:
+                    if len(self.io_tasks) >= get_max_per_rank_io_concurrency():
                         break
                     io_task = asyncio.create_task(p.write_buffer())
                     self.io_tasks.add(io_task)
@@ -281,7 +281,7 @@ async def execute_write_reqs(
         Dispatch as many I/O tasks as the I/O concurrency allows.
         """
         for p in set(ready_for_io):
-            if len(io_tasks) >= _MAX_PER_RANK_IO_CONCURRENCY:
+            if len(io_tasks) >= get_max_per_rank_io_concurrency():
                 break
             io_task = asyncio.create_task(p.write_buffer())
             io_tasks.add(io_task)
@@ -399,7 +399,7 @@ async def execute_read_reqs(
     while len(pending_ids) != 0 or len(io_tasks) != 0 or len(consuming_tasks) != 0:
         dispatched_ids = set()
         for i in pending_ids:
-            if len(io_tasks) >= _MAX_PER_RANK_IO_CONCURRENCY:
+            if len(io_tasks) >= get_max_per_rank_io_concurrency():
                 await asyncio.wait(io_tasks, return_when=asyncio.FIRST_COMPLETED)
                 break
             read_pipeline = read_pipelines[i]
