@@ -46,6 +46,18 @@ class Entry:
 
 @dataclass
 class TensorEntry(Entry):
+    """
+    Entry dataclass for a torch.Tensor object.
+
+    Attributes:
+        location (str): the file storage location of the object in the saved snapshot
+        serializer (str): the function that serialized the object (usually torch_save)
+        dtype (str): torch datatype of the tensor
+        shape (List[int]): shape of the tensor
+        replicated (bool): whether the tensor is replicated on other ranks
+        byte_range (Optional[List[int]]): indexable range of bytes in a continguous block of memory
+    """
+
     location: str
     serializer: str
     dtype: str
@@ -81,6 +93,16 @@ class TensorEntry(Entry):
 
 @dataclass
 class Shard:
+    """
+    An individual shard dataclass for a ShardedTensorEntry.
+
+    Attributes:
+        offsets (List[int]): starting indices by dimension of the shard within the original tensor,
+            should match n dims of tensor
+        sizes (List[int]): shape of the shard, should be identical to shape of underlying TensorEntry
+        tensor (TensorEntry): entry of actual tensor object in shard
+    """
+
     offsets: List[int]
     sizes: List[int]
     tensor: TensorEntry
@@ -93,6 +115,13 @@ class Shard:
 
 @dataclass
 class ShardedTensorEntry(Entry):
+    """
+    Entry for overall ShardedTensor that can contain multiple shards.
+
+    Attributes:
+        shards (List[Shard]): list of individual Shard entries for each shard
+    """
+
     shards: List[Shard]
 
     def __init__(self, shards: List[Shard]) -> None:
@@ -111,6 +140,16 @@ class ShardedTensorEntry(Entry):
 
 @dataclass
 class ChunkedTensorEntry(Entry):
+    """
+    Entry for Tensor object that has been chunked when saving for performance optimization.
+
+    Attributes:
+        dtype (str): dtype of all tensor chunks
+        shape (List[int]): shape of overall unchunked tensor
+        chunks (List[Shard]): individual entries for each chunk, represented as a Shard dataclass
+        replicated (bool): whether the overall tensor is replicated across ranks
+    """
+
     dtype: str
     shape: List[int]
     chunks: List[Shard]
@@ -137,6 +176,16 @@ class ChunkedTensorEntry(Entry):
 
 @dataclass
 class ObjectEntry(Entry):
+    """
+    Entry for a generic object.
+
+    Attributes:
+        location (str): the file storage location of the object in the saved snapshot
+        serializer (str): the function that serialized the object (usually torch_save)
+        obj_type (str): name of the object class
+        replicated (bool): whether the object is replicated on other ranks
+    """
+
     location: str
     serializer: str
     obj_type: str
@@ -154,12 +203,20 @@ class ObjectEntry(Entry):
 
 @dataclass
 class ListEntry(Entry):
+    """
+    Entry for a Python list primitive.
+    """
+
     def __init__(self) -> None:
         super().__init__(type="list")
 
 
 @dataclass
 class DictEntry(Entry):
+    """
+    Entry for a Python dict primitive.
+    """
+
     keys: List[Union[str, int]]
 
     def __init__(self, keys: List[Union[str, int]]) -> None:
@@ -169,6 +226,10 @@ class DictEntry(Entry):
 
 @dataclass
 class OrderedDictEntry(Entry):
+    """
+    Entry for a Python OrderedDict primitive.
+    """
+
     keys: List[Union[str, int]]
 
     def __init__(self, keys: List[Union[str, int]]) -> None:
@@ -276,6 +337,17 @@ Manifest = Dict[str, T]
 
 @dataclass
 class SnapshotMetadata:
+    """
+    Overall manifest object that contains all the entries in a snapshot and
+    the associated metadata. Converts all yaml objects into their appropriate
+    Entry dataclass.
+
+    Attributes:
+        version (str): version of TorchSnapshot package
+        world_size (str): total number of ranks in distributed environment where snapshot was taken
+        manifest (Manifest): Manifest object containing all the entries in the snapshot
+    """
+
     version: str
     world_size: int
     manifest: Manifest
