@@ -174,6 +174,63 @@ class ChunkedTensorEntry(Entry):
         return cls(**yaml_obj)
 
 
+# Define a type for n-dimensional list to represent n-dimensional device mesh of ranks
+NestedList = Union[int, List["NestedList"]]
+
+
+@dataclass
+class DTensorEntry(Entry):
+    """
+    Entry class for recording a DTensor object in the manifest when saving a snapshot.
+
+    This class should contain all information needed to save/load a DTensor object.
+
+    DTensor can be sharded similarly to ShardedTensor. Unlike ShardedTensor, it can also be replicated
+    across ranks, and can be BOTH sharded and replicated. In this combined case, individual shards may be replicated
+    across different ranks. For this reason, we let the underlying TensorEntrys track replicated tensors.
+
+    Attributes:
+        shards (List[Shard]): list of shards the DTensor comprises of. If not sharded, then this is a single shard.
+        mesh (NestedList): n-dimensional list representing the device mesh of the DTensor.
+        dim_map (List[List[int]]): list indicating how each tensor dim is sharded or replicated on each device mesh dim.
+            This is used as a condensed representation of the DTensor's Placements.
+
+            Each element in the list indexed by i describes tensor dim i.
+                - If tensor dim i is sharded, the list element will be a list of integers indicating the device mesh dims
+                  tensor dim i is sharded on. The same tensor dim can be sharded across multiple device
+                  mesh dims (e.g., [Shard(0), Shard(0)]).
+                - If tensor dim i is replicated, the list element will be [-1].
+
+            Example: If dim_map was [[0, 1], [-1]], this means the first tensor dim is sharded twice across device mesh dim 0
+                     and device mesh dim 1, while the second tensor dim is replicated across all device mesh dims.
+
+    """
+
+    shards: List[Shard]
+    mesh: NestedList
+    dim_map: List[List[int]]
+
+    def __init__(
+        self,
+        shards: List[Shard],
+        mesh: NestedList,
+        dim_map: List[List[int]],
+    ) -> None:
+        super().__init__(type="DTensor")
+        self.shards = shards
+        self.mesh = mesh
+        self.dim_map = dim_map
+
+    @classmethod
+    def from_yaml_obj(cls, yaml_obj: Any) -> "DTensorEntry":
+        if "type" in yaml_obj:
+            del yaml_obj["type"]
+        yaml_obj["shards"] = [
+            Shard.from_yaml_obj(shard) for shard in yaml_obj["shards"]
+        ]
+        return cls(**yaml_obj)
+
+
 @dataclass
 class ObjectEntry(Entry):
     """
@@ -380,6 +437,8 @@ class SnapshotMetadata:
                 manifest[path] = ShardedTensorEntry.from_yaml_obj(yaml_obj)
             elif type_name == "ChunkedTensor":
                 manifest[path] = ChunkedTensorEntry.from_yaml_obj(yaml_obj)
+            elif type_name == "DTensor":
+                manifest[path] = DTensorEntry.from_yaml_obj(yaml_obj)
             elif type_name == "object":
                 manifest[path] = ObjectEntry.from_yaml_obj(yaml_obj)
         d["manifest"] = manifest
@@ -391,6 +450,8 @@ def is_dict_entry(entry: Entry) -> bool:
 
 
 def is_replicated(entry: Entry) -> bool:
+    if isinstance(entry, DTensorEntry):
+        return any(dim == -1 for dim in entry.dim_map)
     if not hasattr(entry, "replicated"):
         return False
     # pyre-ignore
