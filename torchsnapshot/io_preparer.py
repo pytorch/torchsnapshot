@@ -35,6 +35,7 @@ from .io_types import Future, ReadReq, WriteReq
 from .knobs import get_max_chunk_size_bytes
 from .manifest import (
     ChunkedTensorEntry,
+    DTensorEntry,
     Entry,
     ObjectEntry,
     PrimitiveEntry,
@@ -165,6 +166,8 @@ def prepare_read(
         return ChunkedTensorIOPreparer.prepare_read(
             entry, obj_out, buffer_size_limit_bytes=buffer_size_limit_bytes
         )
+    elif isinstance(entry, DTensorEntry):
+        return DTensorIOPreparer.prepare_read(entry, obj_out)
     elif isinstance(entry, TensorEntry):
         return TensorIOPreparer.prepare_read(
             entry, obj_out, buffer_size_limit_bytes=buffer_size_limit_bytes

@@ -5,12 +5,21 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+import itertools
 import logging
+from collections import defaultdict
 
 from typing import Callable, List, Optional, Sequence, Tuple
 
 import torch
 from torch._prims_common import ShapeType
+from torch.distributed._shard.sharded_tensor import (
+    Shard as ShardedTensorShard,
+    ShardMetadata,
+)
+from torch.distributed._shard.sharding_spec._internals import (
+    _check_shard_metadata_pair_overlap,
+)
 
 from torch.distributed._tensor import (
     DeviceMesh,
@@ -20,11 +29,15 @@ from torch.distributed._tensor import (
     Shard as ShardPlacement,
 )
 from torch.distributed._tensor._utils import compute_local_shape_and_global_offset
-from torchsnapshot.io_preparers.sharded_tensor import ShardedTensorIOPreparer
+from torchsnapshot.io_preparers.sharded_tensor import (
+    _OverlappingRegion,
+    ShardedTensorBufferConsumer,
+    ShardedTensorIOPreparer,
+)
 
 from torchsnapshot.io_preparers.tensor import TensorIOPreparer
 
-from torchsnapshot.io_types import WriteReq
+from torchsnapshot.io_types import Future, ReadReq, WriteReq
 from torchsnapshot.knobs import get_max_shard_size_bytes
 from torchsnapshot.manifest import DTensorEntry, Shard as ShardEntry
 
@@ -78,6 +91,18 @@ class DTensorIOPreparer:
         # Add [-1] for mesh dims that aren't sharded
         dim_map = [dims if len(dims) != 0 else [-1] for dims in dim_map]
         return dim_map
+
+    @staticmethod
+    def _get_global_shape(entry: DTensorEntry) -> List[int]:
+        # Note: this assumes you've already merged DTensorEntries across ranks
+        # (if the write loads were partitioned) with a function like
+        # get_manifest_for_rank(). This will not compute the correct shape otherwise.
+        global_shape = [0] * len(entry.shards[0].sizes)
+        for shard in entry.shards:
+            for dim in range(len(shard.offsets)):
+                if shard.offsets[dim] + shard.sizes[dim] > global_shape[dim]:
+                    global_shape[dim] = shard.offsets[dim] + shard.sizes[dim]
+        return global_shape
 
     @classmethod
     def prepare_write(
@@ -155,3 +180,83 @@ class DTensorIOPreparer:
         )
 
         return dtensor_entry, write_reqs
+
+    @classmethod
+    def prepare_read(
+        cls,
+        entry: DTensorEntry,
+        obj_out: Optional[DTensor] = None,
+    ) -> Tuple[List[ReadReq], Future[DTensor]]:
+        if obj_out is None:
+            raise RuntimeError(
+                "No output DTensor object found. Cannot read a DTensorEntry without a runtime object."
+            )
+
+        entry_global_shape = cls._get_global_shape(entry=entry)
+        out_global_shape = obj_out.shape
+        if out_global_shape != entry_global_shape:
+            logger.warning(
+                f"The shape of obj_out ({out_global_shape}) is different from the "
+                f"shape of the persisted sharded tensor ({entry_global_shape}). "
+                "Only the overlapping part will be loaded. "
+            )
+
+        out_local_shape, out_global_offset = compute_local_shape_and_global_offset(
+            out_global_shape, obj_out.device_mesh, obj_out.placements
+        )
+        out_local_tensor = obj_out.to_local()
+        assert out_local_tensor.shape == out_local_shape
+
+        local_shards = [
+            ShardedTensorShard(
+                tensor=out_local_tensor,
+                metadata=ShardMetadata(
+                    shard_offsets=list(out_global_offset),
+                    shard_sizes=list(out_local_shape),
+                    placement=str(out_local_tensor.device),
+                ),
+            )
+        ]
+
+        # For each persisted shard, find all its overlapping regions with the
+        # local shards
+        path_byte_range_to_overlapping_regions = defaultdict(list)
+        for local_shard, shard in itertools.product(local_shards, entry.shards):
+            shard_md = ShardMetadata(
+                shard_offsets=shard.offsets,
+                shard_sizes=shard.sizes,
+                placement="cpu",
+            )
+            if not _check_shard_metadata_pair_overlap(local_shard.metadata, shard_md):
+                continue
+            path_byte_range = (shard.tensor.location, shard.tensor.byte_range_tuple)
+            path_byte_range_to_overlapping_regions[path_byte_range].append(
+                _OverlappingRegion(
+                    dst_tensor=local_shard.tensor,
+                    overlap_region=ShardedTensorIOPreparer._shards_get_overlap_region_wrt_saved_tensor(
+                        saved_shard=shard_md,
+                        current_shard=local_shard.metadata,
+                    ),
+                )
+            )
+
+        # Read each persisted shard once and use it to load all its overlapping
+        # regions with the local shards
+        read_reqs = []
+        for shard in entry.shards:
+            path_byte_range = (shard.tensor.location, shard.tensor.byte_range_tuple)
+            if path_byte_range not in path_byte_range_to_overlapping_regions:
+                continue
+            read_reqs.append(
+                ReadReq(
+                    path=shard.tensor.location,
+                    buffer_consumer=ShardedTensorBufferConsumer(
+                        overlapping_regions=path_byte_range_to_overlapping_regions[
+                            path_byte_range
+                        ],
+                        entry=shard.tensor,
+                    ),
+                    byte_range=shard.tensor.byte_range_tuple,
+                )
+            )
+        return read_reqs, Future(obj=obj_out)

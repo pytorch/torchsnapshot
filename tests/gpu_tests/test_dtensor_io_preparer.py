@@ -37,6 +37,8 @@ from torchsnapshot.io_preparer import (
 )
 from torchsnapshot.manifest import NestedList
 
+from torchsnapshot.test_utils import tensor_eq
+
 WORLD_SIZE = 4
 _DEVICE_MESH = [
     list(range(WORLD_SIZE)),
@@ -70,20 +72,27 @@ class TestDTensorIOPreparer(DTensorTestBase):
 
         if len(placements) > device_mesh.ndim:
             return
-
-        tensor = torch.rand(*shape, device="cuda")
-        dtensor = distribute_tensor(tensor, device_mesh, placements)
+        src = distribute_tensor(
+            tensor=torch.rand(*shape, device="cuda"),
+            device_mesh=device_mesh,
+            placements=placements,
+        )
+        dst = distribute_tensor(
+            tensor=torch.rand(*shape, device="cuda"),
+            device_mesh=device_mesh,
+            placements=placements,
+        )
 
         entry, write_reqs = DTensorIOPreparer.prepare_write(
             storage_path="/foo",
-            obj=dtensor,
+            obj=src,
         )
         assert len(entry.shards) == len(write_reqs)
 
         # When subdivision is enabled, we have more write requests than local
         # shards, and each write request corresponds to a subview of a local
         # shard.
-        assert len(dtensor._spec.num_shards) < len(write_reqs)
+        assert len(src._spec.num_shards) < len(write_reqs)
         entry_total_size = 0
         for shard_entry in entry.shards:
             entry_total_size += TensorIOPreparer.get_tensor_size_from_entry(
@@ -91,7 +100,7 @@ class TestDTensorIOPreparer(DTensorTestBase):
             )
         assert (
             entry_total_size
-            == dtensor.to_local().storage().size() * dtensor.to_local().element_size()
+            == src.to_local().storage().size() * src.to_local().element_size()
         )
 
         # Verify no overlapping locations among local shards
@@ -123,3 +132,11 @@ class TestDTensorIOPreparer(DTensorTestBase):
                 deserialized.storage().size() * deserialized.element_size()
                 == TensorIOPreparer.get_tensor_size_from_entry(entry.shards[idx].tensor)
             )
+
+        # First verify that src != dst, then consume the buffers with dst
+        # and verify that src == dst
+        assert not tensor_eq(src, dst)
+        read_reqs, _ = DTensorIOPreparer.prepare_read(entry=entry, obj_out=dst)
+        for rr in read_reqs:
+            await rr.buffer_consumer.consume_buffer(buf=location_to_buf[rr.path])
+        assert tensor_eq(src, dst)
