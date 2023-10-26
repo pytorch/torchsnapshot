@@ -14,6 +14,8 @@ from typing import Any, Callable, List, Optional, Tuple
 import torch
 
 from torch.distributed._shard.sharded_tensor import ShardedTensor
+from torch.distributed._tensor import DTensor
+from torchsnapshot.io_preparers.dtensor import DTensorIOPreparer
 
 from .io_preparers.chunked_tensor import Chunk, ChunkedTensorIOPreparer
 from .io_preparers.object import (
@@ -86,6 +88,9 @@ def prepare_write(
         logical_path: The logical path of the object.
         rank: The rank of the current process.
         replicated: Whether the object is replicated.
+        is_async_snapshot (bool): whether or not the write request is from async_take
+        _tensor_prepare_func (Optional[Callable[[torch.Tensor, bool], torch.Tensor]]): custom transform to apply
+            to tensor before staging it in buffer.
 
     Returns:
         The class::`Entry` describing the object, and a list of
@@ -99,6 +104,13 @@ def prepare_write(
     storage_path = get_storage_path(obj, logical_path, rank, replicated)
     if isinstance(obj, ShardedTensor):
         return ShardedTensorIOPreparer.prepare_write(
+            storage_path=storage_path,
+            obj=obj,
+            is_async_snapshot=is_async_snapshot,
+            _tensor_prepare_func=_tensor_prepare_func,
+        )
+    elif isinstance(obj, DTensor):
+        return DTensorIOPreparer.prepare_write(
             storage_path=storage_path,
             obj=obj,
             is_async_snapshot=is_async_snapshot,
