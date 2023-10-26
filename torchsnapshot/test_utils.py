@@ -19,7 +19,6 @@ from typing import (
     Any,
     Awaitable,
     Callable,
-    cast,
     Dict,
     Generator,
     List,
@@ -48,27 +47,41 @@ from torchsnapshot.manifest import Entry
 from .serialization import SUPPORTED_QUANTIZED_DTYPES
 
 
-def _tensor_eq(lhs: Union[torch.Tensor, ShardedTensor], rhs: Any) -> bool:
+def tensor_eq(lhs: Union[torch.Tensor, ShardedTensor, DTensor], rhs: Any) -> bool:
     if type(lhs) != type(rhs):
         return False
     if isinstance(lhs, ShardedTensor):
         for l_shard, r_shard in zip(lhs.local_shards(), rhs.local_shards()):
-            if not torch.allclose(l_shard.tensor, r_shard.tensor):
+            if not tensor_eq(l_shard.tensor, r_shard.tensor):
                 return False
         return True
+    elif isinstance(lhs, DTensor):
+        if lhs.placements != rhs.placements:
+            return False
+        if lhs.device_mesh != rhs.device_mesh:
+            return False
+        lhs = lhs.redistribute(placements=[Replicate()])
+        rhs = rhs.redistribute(placements=[Replicate()])
+        return torch.allclose(lhs.to_local(), rhs.to_local())
     elif isinstance(lhs, torch.Tensor):
-        return torch.allclose(lhs, rhs)
+        if lhs.dtype in SUPPORTED_QUANTIZED_DTYPES:
+            return torch.allclose(lhs.dequantize(), rhs.dequantize())
+        else:
+            return torch.allclose(lhs, rhs)
     else:
-        raise AssertionError("The lhs operand must be a Tensor or ShardedTensor.")
+        raise AssertionError(
+            "The lhs operand must be a Tensor, ShardedTensor, or DTensor."
+        )
 
 
 @contextmanager
 def _patch_tensor_eq() -> Generator[None, None, None]:
     patchers = [
-        mock.patch("torch.Tensor.__eq__", _tensor_eq),
+        mock.patch("torch.Tensor.__eq__", tensor_eq),
         mock.patch(
-            "torch.distributed._shard.sharded_tensor.ShardedTensor.__eq__", _tensor_eq
+            "torch.distributed._shard.sharded_tensor.ShardedTensor.__eq__", tensor_eq
         ),
+        mock.patch("torch.distributed._tensor.DTensor.__eq__", tensor_eq),
     ]
     for patcher in patchers:
         patcher.start()
@@ -152,28 +165,6 @@ def rand_tensor(
             raise AssertionError(f"Unrecognized qscheme: {qscheme}.")
     else:
         return torch.randint(torch.iinfo(dtype).max, shape, dtype=dtype)
-
-
-def tensor_eq(lhs: torch.Tensor, rhs: torch.Tensor) -> bool:
-    if type(lhs) != type(rhs):
-        return False
-
-    if type(lhs) == ShardedTensor:
-        for l_shard, r_shard in zip(
-            lhs.local_shards(), cast(ShardedTensor, rhs).local_shards()
-        ):
-            if not tensor_eq(l_shard.tensor, r_shard.tensor):
-                return False
-        return True
-    elif type(lhs) == torch.Tensor:
-        if lhs.dtype in SUPPORTED_QUANTIZED_DTYPES:
-            return torch.allclose(lhs.dequantize(), rhs.dequantize())
-        else:
-            return torch.allclose(lhs, rhs)
-    else:
-        raise AssertionError(
-            f"The lhs operand must be a Tensor or ShardedTensor (got: {type(lhs)}."
-        )
 
 
 def tensor_local_sz_bytes(tensor: torch.Tensor) -> int:
