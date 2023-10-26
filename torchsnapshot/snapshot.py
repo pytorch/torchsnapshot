@@ -26,6 +26,7 @@ import torch
 import torch.distributed as dist
 from torch.distributed._shard.sharded_tensor import ShardedTensor
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torchsnapshot.dtensor_utils import is_sharded
 
 from .batcher import batch_read_requests, batch_write_requests
 
@@ -554,7 +555,7 @@ class Snapshot:
 
         for logical_path, obj in flattened.items():
             entry, wrs = prepare_write(
-                obj=flattened[logical_path],
+                obj=obj,
                 logical_path=logical_path,
                 rank=pg_wrapper.get_rank(),
                 replicated=logical_path in replicated_paths,
@@ -613,8 +614,8 @@ class Snapshot:
         world_size = pg.get_world_size()
         replicated_paths = []
         for path, val in flattened.items():
-            if any(fnmatch.fnmatch(path, p) for p in replicated) and not isinstance(
-                val, ShardedTensor
+            if any(fnmatch.fnmatch(path, p) for p in replicated) and not is_sharded(
+                val
             ):
                 replicated_paths.append(path)
         # pyre-ignore

@@ -15,6 +15,7 @@ import torch
 
 from torch.distributed._shard.sharded_tensor import ShardedTensor
 from torch.distributed._tensor import DTensor
+from torchsnapshot.dtensor_utils import is_sharded
 from torchsnapshot.io_preparers.dtensor import DTensorIOPreparer
 
 from .io_preparers.chunked_tensor import Chunk, ChunkedTensorIOPreparer
@@ -47,9 +48,12 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 
 def get_storage_path(obj: Any, logical_path: str, rank: int, replicated: bool) -> str:
-    if isinstance(obj, ShardedTensor):
+    sharded = is_sharded(obj)
+    if sharded and replicated:
+        return os.path.join("replicated_sharded", logical_path)
+    elif sharded and not replicated:
         return os.path.join("sharded", logical_path)
-    elif replicated:
+    elif not sharded and replicated:
         return os.path.join("replicated", logical_path)
     else:
         return os.path.join(str(rank), logical_path)
