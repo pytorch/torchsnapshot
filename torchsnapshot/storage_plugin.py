@@ -38,7 +38,7 @@ def url_to_storage_plugin(
         protocol, path = "fs", url_path
 
     if storage_options is None:
-        storage_options = {}
+        storage_options = dict()
 
     # Built-in storage plugins
     if protocol == "fs":
@@ -49,6 +49,10 @@ def url_to_storage_plugin(
         from torchsnapshot.storage_plugins.gcs import GCSStoragePlugin
 
         return GCSStoragePlugin(root=path, storage_options=storage_options)
+    elif protocol.startswith("fsspec-"):
+        from torchsnapshot.storage_plugins.fsspec import FSSpecStoragePlugin
+
+        return FSSpecStoragePlugin(root=url_path, storage_options=storage_options)
 
     # Registered storage plugins
     eps = entry_points(group="storage_plugins")

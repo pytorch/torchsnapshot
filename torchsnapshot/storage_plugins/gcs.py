@@ -24,7 +24,6 @@ import requests.exceptions
 import urllib3.exceptions
 from google.auth import default  # @manual
 from google.auth.transport.requests import AuthorizedSession  # @manual
-
 from google.resumable_media import common  # @manual
 from google.resumable_media.requests import ChunkedDownload, ResumableUpload  # @manual
 
@@ -39,7 +38,6 @@ _DEFAULT_CONNECTION_RETRIES: int = 3
 _DEFAULT_IO_CONCURRENCY: int = 8
 _DEFAULT_DEADLINE_SEC: int = 180
 _DEFAULT_CHUNK_SIZE_BYTE: int = 100 * 1024 * 1024
-
 
 T = TypeVar("T")
 

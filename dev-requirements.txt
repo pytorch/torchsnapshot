@@ -1,5 +1,6 @@
 aiobotocore
 boto3
+fsspec
 google-cloud-storage
 google-resumable-media
 numpy
