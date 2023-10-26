@@ -26,7 +26,8 @@ from torchsnapshot.manifest import (
 )
 from torchsnapshot.manifest_ops import get_manifest_for_rank
 from torchsnapshot.manifest_utils import is_fully_replicated_entry
-from torchsnapshot.tests.assets.manifest import (
+
+from .assets.manifest import (
     _MANIFEST_0,
     _MANIFEST_1,
     _MANIFEST_2,
