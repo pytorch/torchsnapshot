@@ -25,6 +25,7 @@ from typing import Any, Callable, cast, Dict, List, Optional, Set, Tuple, TypeVa
 import torch
 import torch.distributed as dist
 from torch.distributed._shard.sharded_tensor import ShardedTensor
+from torch.distributed._tensor import DTensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torchsnapshot.dtensor_utils import is_sharded
 
@@ -418,7 +419,7 @@ class Snapshot:
                 f'The supplied path "{path}" does not exist in the snapshot\'s manifest. '
                 "Please verify the available paths within the snapshot via `snapshot.get_manifest()`."
             )
-        if not isinstance(obj_out, (torch.Tensor, ShardedTensor)):
+        if not isinstance(obj_out, (torch.Tensor, ShardedTensor, DTensor)):
             logger.warning(
                 f"`obj_out` is of type {type(obj_out)}, which does not support in-place load. "
                 "Its state won't be changed after load. The loaded object will be returned."
@@ -679,7 +680,7 @@ class Snapshot:
             # ShardedTensor became a subclass of torch.Tensor since PyTorch
             # 1.13. We can drop the check for ShardedTensor once PyTorch 1.12.1
             # is no longer supported.
-            if isinstance(v, (torch.Tensor, ShardedTensor))
+            if isinstance(v, (torch.Tensor, ShardedTensor, DTensor))
         }
 
         handle_sharded_tensor_elasticity(

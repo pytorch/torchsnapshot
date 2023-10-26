@@ -17,6 +17,7 @@ from _pytest.fixtures import SubRequest  # @manual
 
 from torchsnapshot.manifest import (
     DictEntry,
+    DTensorEntry,
     Entry,
     Shard,
     ShardedTensorEntry,
@@ -109,8 +110,51 @@ def test_get_local_manifest(manifest: Dict[str, Entry], rank: int) -> None:
         if path.startswith(f"{rank}/") or is_fully_replicated_entry(entry):
             expected_local_manifest[local_path] = entry
 
+    merged_local_manifest = _update_local_manifest_with_merged_entries(local_manifest)
+    expected_local_manifest.update(merged_local_manifest)
+
+    if rank >= _WORLD_SIZE:
+        # Pure replicated entries only
+        expected_local_manifest["foo"] = DictEntry(keys=["baz", "qux_chunked"])
+    assert local_manifest == expected_local_manifest
+
+
+@pytest.mark.parametrize("rank", range(_WORLD_SIZE * 2))
+def test_replicated_entries_only_on_rank_0(rank: int) -> None:
+    """
+    Previously, replicated entries were recorded under all ranks. Later, as an
+    optimization, replicated entries were only recorded under rank 0. This test
+    verifies that the optimization is backward compatible with the old format.
+    """
+    local_manifest_0 = get_manifest_for_rank(
+        metadata=SnapshotMetadata(
+            version="0.0.0",
+            world_size=_WORLD_SIZE,
+            manifest=_MANIFEST_0,
+        ),
+        rank=rank,
+    )
+    local_manifest_1 = get_manifest_for_rank(
+        metadata=SnapshotMetadata(
+            version="0.0.0",
+            world_size=_WORLD_SIZE,
+            manifest=_MANIFEST_0,
+        ),
+        rank=rank,
+    )
+    assert local_manifest_0 == local_manifest_1
+
+
+def _update_local_manifest_with_merged_entries(
+    local_manifest: Dict[str, Entry]
+) -> None:
+    """
+    Update the expected local manifest with manually merged ShardedTensorEntries
+    and DTensorEntries. See get_manifest_for_rank for more details.
+    """
+    merged_local_manifest = {}
     if "foo/qux" in local_manifest:
-        expected_local_manifest["foo/qux"] = ShardedTensorEntry(
+        merged_local_manifest["foo/qux"] = ShardedTensorEntry(
             shards=[
                 Shard(
                     offsets=[0, 0],
@@ -158,32 +202,84 @@ def test_get_local_manifest(manifest: Dict[str, Entry], rank: int) -> None:
                 ),
             ]
         )
-    if rank >= _WORLD_SIZE:
-        expected_local_manifest["foo"] = DictEntry(keys=["baz", "qux_chunked"])
-    assert local_manifest == expected_local_manifest
-
-
-@pytest.mark.parametrize("rank", range(_WORLD_SIZE * 2))
-def test_replicated_entries_only_on_rank_0(rank: int) -> None:
-    """
-    Previously, replicated entries were recorded under all ranks. Later, as an
-    optimization, replicated entries were only recorded under rank 0. This test
-    verifies that the optimization is backward compatible with the old format.
-    """
-    local_manifest_0 = get_manifest_for_rank(
-        metadata=SnapshotMetadata(
-            version="0.0.0",
-            world_size=_WORLD_SIZE,
-            manifest=_MANIFEST_0,
-        ),
-        rank=rank,
-    )
-    local_manifest_1 = get_manifest_for_rank(
-        metadata=SnapshotMetadata(
-            version="0.0.0",
-            world_size=_WORLD_SIZE,
-            manifest=_MANIFEST_0,
-        ),
-        rank=rank,
-    )
-    assert local_manifest_0 == local_manifest_1
+    if "foo/corge" in local_manifest:
+        merged_local_manifest["foo/corge"] = DTensorEntry(
+            shards=[
+                Shard(
+                    offsets=[0, 0],
+                    sizes=[5, 5],
+                    tensor=TensorEntry(
+                        location="sharded/foo/corge.0",
+                        serializer="torch_save",
+                        dtype="float32",
+                        shape=[5, 5],
+                        replicated=False,
+                    ),
+                ),
+                Shard(
+                    offsets=[0, 5],
+                    sizes=[5, 3],
+                    tensor=TensorEntry(
+                        location="sharded/foo/corge.1",
+                        serializer="torch_save",
+                        dtype="float32",
+                        shape=[5, 3],
+                        replicated=False,
+                    ),
+                ),
+                Shard(
+                    offsets=[5, 0],
+                    sizes=[2, 5],
+                    tensor=TensorEntry(
+                        location="sharded/foo/corge.2",
+                        serializer="torch_save",
+                        dtype="float32",
+                        shape=[2, 5],
+                        replicated=False,
+                    ),
+                ),
+                Shard(
+                    offsets=[5, 5],
+                    sizes=[2, 3],
+                    tensor=TensorEntry(
+                        location="sharded/foo/corge.3",
+                        serializer="torch_save",
+                        dtype="float32",
+                        shape=[2, 3],
+                        replicated=False,
+                    ),
+                ),
+            ],
+            mesh=[[0, 1], [2, 3]],
+            dim_map=[[0], [1]],
+        )
+    if "foo/grault" in local_manifest:
+        merged_local_manifest["foo/grault"] = DTensorEntry(
+            shards=[
+                Shard(
+                    offsets=[0, 0],
+                    sizes=[7, 5],
+                    tensor=TensorEntry(
+                        location="replicated_sharded/foo/grault.0",
+                        serializer="torch_save",
+                        dtype="float32",
+                        shape=[7, 5],
+                        replicated=True,
+                    ),
+                ),
+                Shard(
+                    offsets=[0, 5],
+                    sizes=[7, 3],
+                    tensor=TensorEntry(
+                        location="replicated_sharded/foo/grault.2",
+                        serializer="torch_save",
+                        dtype="float32",
+                        shape=[7, 3],
+                        replicated=True,
+                    ),
+                ),
+            ],
+            mesh=[[0, 1], [2, 3]],
+            dim_map=[[-1], [0]],
+        )
+    return merged_local_manifest
