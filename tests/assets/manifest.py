@@ -12,12 +12,12 @@ from torchsnapshot.manifest import (
     DictEntry,
     DTensorEntry,
     Entry,
-    is_replicated,
     ObjectEntry,
     Shard,
     ShardedTensorEntry,
     TensorEntry,
 )
+from torchsnapshot.manifest_utils import is_replicated_entry
 
 _WORLD_SIZE = 4
 
@@ -505,17 +505,17 @@ _MANIFEST_0: Dict[str, Entry] = {
 _MANIFEST_1: Dict[str, Entry] = {
     k: v
     for k, v in _MANIFEST_0.items()
-    if not (k.startswith("1/") and is_replicated(v))
+    if not (k.startswith("1/") and is_replicated_entry(v))
 }
 
 _MANIFEST_2: Dict[str, Entry] = {
     k: v
     for k, v in _MANIFEST_0.items()
-    if not (k.startswith("2/") and is_replicated(v))
+    if not (k.startswith("2/") and is_replicated_entry(v))
 }
 
 _MANIFEST_3: Dict[str, Entry] = {
     k: v
     for k, v in _MANIFEST_0.items()
-    if not (k.startswith("3/") and is_replicated(v))
+    if not (k.startswith("3/") and is_replicated_entry(v))
 }

@@ -37,7 +37,12 @@ from torchsnapshot.serialization import (
     BUFFER_PROTOCOL_SUPPORTED_DTYPES,
 )
 from torchsnapshot.storage_plugins.fs import FSStoragePlugin
-from torchsnapshot.test_utils import rand_tensor, run_with_pet_async, tensor_eq
+from torchsnapshot.test_utils import (
+    _tensor_test_case,
+    rand_tensor,
+    run_with_pet_async,
+    tensor_eq,
+)
 
 WORLD_SIZE: int = 4
 
@@ -60,20 +65,6 @@ def _chunked_tensor_test_case(
         ),
         tensor=tensor,
         chunking_instruction=chunking_instruction,
-    )
-    return tensor, entry, wrs
-
-
-def _tensor_test_case(
-    dtype: torch.dtype,
-    shape: List[int],
-    logical_path: str,
-    rank: int,
-    replicated: bool,
-) -> Tuple[torch.Tensor, Entry, List[WriteReq]]:
-    tensor = rand_tensor(shape, dtype=dtype)
-    entry, wrs = prepare_write(
-        obj=tensor, logical_path=logical_path, rank=rank, replicated=replicated
     )
     return tensor, entry, wrs
 

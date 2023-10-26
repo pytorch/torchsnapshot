@@ -443,20 +443,3 @@ class SnapshotMetadata:
                 manifest[path] = ObjectEntry.from_yaml_obj(yaml_obj)
         d["manifest"] = manifest
         return cls(**d)
-
-
-def is_dict_entry(entry: Entry) -> bool:
-    return isinstance(entry, (DictEntry, OrderedDictEntry))
-
-
-def is_replicated(entry: Entry) -> bool:
-    if isinstance(entry, DTensorEntry):
-        return any(dim == -1 for dim in entry.dim_map)
-    if not hasattr(entry, "replicated"):
-        return False
-    # pyre-ignore
-    return entry.replicated
-
-
-def is_container_entry(entry: Entry) -> bool:
-    return isinstance(entry, (ListEntry, DictEntry, OrderedDictEntry))

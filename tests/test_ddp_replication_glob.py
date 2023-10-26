@@ -14,7 +14,7 @@ import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torchsnapshot import Snapshot
-from torchsnapshot.manifest import is_replicated
+from torchsnapshot.manifest_utils import is_fully_replicated_entry
 from torchsnapshot.stateful import AppState
 from torchsnapshot.test_utils import run_with_pet
 
@@ -52,6 +52,8 @@ def test_ddp_replication_glob(
         replicated=replication_globs,
     )
     replicated_paths = [
-        path for path, entry in snapshot.get_manifest().items() if is_replicated(entry)
+        path
+        for path, entry in snapshot.get_manifest().items()
+        if is_fully_replicated_entry(entry)
     ]
     assert set(replicated_paths) == set(expected_replicated_paths)

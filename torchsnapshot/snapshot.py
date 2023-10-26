@@ -40,14 +40,9 @@ from .io_preparer import prepare_read, prepare_write
 from .io_types import ReadIO, ReadReq, StoragePlugin, WriteIO, WriteReq
 from .knobs import is_batching_disabled
 
-from .manifest import (
-    Entry,
-    is_container_entry,
-    Manifest,
-    PrimitiveEntry,
-    SnapshotMetadata,
-)
+from .manifest import Entry, Manifest, PrimitiveEntry, SnapshotMetadata
 from .manifest_ops import get_manifest_for_rank, handle_sharded_tensor_elasticity
+from .manifest_utils import is_container_entry
 from .partitioner import consolidate_replicated_entries, partition_write_reqs
 from .pg_wrapper import PGWrapper
 from .rng_state import RNGState

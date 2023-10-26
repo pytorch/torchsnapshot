@@ -13,7 +13,7 @@ import pytest
 import torch
 import torch.distributed as dist
 from torchsnapshot import Snapshot
-from torchsnapshot.manifest import is_replicated
+from torchsnapshot.manifest_utils import is_fully_replicated_entry
 from torchsnapshot.test_utils import run_with_pet
 
 _WORLD_SIZE: int = 2
@@ -78,7 +78,9 @@ def test_replication_glob(
         replicated=replication_globs[dist.get_rank()],
     )
     replicated_paths = [
-        path for path, entry in snapshot.get_manifest().items() if is_replicated(entry)
+        path
+        for path, entry in snapshot.get_manifest().items()
+        if is_fully_replicated_entry(entry)
     ]
     assert set(replicated_paths) == set(expected_replicated_paths)
 

@@ -18,13 +18,13 @@ from _pytest.fixtures import SubRequest  # @manual
 from torchsnapshot.manifest import (
     DictEntry,
     Entry,
-    is_replicated,
     Shard,
     ShardedTensorEntry,
     SnapshotMetadata,
     TensorEntry,
 )
 from torchsnapshot.manifest_ops import get_manifest_for_rank
+from torchsnapshot.manifest_utils import is_fully_replicated_entry
 from torchsnapshot.tests.assets.manifest import (
     _MANIFEST_0,
     _MANIFEST_1,
@@ -106,7 +106,7 @@ def test_get_local_manifest(manifest: Dict[str, Entry], rank: int) -> None:
     expected_local_manifest = {}
     for path, entry in manifest.items():
         local_path = "/".join(path.split("/")[1:])
-        if path.startswith(f"{rank}/") or is_replicated(entry):
+        if path.startswith(f"{rank}/") or is_fully_replicated_entry(entry):
             expected_local_manifest[local_path] = entry
 
     if "foo/qux" in local_manifest:

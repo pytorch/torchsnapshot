@@ -11,15 +11,8 @@ from collections import defaultdict
 from typing import Dict, List, Tuple
 
 from .knobs import is_sharded_tensor_elasticity_enabled_at_root_only
-from .manifest import (
-    Entry,
-    is_container_entry,
-    is_dict_entry,
-    is_replicated,
-    Manifest,
-    ShardedTensorEntry,
-    SnapshotMetadata,
-)
+from .manifest import Entry, Manifest, ShardedTensorEntry, SnapshotMetadata
+from .manifest_utils import is_container_entry, is_dict_entry, is_replicated_entry
 
 
 def get_manifest_for_rank(
@@ -62,7 +55,7 @@ def _get_manifest_for_existing_rank(
 
     # Replicated entries are removed from the global manifest
     for logical_path, entry in rank_to_manifest[0].items():
-        if is_replicated(entry):
+        if is_replicated_entry(entry):
             local_manifest[logical_path] = entry
 
     for logical_path, entry in local_manifest.items():
@@ -79,7 +72,7 @@ def _get_manifest_for_new_rank(rank_to_manifest: List[Dict[str, Entry]]) -> Mani
     # Remove non-replicated entries
     for logical_path in list(local_manifest.keys()):
         entry = local_manifest[logical_path]
-        if is_container_entry(entry) or is_replicated(entry):
+        if is_container_entry(entry) or is_replicated_entry(entry):
             continue
         _remove_entry(manifest=local_manifest, logical_path=logical_path)
     return local_manifest

@@ -34,6 +34,16 @@ from unittest import mock
 import torch
 import torch.distributed.launcher as pet
 from torch.distributed._shard.sharded_tensor import ShardedTensor
+from torch.distributed._tensor import (
+    DeviceMesh,
+    distribute_tensor,
+    DTensor,
+    Replicate,
+    Shard,
+)
+from torchsnapshot.io_preparer import prepare_write
+from torchsnapshot.io_types import WriteReq
+from torchsnapshot.manifest import Entry
 
 from .serialization import SUPPORTED_QUANTIZED_DTYPES
 
@@ -288,3 +298,38 @@ def async_test(coro: Callable[..., Awaitable[T]]) -> Callable[..., T]:
             loop.close()
 
     return wrapper
+
+
+def _tensor_test_case(
+    dtype: torch.dtype,
+    shape: List[int],
+    logical_path: str,
+    rank: int,
+    replicated: bool,
+) -> Tuple[torch.Tensor, Entry, List[WriteReq]]:
+    tensor = rand_tensor(shape, dtype=dtype)
+    entry, wrs = prepare_write(
+        obj=tensor, logical_path=logical_path, rank=rank, replicated=replicated
+    )
+    return tensor, entry, wrs
+
+
+def _dtensor_test_case(
+    dtype: torch.dtype,
+    shape: List[int],
+    logical_path: str,
+    rank: int,
+    replicated: bool,
+) -> Tuple[DTensor, Entry, List[WriteReq]]:
+    # WORLD_SIZE needs to be at least 4
+    mesh = DeviceMesh("cuda", mesh=[[0, 1], [2, 3]])
+    placements = [Replicate(), Shard(0)]
+    local_tensor = rand_tensor(shape, dtype=dtype)
+    dtensor = distribute_tensor(
+        tensor=local_tensor, device_mesh=mesh, placements=placements
+    )
+
+    entry, wrs = prepare_write(
+        obj=dtensor, logical_path=logical_path, rank=rank, replicated=replicated
+    )
+    return dtensor, entry, wrs
