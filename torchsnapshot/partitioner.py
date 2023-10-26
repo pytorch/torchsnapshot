@@ -6,18 +6,19 @@
 # LICENSE file in the root directory of this source tree.
 
 import copy
+import itertools
 import os
 from collections import defaultdict
 
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import cast, Dict, List, Tuple
 
 import numpy as np
 
 from .io_preparer import ObjectBufferStager, TensorBufferStager, TensorIOPreparer
 
 from .io_types import WriteReq
-from .manifest import ChunkedTensorEntry, Entry, is_replicated
+from .manifest import ChunkedTensorEntry, DTensorEntry, Entry, is_replicated
 from .pg_wrapper import PGWrapper
 
 
@@ -37,6 +38,80 @@ def _is_subpartitionable(
     return isinstance(entries[0], ChunkedTensorEntry) and all(
         entry == entries[0] for entry in entries
     )
+
+
+def _is_partially_replicated(
+    logical_path: str,
+    rank_to_entries: List[Dict[str, Entry]],
+) -> bool:
+    """
+    Return True for a DTensor entry that is both sharded and replicated
+    """
+    entries = [entries[logical_path] for entries in rank_to_entries]
+    return (
+        isinstance(entries[0], DTensorEntry)
+        # Tensor should not be entirely replicated nor entirely sharded
+        and 0
+        < sum(1 for dims in entries[0].dim_map if dims[0] == -1)  # pyre-ignore
+        < len(entries[0].dim_map)
+        and all(entry == entries[0] for entry in entries)
+    )
+
+
+def _assign_rank_write_loads(
+    rank_to_write_loads: List[Dict[str, List[_WriteLoad]]],
+    rank_to_size: List[int],
+    ranks_to_choose: List[int],
+    logical_path: str,
+    size: int,
+    partition_result: List[List[_WriteLoad]],
+) -> None:
+    """
+    Given a list of write loads for each rank, assign new write load to rank
+    with smallest load.
+    """
+    chosen_rank = min(ranks_to_choose, key=lambda rank: rank_to_size[rank])
+    partition_result[chosen_rank].extend(rank_to_write_loads[chosen_rank][logical_path])
+    rank_to_size[chosen_rank] += size
+
+
+def _get_replicated_ranks(
+    entry: DTensorEntry,
+) -> List[List[int]]:
+    """
+    Given a DTensorEntry across ranks, return a list of rank sets
+    where each set denotes a replicated shard.
+    """
+
+    mesh = entry.mesh
+    mesh_shape = np.array(entry.mesh).shape
+    dim_map = entry.dim_map
+    shard_dims = []
+    for dims in dim_map:
+        if dims[0] != -1:
+            shard_dims.extend(dims)
+    replicate_dims = set(range(len(mesh_shape))) - set(shard_dims)
+
+    # Programmatically generate slices of the device mesh that represent
+    # sets of replicated ranks. Iterate across sharded dims, taking the
+    # whole slice of the replicated dim each time.
+    #
+    # Example:
+    # 3D mesh = [[[0, 1], [2, 3]], [[4, 5], [6, 7]]], replicate on dim 0, shard on dims 1, 2
+    # The sets of replicated ranks returned is [[0, 4], [1, 5], [2, 6], [3, 7]]
+    slices_for_dims = []
+    mesh_shape = np.array(mesh).shape
+    for dim, size in enumerate(mesh_shape):
+        if dim in replicate_dims:
+            # Take entire dimension
+            slices_for_dims.append([slice(None)])
+        elif dim in shard_dims:
+            # Take one element at a time
+            slices_for_dims.append([slice(i, i + 1) for i in range(size)])
+
+    slice_combinations = list(itertools.product(*slices_for_dims))
+    # Gymnastics to take advantage of numpy's multidimensional slicing and squeeze
+    return [np.array(mesh)[s].flatten().tolist() for s in slice_combinations]
 
 
 def _partition_write_loads(
@@ -60,11 +135,37 @@ def _partition_write_loads(
             # If the logical path is not subpartitionable, all associated write
             # requests need to be fulfilled by a single rank.
             size = sum(wl.size for wl in rank_to_write_loads[0][logical_path])
-            chosen_rank = np.argmin(rank_to_size)
-            partition_result[chosen_rank].extend(
-                rank_to_write_loads[chosen_rank][logical_path]
-            )
-            rank_to_size[chosen_rank] += size
+            # If the entry is partially replicated (i.e., sharded across one mesh dim
+            # and replicated across another), then only choose from replicated ranks
+            # Only applicable to DTensorEntry.
+            if _is_partially_replicated(
+                logical_path=logical_path,
+                rank_to_entries=rank_to_entries,
+            ):
+                replicated_ranks = _get_replicated_ranks(
+                    entry=cast(DTensorEntry, rank_to_entries[0][logical_path]),
+                )
+                # For each set of replicated ranks, assign write load to rank
+                # with smallest current load
+                for ranks_to_choose in replicated_ranks:
+                    _assign_rank_write_loads(
+                        rank_to_write_loads=rank_to_write_loads,
+                        rank_to_size=rank_to_size,
+                        ranks_to_choose=ranks_to_choose,
+                        logical_path=logical_path,
+                        size=size,
+                        partition_result=partition_result,
+                    )
+            # Fully replicated case
+            else:
+                _assign_rank_write_loads(
+                    rank_to_write_loads=rank_to_write_loads,
+                    rank_to_size=rank_to_size,
+                    ranks_to_choose=list(range(world_size)),
+                    logical_path=logical_path,
+                    size=size,
+                    partition_result=partition_result,
+                )
         else:
             # If the logical path is subpartitionable, all associated write
             # loads are considered a unit of partitioning.

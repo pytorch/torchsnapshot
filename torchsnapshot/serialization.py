@@ -53,6 +53,18 @@ SUPPORTED_QUANTIZED_DTYPES: List[torch.dtype] = [
     torch.quint8,
 ]
 
+# https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/types.html#nccldatatype-t
+NCCL_SUPPORTED_DTYPES: List[torch.dtype] = [
+    torch.float64,
+    torch.float32,
+    torch.float16,
+    torch.bfloat16,
+    torch.int64,
+    torch.int32,
+    torch.int8,
+    torch.uint8,
+]
+
 # The approach is dumb. But we want to be 100% certain we can recognize the
 # dtype strings we persist.
 _DTYPE_TO_STRING: Dict[torch.dtype, str] = {
