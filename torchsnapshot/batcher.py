@@ -14,6 +14,7 @@ from enum import Enum
 from typing import cast, Dict, Iterator, List, Optional, Tuple
 
 import torch
+from torchsnapshot.manifest import DTensorEntry
 
 from .io_preparer import TensorBufferStager
 
@@ -327,8 +328,8 @@ def batch_write_requests(  # noqa
         )
 
     # Since we only update tensor write requests, we only need to update
-    # TensorEntrys. TensorEntrys can be nested in ChunkedTensorEntry and
-    # ShardedTensorEntry.
+    # TensorEntrys. TensorEntrys can be nested in ChunkedTensorEntry,
+    # DTensorEntry, and ShardedTensorEntry.
     location_to_entry: Dict[str, TensorEntry] = {}
     for entry in entries:
         if isinstance(entry, TensorEntry):
@@ -336,7 +337,7 @@ def batch_write_requests(  # noqa
         elif isinstance(entry, ChunkedTensorEntry):
             for chunk in entry.chunks:
                 location_to_entry[chunk.tensor.location] = chunk.tensor
-        elif isinstance(entry, ShardedTensorEntry):
+        elif isinstance(entry, ShardedTensorEntry) or isinstance(entry, DTensorEntry):
             for shard in entry.shards:
                 location_to_entry[shard.tensor.location] = shard.tensor
 

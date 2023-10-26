@@ -20,6 +20,7 @@ import torch.distributed as dist
 from torch.distributed._shard import sharded_tensor
 from torch.distributed._shard.sharded_tensor import ShardedTensor
 from torch.distributed._shard.sharding_spec import ChunkShardingSpec
+from torch.distributed._tensor import DeviceMesh, distribute_tensor, Replicate
 from torchsnapshot.batcher import (
     batch_read_requests,
     batch_write_requests,
@@ -34,6 +35,7 @@ from torchsnapshot.io_preparer import (
     ShardedTensorIOPreparer,
     TensorIOPreparer,
 )
+from torchsnapshot.io_preparers.dtensor import DTensorIOPreparer
 from torchsnapshot.io_types import WriteReq
 from torchsnapshot.manifest import Entry
 from torchsnapshot.serialization import ALL_SUPPORTED_DTYPES
@@ -53,8 +55,9 @@ def dummy_pg(use_gpu: bool) -> Generator[None, None, None]:
     """
     Fixture for initializing a single process pg.
     """
+    backend = "cpu:gloo,cuda:nccl" if use_gpu else "gloo"
     dist.init_process_group(
-        backend="nccl" if use_gpu else "gloo",
+        backend=backend,
         init_method=f"file:///tmp/{uuid.uuid4()}",
         rank=0,
         world_size=1,
@@ -141,6 +144,61 @@ def sharded_tensor_test_cases(
 
 
 @pytest.fixture
+def dtensor_test_cases(
+    use_gpu: bool,
+) -> TestCase:
+    """
+    Fixture for preparing DTensor test cases.
+
+    Returns:
+        - src tensors
+        - Entries produced by DTensorIOPreparer
+        - Write requests produced by DTensorIOPreparer
+        - dst tensors whose values are different from the src tensors
+    """
+
+    placements = [Replicate()]
+
+    srcs = []
+    dsts = []
+    for idx in range(NUM_TENSORS):
+        mesh = (
+            DeviceMesh("cuda", mesh=[0])
+            if use_gpu and idx % 2 == 0
+            else DeviceMesh("cpu", mesh=[0])
+        )
+        srcs.append(
+            distribute_tensor(
+                tensor=torch.rand(*TENSOR_SHAPE),
+                device_mesh=mesh,
+                placements=placements,
+            )
+        )
+        dsts.append(
+            distribute_tensor(
+                tensor=torch.rand(*TENSOR_SHAPE),
+                device_mesh=mesh,
+                placements=placements,
+            )
+        )
+
+    entries = []
+    write_reqs = []
+    for idx, tensor in enumerate(srcs):
+        entry, wrs = DTensorIOPreparer.prepare_write(
+            storage_path=f"dtensor_{idx}", obj=tensor
+        )
+        entries.append(entry)
+        write_reqs.extend(wrs)
+    return (
+        cast(List[torch.Tensor], srcs),
+        entries,
+        write_reqs,
+        cast(List[torch.Tensor], dsts),
+    )
+
+
+@pytest.fixture
 def tensor_test_cases(
     dtype: torch.dtype, enable_chunking: bool, use_gpu: bool
 ) -> TestCase:
@@ -193,6 +251,7 @@ def tensor_test_cases(
 def slab_size_bytes(
     tensor_test_cases: TestCase,
     sharded_tensor_test_cases: TestCase,
+    dtensor_test_cases: TestCase,
 ) -> int:
     """
     Fixture for determining the slab size.
@@ -202,7 +261,9 @@ def slab_size_bytes(
         that makes sure multiple slabs are needed.
     """
     total_tensor_sz_bytes = 0
-    for tensor in tensor_test_cases[0] + sharded_tensor_test_cases[0]:
+    for tensor in (
+        tensor_test_cases[0] + sharded_tensor_test_cases[0] + dtensor_test_cases[0]
+    ):
         total_tensor_sz_bytes += tensor_local_sz_bytes(tensor=tensor)
     # We want to test multiple slabs
     return total_tensor_sz_bytes // 8
@@ -210,7 +271,9 @@ def slab_size_bytes(
 
 @pytest.fixture
 def read_chunk_size_bytes(
-    tensor_test_cases: TestCase, sharded_tensor_test_cases: TestCase
+    tensor_test_cases: TestCase,
+    sharded_tensor_test_cases: TestCase,
+    dtensor_test_cases: TestCase,
 ) -> int:
     """
     Fixture for determining the read chunk size.
@@ -221,7 +284,9 @@ def read_chunk_size_bytes(
         multiple chunks.
     """
     min_tensor_sz_bytes = sys.maxsize
-    for tensor in tensor_test_cases[0] + sharded_tensor_test_cases[0]:
+    for tensor in (
+        tensor_test_cases[0] + sharded_tensor_test_cases[0] + dtensor_test_cases[0]
+    ):
         min_tensor_sz_bytes = min(
             min_tensor_sz_bytes, tensor_local_sz_bytes(tensor=tensor)
         )
@@ -239,6 +304,7 @@ def read_chunk_size_bytes(
 async def test_batcher(
     tensor_test_cases: TestCase,
     sharded_tensor_test_cases: TestCase,
+    dtensor_test_cases: TestCase,
     slab_size_bytes: int,
     read_chunk_size_bytes: Optional[int],
     enable_batched_read: bool,
@@ -249,7 +315,10 @@ async def test_batcher(
     Verify the behavior of the batcher.
     """
     src_tensors, entries, write_reqs, dst_tensors = (
-        a + b for a, b in zip(tensor_test_cases, sharded_tensor_test_cases)
+        a + b + c
+        for a, b, c in zip(
+            tensor_test_cases, sharded_tensor_test_cases, dtensor_test_cases
+        )
     )
 
     # Mix in some object write requests

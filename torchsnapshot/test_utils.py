@@ -175,9 +175,11 @@ def tensor_local_sz_bytes(tensor: torch.Tensor) -> int:
         for shard in tensor.local_shards():
             sz += tensor_local_sz_bytes(shard.tensor)
         return sz
+    elif type(tensor) == DTensor:
+        return tensor_local_sz_bytes(tensor.to_local())
     else:
         raise AssertionError(
-            f"The input must be a Tensor or ShardedTensor (got: {type(tensor)}."
+            f"The input must be a Tensor, ShardedTensor, or DTensor (got: {type(tensor)}."
         )
 
 
