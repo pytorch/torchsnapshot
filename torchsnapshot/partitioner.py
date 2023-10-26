@@ -38,7 +38,6 @@ class _WriteLoad:
 def _is_subpartitionable(
     logical_path: str,
     rank_to_entries: List[Dict[str, Entry]],
-    world_size: int,
 ) -> bool:
     entries = [entries[logical_path] for entries in rank_to_entries]
     return isinstance(entries[0], ChunkedTensorEntry) and all(
@@ -79,7 +78,6 @@ def _partition_write_loads(
         if not _is_subpartitionable(
             logical_path=logical_path,
             rank_to_entries=rank_to_entries,
-            world_size=world_size,
         ):
             # If the logical path is not subpartitionable, all associated write
             # requests need to be fulfilled by a single rank.
