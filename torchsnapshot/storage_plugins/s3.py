@@ -70,5 +70,8 @@ class S3StoragePlugin(StoragePlugin):
             key = os.path.join(self.root, path)
             await client.delete_object(Bucket=self.bucket, Key=key)
 
+    async def delete_dir(self, path: str) -> None:
+        raise NotImplementedError()
+
     async def close(self) -> None:
         pass

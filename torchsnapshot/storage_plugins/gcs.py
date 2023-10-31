@@ -209,6 +209,9 @@ class GCSStoragePlugin(StoragePlugin):
     async def delete(self, path: str) -> None:
         raise NotImplementedError()
 
+    async def delete_dir(self, path: str) -> None:
+        raise NotImplementedError()
+
     async def close(self) -> None:
         self.authed_session.close()
 

@@ -52,5 +52,9 @@ class FSStoragePlugin(StoragePlugin):
         path = os.path.join(self.root, path)
         await aiofiles.os.remove(path)
 
+    async def delete_dir(self, path: str) -> None:
+        path = os.path.join(self.root, path)
+        await aiofiles.os.rmdir(path)
+
     async def close(self) -> None:
         pass
