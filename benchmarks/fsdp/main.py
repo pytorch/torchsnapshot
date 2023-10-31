@@ -57,7 +57,7 @@ def create_model() -> nn.Module:
     model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
     rank_0_print(f"model parameters: {model_params:,}")
-    rank_0_print(f"model size: {model_size/(1024**3):.3} GB")
+    rank_0_print(f"model size: {model_size / (1024 ** 3):.3} GB")
 
     return FSDP(
         model,
