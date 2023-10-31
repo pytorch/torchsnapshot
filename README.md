@@ -14,7 +14,7 @@ A performant, memory-efficient checkpointing library for PyTorch applications, d
 
 ## Install
 
-Requires Python >= 3.7 and PyTorch >= 1.12
+Requires Python >= 3.8 and PyTorch >= 2.0.0
 
 From pip:
 
