@@ -342,7 +342,10 @@ def consolidate_replicated_entries(
             if not is_fully_replicated_entry(entry):
                 continue
             if logical_path in replicated_entries:
-                assert replicated_entries[logical_path] == entry
+                if replicated_entries[logical_path] != entry:
+                    raise ValueError(
+                        f"Paths for replicated entry do not match: replicated entries={replicated_entries[logical_path]} vs. entry={entry}"
+                    )
             else:
                 replicated_entries[logical_path] = entry
             del entries[logical_path]
