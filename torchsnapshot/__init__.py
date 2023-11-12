@@ -29,7 +29,7 @@ def _is_notebook() -> bool:
 # https://github.com/jupyter/notebook/issues/3397
 if _is_notebook():
     # @manual=fbsource//third-party/pypi/nest-asyncio:nest-asyncio
-    import nest_asyncio
+    import nest_asyncio  # lint-fixme: DisallowNestAsyncio
 
     nest_asyncio.apply()
 
