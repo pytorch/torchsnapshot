@@ -78,6 +78,7 @@ class DTensorIOPreparer:
             # Just chunk over largest dimension
             largest_shard_dim = torch.argmax(torch.tensor(local_shape)).item()
 
+        # pyre-fixme[7]: Expected `int` but got `Union[bool, float, int]`.
         return largest_shard_dim
 
     @staticmethod
