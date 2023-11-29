@@ -27,6 +27,7 @@ WORLD_SIZE = 4
 class TestDTensorUtils(DTensorTestBase):
     @with_comms
     @skip_if_lt_x_gpu(WORLD_SIZE)
+    # pyre-fixme[3]: Return type must be annotated.
     def test_is_sharded_is_replicated(self):
         mesh = DeviceMesh("cuda", mesh=[[0, 1], [2, 3]])
         placements = [Replicate(), Shard(0)]

@@ -31,7 +31,12 @@ WORLD_SIZE = 4
 class TestManifestUtils(DTensorTestBase):
     @parametrize("dtype", NCCL_SUPPORTED_DTYPES)
     @skip_if_lt_x_gpu(WORLD_SIZE)
+    # pyre-fixme[56]: While applying decorator
+    #  `torch.testing._internal.distributed._tensor.common_dtensor.with_comms`: For 1st
+    #  argument expected `(object) -> object` but got `(self: TestManifestUtils, dtype:
+    #  dtype) -> Any`.
     @with_comms
+    # pyre-fixme[3]: Return type must be annotated.
     def test_get_replicated_ranks(self, dtype: torch.dtype):
         logical_path = "foo"
         tensor, entry, wrs = _dtensor_test_case(
@@ -41,13 +46,19 @@ class TestManifestUtils(DTensorTestBase):
             rank=dist.get_rank(),
             replicated=True,
         )
+        # pyre-fixme[6]: For 1st argument expected `DTensorEntry` but got `Entry`.
         actual_repranks = _get_replicated_ranks(entry=entry)
         expected_repranks = [[0, 2], [1, 3]]
         assert actual_repranks == expected_repranks
 
     @parametrize("dtype", NCCL_SUPPORTED_DTYPES)
     @skip_if_lt_x_gpu(WORLD_SIZE)
+    # pyre-fixme[56]: While applying decorator
+    #  `torch.testing._internal.distributed._tensor.common_dtensor.with_comms`: For 1st
+    #  argument expected `(object) -> object` but got `(self: TestManifestUtils, dtype:
+    #  dtype) -> Any`.
     @with_comms
+    # pyre-fixme[3]: Return type must be annotated.
     def test_is_partially_replicated(self, dtype: torch.dtype):
         logical_path = "foo"
         tensor, entry, wrs = _dtensor_test_case(
@@ -60,6 +71,7 @@ class TestManifestUtils(DTensorTestBase):
         assert is_partially_replicated_entry(entry=entry)
 
         # Only replicated
+        # pyre-fixme[16]: `Entry` has no attribute `dim_map`.
         entry.dim_map = [-1, -1]
         assert not is_partially_replicated_entry(entry=entry)
 

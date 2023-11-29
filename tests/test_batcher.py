@@ -315,6 +315,11 @@ async def test_batcher(
     Verify the behavior of the batcher.
     """
     src_tensors, entries, write_reqs, dst_tensors = (
+        # pyre-fixme[6]: For 1st argument expected `List[Tensor]` but got
+        #  `Union[List[Entry], List[WriteReq], List[Tensor]]`.
+        # pyre-fixme[58]: `+` is not supported for operand types
+        #  `List[torch._tensor.Tensor]` and `Union[List[Entry], List[WriteReq],
+        #  List[torch._tensor.Tensor]]`.
         a + b + c
         for a, b, c in zip(
             tensor_test_cases, sharded_tensor_test_cases, dtensor_test_cases
@@ -326,7 +331,10 @@ async def test_batcher(
         entry, wrs = ObjectIOPreparer.prepare_write(
             storage_path=f"object_{idx}", obj=object()
         )
+        # pyre-fixme[6]: For 1st argument expected `Tensor` but got `ObjectEntry`.
         entries.append(entry)
+        # pyre-fixme[6]: For 1st argument expected `Iterable[Tensor]` but got
+        #  `List[WriteReq]`.
         write_reqs.extend(wrs)
 
     # The order of the write request shouldn't matter so we shuffle it
@@ -339,16 +347,25 @@ async def test_batcher(
     # Expect the batcher to fail if it did not receive all affected entries
     # NOTE: don't shuffle the entries as they have to be aligned with
     # src_tensors and dst_tensors.
+    # pyre-fixme[6]: For 1st argument expected `BufferStager` but got `Tensor`.
     if is_batchable(entries[0]):
         with pytest.raises(RuntimeError):
             batch_write_requests(
+                # pyre-fixme[6]: For 1st argument expected `List[Entry]` but got
+                #  `List[Tensor]`.
                 entries=entries[1:],
+                # pyre-fixme[6]: For 2nd argument expected `List[WriteReq]` but got
+                #  `List[Tensor]`.
                 write_reqs=write_reqs,
             )
 
     # Batch the write requests
     entries, batched_write_reqs = batch_write_requests(
-        entries=entries, write_reqs=copy.deepcopy(write_reqs)
+        # pyre-fixme[6]: For 1st argument expected `List[Entry]` but got `List[Tensor]`.
+        entries=entries,
+        # pyre-fixme[6]: For 2nd argument expected `List[WriteReq]` but got
+        #  `List[Tensor]`.
+        write_reqs=copy.deepcopy(write_reqs),
     )
     assert len(batched_write_reqs) < len(write_reqs)
     write_reqs = batched_write_reqs
