@@ -75,8 +75,8 @@ class TestSnapshotWithDTensor(DTensorTestBase):
             )
         else:
             mesh_2d = init_device_mesh("cuda", (2, WORLD_SIZE // 2))
-            intra_node_pg = mesh_2d.get_dim_groups(mesh_dim=1)
-            inter_node_pg = mesh_2d.get_dim_groups(mesh_dim=0)
+            intra_node_pg = mesh_2d.get_group(mesh_dim=1)
+            inter_node_pg = mesh_2d.get_group(mesh_dim=0)
             model = FSDP(
                 DummyModel().cuda(),
                 # pyre-fixme[6]: For 2nd argument expected `Union[None,
