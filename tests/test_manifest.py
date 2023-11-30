@@ -686,6 +686,8 @@ def test_get_local_manifest(manifest: Dict[str, Entry], rank: int) -> None:
             expected_local_manifest[local_path] = entry
 
     merged_local_manifest = _update_local_manifest_with_merged_entries(local_manifest)
+    # pyre-fixme[6]: For 1st argument expected `SupportsKeysAndGetItem[typing.Any,
+    #  typing.Any]` but got `None`.
     expected_local_manifest.update(merged_local_manifest)
 
     if rank >= _WORLD_SIZE:
@@ -857,4 +859,5 @@ def _update_local_manifest_with_merged_entries(
             mesh=[[0, 1], [2, 3]],
             dim_map=[[-1], [0]],
         )
+    # pyre-fixme[7]: Expected `None` but got `Dict[typing.Any, typing.Any]`.
     return merged_local_manifest

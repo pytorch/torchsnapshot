@@ -41,6 +41,8 @@ def _create_fsdp_model(
 @pytest.mark.skipif(
     not torch.cuda.is_available(), reason="The test requires GPUs to run."
 )
+# pyre-fixme[56]: Pyre was not able to infer the type of the decorator
+#  `pytest.mark.gpu_only`.
 @pytest.mark.gpu_only
 @pytest.mark.usefixtures("toggle_batching")
 # Sharded state dict will test ShardedTensors, full tests Tensors
@@ -76,7 +78,11 @@ def test_model_and_optim_fsdp(tmp_path: Path, state_dict_type: StateDictType) ->
     bar_optim.step(closure=None)
     bar_optim.zero_grad(set_to_none=True)
 
+    # pyre-fixme[6]: For 1st argument expected `FullyShardedDataParallel` but got
+    #  `Module`.
     foo_fsdp_optim = FSDPOptimizerAdapter(foo_fsdp, foo_optim)
+    # pyre-fixme[6]: For 1st argument expected `FullyShardedDataParallel` but got
+    #  `Module`.
     bar_fsdp_optim = FSDPOptimizerAdapter(bar_fsdp, bar_optim)
 
     assert not check_state_dict_eq(

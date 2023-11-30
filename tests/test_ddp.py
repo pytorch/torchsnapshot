@@ -172,4 +172,8 @@ def test_ddp_save_load_non_ddp(tmp_path: Path) -> None:
     # The utility consume_prefix_in_state_dict_if_present re-inserts keys into the state dict
     # which changes the order they appear in the state dict, as it is an OrderedDict.
     # to test for equality, explicitly sort the state dicts by key before comparison
+    # pyre-fixme[6]: For 1st argument expected `Dict[typing.Any, typing.Any]` but
+    #  got `List[str]`.
+    # pyre-fixme[6]: For 2nd argument expected `Dict[typing.Any, typing.Any]` but
+    #  got `List[str]`.
     assert check_state_dict_eq(sorted(restored_state_dict), sorted(consumed_state_dict))
