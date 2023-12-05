@@ -34,7 +34,7 @@ class Model(torch.nn.Module):
         return self.layers(X)
 
 
-if __name__ == "__main__":
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--work-dir", default="/tmp")
     parser.add_argument("--restore-path", default=None)
@@ -80,3 +80,7 @@ if __name__ == "__main__":
             f"{args.work_dir}/{uuid.uuid4()}", app_state
         )
         print(f"Snapshot path: {snapshot.path}")
+
+
+if __name__ == "__main__":
+    main()  # pragma: no cover

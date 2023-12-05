@@ -233,7 +233,7 @@ def main(
     print(f"Peak RSS delta: {max(rss_deltas) // 1024**2}MB")
 
 
-if __name__ == "__main__":
+def invoke_main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--benchmark-type", type=BenchmarkType, choices=list(BenchmarkType)
@@ -266,3 +266,7 @@ if __name__ == "__main__":
             mb_per_gpu=args.mb_per_gpu,
             benchmark_load=args.benchmark_load,
         )
+
+
+if __name__ == "__main__":
+    invoke_main()  # pragma: no cover

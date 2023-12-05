@@ -181,7 +181,7 @@ def train(work_dir: str, max_epochs: int, snapshot_path: Optional[str] = None) -
             print(path)
 
 
-if __name__ == "__main__":
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--work-dir", default="/tmp")
     parser.add_argument("--max-epochs", type=int, default=2)
@@ -209,3 +209,7 @@ if __name__ == "__main__":
             max_epochs=args.max_epochs,
             snapshot_path=args.snapshot_path,
         )
+
+
+if __name__ == "__main__":
+    main()  # pragma: no cover

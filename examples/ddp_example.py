@@ -99,7 +99,7 @@ def train(
     dist.destroy_process_group()
 
 
-if __name__ == "__main__":
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--work-dir", default="/tmp")
     parser.add_argument("--num-processes", type=int, default=2)
@@ -118,3 +118,7 @@ if __name__ == "__main__":
     )
 
     pet.elastic_launch(lc, entrypoint=train)(args.work_dir, args.snapshot_path)
+
+
+if __name__ == "__main__":
+    main()  # pragma: no cover

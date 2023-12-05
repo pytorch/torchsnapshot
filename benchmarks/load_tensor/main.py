@@ -80,7 +80,7 @@ def benchmark_torch_save_fsspec(work_dir: str, gpu_tensor: torch.Tensor) -> None
     )
 
 
-if __name__ == "__main__":
+def main() -> None:
     with tempfile.TemporaryDirectory() as path:
         parser = argparse.ArgumentParser()
         parser.add_argument("--work-dir", default=str(path))
@@ -90,3 +90,7 @@ if __name__ == "__main__":
         gpu_tensor = torch.rand(*TENSOR_DIMS, device=device)
         benchmark_torch_save_fsspec(work_dir=args.work_dir, gpu_tensor=gpu_tensor)
         benchmark_torchsnapshot(work_dir=args.work_dir, gpu_tensor=gpu_tensor)
+
+
+if __name__ == "__main__":
+    main()  # pragma: no cover
