@@ -28,6 +28,8 @@ from torch.distributed._shard.sharded_tensor import ShardedTensor
 from torch.distributed._tensor import DTensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torchsnapshot.dtensor_utils import is_sharded
+from torchsnapshot.manifest import ShardedTensorEntry
+from torchsnapshot.serialization import string_to_dtype
 
 from .batcher import batch_read_requests, batch_write_requests
 
@@ -384,8 +386,9 @@ class Snapshot:
                 type. Otherwise, ``obj_out`` is ignored.
 
                 .. note::
-                    When the target object is a ``ShardedTensor``, ``obj_out``
-                    must be specified.
+                    When the target object is a ``ShardedTensor``, and ``obj_out``
+                    is None, will return cpu, full tensor version of the sharded
+                    tensor.
 
             memory_budget_bytes (int, optional): When specified, the read
                 operation will keep the temporary memory buffer size below this
@@ -435,6 +438,25 @@ class Snapshot:
         entry = merged_sd_entries.get(unranked_path) or manifest[unranked_path]
         if isinstance(entry, PrimitiveEntry):
             return cast(T, entry.get_value())
+        elif obj_out is None and isinstance(entry, ShardedTensorEntry):
+            # construct tensor for `obj_out` to fill in-place
+            # by reading shard metadata
+            first_shard = entry.shards[0]
+            shape = [
+                size + offset
+                for size, offset in zip(first_shard.sizes, first_shard.offsets)
+            ]
+            dtype = entry.shards[0].tensor.dtype
+            for shard in entry.shards[1:]:
+                size = shard.sizes
+                offset = shard.offsets
+                # sum element-wise
+                candidate_shape = [x + y for x, y in zip(size, offset)]
+                if all(x >= y for x, y in zip(candidate_shape, shape)):
+                    shape = candidate_shape
+            tensor = torch.empty(shape, dtype=string_to_dtype(dtype))
+            obj_out = tensor
+
         read_reqs, fut = prepare_read(
             entry=entry,
             obj_out=obj_out,
