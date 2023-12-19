@@ -85,7 +85,7 @@
           <li>
           <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
               <a class="resource-option with-down-arrow">
-                PyTorch Edge
+                Edge
               </a>
               <div class="resources-dropdown-menu">
                 <a class="nav-dropdown-item" href="https://pytorch.org/edge">
@@ -464,8 +464,9 @@ into <code class="docutils literal notranslate"><span class="pre">obj_out</span>
 type. Otherwise, <code class="docutils literal notranslate"><span class="pre">obj_out</span></code> is ignored.</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>When the target object is a <code class="docutils literal notranslate"><span class="pre">ShardedTensor</span></code>, <code class="docutils literal notranslate"><span class="pre">obj_out</span></code>
-must be specified.</p>
+<p>When the target object is a <code class="docutils literal notranslate"><span class="pre">ShardedTensor</span></code>, and <code class="docutils literal notranslate"><span class="pre">obj_out</span></code>
+is None, will return cpu, full tensor version of the sharded
+tensor.</p>
 </div>
 </p></li>
 <li><p><strong>memory_budget_bytes</strong> (<em>int</em><em>, </em><em>optional</em>) – When specified, the read
