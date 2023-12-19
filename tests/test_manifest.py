@@ -861,3 +861,9 @@ def _update_local_manifest_with_merged_entries(
         )
     # pyre-fixme[7]: Expected `None` but got `Dict[typing.Any, typing.Any]`.
     return merged_local_manifest
+
+
+def test_get_tensor_shape() -> None:
+    # pyre-ignore Undefined attribute [16]: `Entry` has no attribute `shards`.
+    shards = [_MANIFEST_0[f"{i}/foo/qux"].shards[0] for i in range(4)]
+    assert ShardedTensorEntry(shards=shards).get_tensor_shape() == [4, 8]

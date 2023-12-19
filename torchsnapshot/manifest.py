@@ -137,6 +137,34 @@ class ShardedTensorEntry(Entry):
         ]
         return cls(**yaml_obj)
 
+    def get_tensor_shape(self) -> List[int]:
+        """
+        Computes the shape of the entire tensor.
+
+        Returns:
+            List[int]: shape of the entire tensor
+
+        .. note::
+            The shape can be computed by finding the maximum (size + offset sum)
+            tuple in all of the shards. The shard's size/offset are equal or
+            increasing in each dimension as the shards progress in the list.
+        """
+        assert len(self.shards) > 0, "No shards found."
+
+        first_shard = self.shards[0]
+        shape = [
+            size + offset
+            for size, offset in zip(first_shard.sizes, first_shard.offsets)
+        ]
+        for shard in self.shards[1:]:
+            sizes = shard.sizes
+            offsets = shard.offsets
+            # sum element-wise
+            candidate_shape = [size + offset for size, offset in zip(sizes, offsets)]
+            if all(x >= y for x, y in zip(candidate_shape, shape)):
+                shape = candidate_shape
+        return shape
+
 
 @dataclass
 class ChunkedTensorEntry(Entry):
