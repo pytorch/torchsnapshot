@@ -303,7 +303,7 @@ class Snapshot:
             unique_id=unique_id,
         )
 
-    def restore(self, app_state: AppState) -> None:
+    def restore(self, app_state: AppState, strict: bool = True) -> None:
         """
         Restores the application state from the snapshot.
 
@@ -312,6 +312,10 @@ class Snapshot:
                 ``app_state`` needs to be either identical to or a subset of the
                 ``app_state`` used for :func:`Snapshot.take` when the snapshot was
                 taken.
+            strict (bool, optional): If ``True``, raises an error if the expected
+                state_dict keys in the snapshot do not match the actual keys in
+                the :class:`torch.nn.Module`. This only applies to :class:`torch.nn.Module`
+                and not other objects being restored in ``app_state``.
         """
         torch._C._log_api_usage_once("torchsnapshot.Snapshot.restore")
         self._validate_app_state(app_state)
@@ -340,6 +344,7 @@ class Snapshot:
             self._load_stateful(
                 stateful_key=key,
                 stateful=app_state.get(key),
+                strict=strict,
                 storage=storage,
                 pg=pg_wrapper,
                 event_loop=event_loop,
@@ -352,6 +357,7 @@ class Snapshot:
             self._load_stateful(
                 stateful_key=key,
                 stateful=stateful,
+                strict=strict,
                 storage=storage,
                 pg=pg_wrapper,
                 event_loop=event_loop,
@@ -662,6 +668,7 @@ class Snapshot:
         self,
         stateful_key: str,
         stateful: Optional[Stateful],
+        strict: bool,
         storage: StoragePlugin,
         pg: PGWrapper,
         event_loop: asyncio.AbstractEventLoop,
@@ -737,7 +744,11 @@ class Snapshot:
             flattened={k: fut.obj for k, fut in futs.items()},
             prefix=stateful_key,
         )
-        stateful.load_state_dict(state_dict)
+
+        if isinstance(stateful, torch.nn.Module):
+            stateful.load_state_dict(state_dict, strict=strict)
+        else:
+            stateful.load_state_dict(state_dict)
 
     @staticmethod
     def _write_snapshot_metadata(

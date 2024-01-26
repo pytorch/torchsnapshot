@@ -76,6 +76,27 @@ def test_nn_sequential(tmp_path: Path) -> None:
 
 
 @pytest.mark.usefixtures("toggle_batching")
+def test_strict_false(tmp_path: Path) -> None:
+    foo = torch.nn.Sequential(
+        torch.nn.Linear(128, 64),
+        torch.nn.Linear(64, 32),
+        torch.nn.Linear(32, 16),
+    )
+    bar = torch.nn.Sequential(
+        torch.nn.Linear(128, 64),
+        torch.nn.Linear(64, 32),
+        torch.nn.Linear(32, 16),
+        torch.nn.Linear(16, 8),
+    )
+    assert not check_state_dict_eq(foo.state_dict(), bar.state_dict())
+
+    expected_dict = foo.state_dict()
+    snapshot = Snapshot.take(str(tmp_path), {"foo": foo})
+    snapshot.restore({"foo": bar}, strict=False)
+    assert check_state_dict_eq(foo.state_dict(), expected_dict)
+
+
+@pytest.mark.usefixtures("toggle_batching")
 def test_adagrad(tmp_path: Path) -> None:
     model = torch.nn.Sequential(
         torch.nn.Linear(128, 64),
