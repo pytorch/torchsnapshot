@@ -172,8 +172,12 @@ class Snapshot:
         pg_wrapper = PGWrapper(pg=pg)
 
         unique_id = _generate_random_int64()
+        rank = pg_wrapper.get_rank()
         log_event(
-            Event(name="take", metadata={"action": "start", "unique_id": unique_id})
+            Event(
+                name="take",
+                metadata={"action": "start", "unique_id": unique_id, "rank": rank},
+            )
         )
 
         path, coalesced_replicated = cls._coalesce_path_and_replicated(
@@ -214,7 +218,12 @@ class Snapshot:
         log_event(
             Event(
                 name="take",
-                metadata={"action": "end", "unique_id": unique_id, "is_success": True},
+                metadata={
+                    "action": "end",
+                    "unique_id": unique_id,
+                    "is_success": True,
+                    "rank": rank,
+                },
             )
         )
         return snapshot
@@ -257,9 +266,11 @@ class Snapshot:
         pg_wrapper = PGWrapper(pg=pg)
 
         unique_id = _generate_random_int64()
+        rank = pg_wrapper.get_rank()
         log_event(
             Event(
-                name="async_take", metadata={"action": "start", "unique_id": unique_id}
+                name="async_take",
+                metadata={"action": "start", "unique_id": unique_id, "rank": rank},
             )
         )
 
@@ -287,7 +298,11 @@ class Snapshot:
         log_event(
             Event(
                 name="async_take",
-                metadata={"action": "end_collection", "unique_id": unique_id},
+                metadata={
+                    "action": "end_collection",
+                    "unique_id": unique_id,
+                    "rank": rank,
+                },
             )
         )
 
@@ -324,8 +339,12 @@ class Snapshot:
         pg_wrapper = PGWrapper(self.pg)
 
         unique_id = _generate_random_int64()
+        rank = pg_wrapper.get_rank()
         log_event(
-            Event(name="restore", metadata={"action": "start", "unique_id": unique_id})
+            Event(
+                name="restore",
+                metadata={"action": "start", "unique_id": unique_id, "rank": rank},
+            )
         )
 
         storage = url_to_storage_plugin_in_event_loop(
@@ -368,7 +387,12 @@ class Snapshot:
         log_event(
             Event(
                 name="restore",
-                metadata={"action": "end", "unique_id": unique_id, "is_success": True},
+                metadata={
+                    "action": "end",
+                    "unique_id": unique_id,
+                    "is_success": True,
+                    "rank": rank,
+                },
             )
         )
 
@@ -886,7 +910,7 @@ class PendingSnapshot:
         metadata: SnapshotMetadata,
         storage: StoragePlugin,
         event_loop: asyncio.AbstractEventLoop,
-        unique_id: int,
+        unique_id: Optional[int],
         storage_options: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.path = path
@@ -964,6 +988,7 @@ class PendingSnapshot:
                     "action": "end",
                     "unique_id": self._unique_id,
                     "is_success": succeeded,
+                    "rank": rank,
                 },
             )
         )
