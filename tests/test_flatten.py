@@ -176,9 +176,9 @@ _EXPECTED_FLATTENED = {
 def test_simple_flatten_with_prefix() -> None:
     manifest, flattened = flatten(obj=_OBJ, prefix="my/prefix")
     expected_manifest = {
-        os.path.join(_encode("my/prefix"), path)
-        if path
-        else _encode("my/prefix"): entry
+        (
+            os.path.join(_encode("my/prefix"), path) if path else _encode("my/prefix")
+        ): entry
         for path, entry in _EXPECTED_MANIFEST.items()
     }
     expected_flattened = {

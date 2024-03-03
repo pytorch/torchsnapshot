@@ -135,9 +135,9 @@ class GPUBatchedBufferStager(BatchedBufferStager):
                 raise AssertionError(
                     "GPUBatchedBufferStager only supports GPU tensors."
                 )
-        self.byte_range_to_buffer_stager: Dict[
-            Tuple[int, int], TensorBufferStager
-        ] = cast(Dict[Tuple[int, int], TensorBufferStager], byte_range_to_buffer_stager)
+        self.byte_range_to_buffer_stager: Dict[Tuple[int, int], TensorBufferStager] = (
+            cast(Dict[Tuple[int, int], TensorBufferStager], byte_range_to_buffer_stager)
+        )
 
     async def stage_buffer(self, executor: Optional[Executor] = None) -> BufferType:
         try:

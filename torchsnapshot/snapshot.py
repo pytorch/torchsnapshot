@@ -597,11 +597,11 @@ class Snapshot:
                 rank=pg_wrapper.get_rank(),
                 replicated=logical_path in replicated_paths,
                 is_async_snapshot=is_async_snapshot,
-                _tensor_prepare_func=functools.partial(
-                    _custom_tensor_prepare_func, logical_path
-                )
-                if _custom_tensor_prepare_func is not None
-                else None,
+                _tensor_prepare_func=(
+                    functools.partial(_custom_tensor_prepare_func, logical_path)
+                    if _custom_tensor_prepare_func is not None
+                    else None
+                ),
             )
             # Primitive entries don't have write requests
             # and don't need to be partitioned

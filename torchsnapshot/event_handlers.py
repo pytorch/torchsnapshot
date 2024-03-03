@@ -20,8 +20,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 @runtime_checkable
 class EventHandler(Protocol):
-    def handle_event(self, event: Event) -> None:
-        ...
+    def handle_event(self, event: Event) -> None: ...
 
 
 _log_handlers: List[EventHandler] = []

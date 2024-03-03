@@ -385,9 +385,9 @@ async def test_batcher(
         rrs, _ = prepare_read(
             entry=entry,
             obj_out=obj_out,
-            buffer_size_limit_bytes=read_chunk_size_bytes
-            if enable_chunked_read
-            else None,
+            buffer_size_limit_bytes=(
+                read_chunk_size_bytes if enable_chunked_read else None
+            ),
         )
         read_reqs.extend(rrs)
 
