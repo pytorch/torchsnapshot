@@ -161,10 +161,6 @@ def prepare_read(
         A list of class::`ReadReq` for loading the object.
     """
     if isinstance(entry, ShardedTensorEntry):
-        if obj_out is None:
-            raise RuntimeError(
-                "Reading a ShardedTensor without a runtime object is not supported."
-            )
         return ShardedTensorIOPreparer.prepare_read(entry, obj_out)
     elif isinstance(entry, ChunkedTensorEntry):
         return ChunkedTensorIOPreparer.prepare_read(

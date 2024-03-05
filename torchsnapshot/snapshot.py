@@ -28,8 +28,6 @@ from torch.distributed._shard.sharded_tensor import ShardedTensor
 from torch.distributed._tensor import DTensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torchsnapshot.dtensor_utils import is_sharded
-from torchsnapshot.manifest import ShardedTensorEntry
-from torchsnapshot.serialization import string_to_dtype
 
 from .batcher import batch_read_requests, batch_write_requests
 
@@ -468,13 +466,6 @@ class Snapshot:
         entry = merged_sd_entries.get(unranked_path) or manifest[unranked_path]
         if isinstance(entry, PrimitiveEntry):
             return cast(T, entry.get_value())
-        elif obj_out is None and isinstance(entry, ShardedTensorEntry):
-            # construct tensor for `obj_out` to fill in-place
-            # by reading shard metadata
-            shape = entry.get_tensor_shape()
-            dtype = entry.shards[0].tensor.dtype
-            tensor = torch.empty(shape, dtype=string_to_dtype(dtype))
-            obj_out = tensor
 
         read_reqs, fut = prepare_read(
             entry=entry,

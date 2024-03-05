@@ -37,7 +37,7 @@ from torchsnapshot.io_preparers.tensor import (
 from torchsnapshot.io_types import BufferConsumer, Future, ReadReq, WriteReq
 from torchsnapshot.knobs import get_max_shard_size_bytes
 from torchsnapshot.manifest import Shard, ShardedTensorEntry, TensorEntry
-from torchsnapshot.serialization import Serializer
+from torchsnapshot.serialization import Serializer, string_to_dtype
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -197,10 +197,11 @@ class ShardedTensorIOPreparer:
         cls,
         entry: ShardedTensorEntry,
         obj_out: Optional[ShardedTensor] = None,
-    ) -> Tuple[List[ReadReq], Future[ShardedTensor]]:
+    ) -> Tuple[List[ReadReq], Future[ShardedTensor | torch.Tensor]]:
+        # Note: in case obj_out is None, a Future[Tensor] will be returned
         if obj_out is None:
-            raise RuntimeError(
-                "Reading a ShardedTensor without a runtime object is not supported."
+            obj_out = ShardedTensorIOPreparer.empty_tensor_from_sharded_tensor_entry(
+                entry
             )
 
         global_shape = cls._get_global_shape(entry=entry)
@@ -266,6 +267,17 @@ class ShardedTensorIOPreparer:
                 )
             )
         return read_reqs, Future(obj=obj_out)
+
+    @staticmethod
+    def empty_tensor_from_sharded_tensor_entry(
+        entry: ShardedTensorEntry,
+    ) -> torch.Tensor:
+        # construct tensor for to fill in-place
+        # by reading shard metadata
+        shape = entry.get_tensor_shape()
+        dtype = entry.shards[0].tensor.dtype
+        tensor = torch.empty(shape, dtype=string_to_dtype(dtype))
+        return tensor
 
 
 @dataclass
