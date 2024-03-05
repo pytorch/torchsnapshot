@@ -16,11 +16,12 @@ import os
 import random
 import sys
 import traceback
+from asyncio import AbstractEventLoop
 
 from collections import defaultdict
 from datetime import timedelta
 from threading import Thread
-from typing import Any, Callable, cast, Dict, List, Optional, Set, Tuple, TypeVar
+from typing import Any, Callable, cast, Dict, List, Optional, Set, Tuple, TypeVar, Union
 
 import torch
 import torch.distributed as dist
@@ -722,6 +723,27 @@ class Snapshot:
             tensor_requests=list(flattened.keys()),
         )
 
+        # Build the originally saved state dict and use it to restore the stateful
+        state_dict = self._get_state_dict_for_manifest(
+            stateful_key, manifest, flattened, pg, storage, event_loop
+        )
+
+        if isinstance(stateful, torch.nn.Module):
+            stateful.load_state_dict(state_dict, strict=strict)
+        else:
+            stateful.load_state_dict(state_dict)
+
+    @staticmethod
+    # pyre-fixme: inflate returns Dict[Any,Any]
+    # Missing return annotation [3]: Return type must be specified as type that does not contain `Any`
+    def _get_state_dict_for_manifest(
+        stateful_key: str,
+        manifest: Manifest,
+        flattened: Dict[str, Union[torch.Tensor, ShardedTensor, DTensor]],
+        pg: PGWrapper,
+        storage: StoragePlugin,
+        event_loop: AbstractEventLoop,
+    ) -> Dict[Any, Any]:
         container_entries = {}
         read_reqs: List[ReadReq] = []
         futs = {}
@@ -754,16 +776,11 @@ class Snapshot:
         )
 
         # Build the originally saved state dict and use it to restore the stateful
-        state_dict = inflate(
+        return inflate(
             manifest=container_entries,
             flattened={k: fut.obj for k, fut in futs.items()},
             prefix=stateful_key,
         )
-
-        if isinstance(stateful, torch.nn.Module):
-            stateful.load_state_dict(state_dict, strict=strict)
-        else:
-            stateful.load_state_dict(state_dict)
 
     @staticmethod
     def _write_snapshot_metadata(
