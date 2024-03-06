@@ -680,6 +680,45 @@ class Snapshot:
                     f"Expected Stateful in app_state for key {key}, got {value_type}."
                 )
 
+    # pyre-fixme: inflate returns Dict[Any,Any]
+    # Missing return annotation [3]: Return type must be specified as type that does not contain `Any`
+    def get_state_dict_for_key(self, key: str) -> Dict[Any, Any]:
+        """
+        Gets the state dict for a selected key in the snapshot.
+        This is useful in case you want to get the state dict without loading it to the stateful.
+
+        Args:
+            key (str): The key to get the state dict for. Assumes the key was stored as a topline
+                key in the snapshot.
+
+        Returns:
+            The state dict associated with the key.
+
+        Below is a usage example
+
+        .. code-block:: python
+
+            snapshot = Snapshot.take(path=..., app_state={"stateful_key": module})
+            module_state_dict = snapshot.get_state_dict_for_key("stateful_key")
+        """
+        event_loop = asyncio.new_event_loop()
+        pg = PGWrapper(self.pg)
+
+        manifest, _ = get_manifest_for_rank(metadata=self.metadata, rank=pg.get_rank())
+
+        # filter out irrelevant entries from the manifest
+        manifest = {k: v for k, v in manifest.items() if k.split("/")[0] == key}
+
+        storage = url_to_storage_plugin_in_event_loop(
+            url_path=self.path,
+            event_loop=event_loop,
+            storage_options=self._storage_options,
+        )
+
+        return self._get_state_dict_for_manifest(
+            key, manifest, {}, pg, storage, event_loop
+        )
+
     def _load_stateful(  # noqa
         self,
         stateful_key: str,
