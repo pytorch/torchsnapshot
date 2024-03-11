@@ -840,7 +840,14 @@ class Snapshot:
         storage: StoragePlugin, event_loop: asyncio.AbstractEventLoop
     ) -> SnapshotMetadata:
         read_io = ReadIO(path=SNAPSHOT_METADATA_FNAME)
-        storage.sync_read(read_io=read_io, event_loop=event_loop)
+        try:
+            storage.sync_read(read_io=read_io, event_loop=event_loop)
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to read {SNAPSHOT_METADATA_FNAME}. "
+                "Ensure path to snapshot is correct, "
+                "otherwise snapshot is likely incomplete or corrupted."
+            ) from e
         yaml_str = read_io.buf.getvalue().decode("utf-8")
         return SnapshotMetadata.from_yaml(yaml_str)
 
