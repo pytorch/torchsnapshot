@@ -10,6 +10,7 @@
 import copy
 from pathlib import Path
 from typing import Any, Dict, List
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -226,3 +227,21 @@ def test_different_state_dict_structure_on_load(tmp_path: Path) -> None:
     snapshot = Snapshot.take(app_state={"state": src}, path=str(tmp_path))
     snapshot.restore(app_state={"state": dst})
     assert check_state_dict_eq(src.state_dict(), dst.state_dict())
+
+
+@pytest.mark.usefixtures("toggle_batching")
+def test_snapshot_metadata_error(tmp_path: Path) -> None:
+    mock_storage_plugin = MagicMock()
+    mock_event_loop = MagicMock()
+    mock_storage_plugin.sync_read.side_effect = Exception(
+        "Mock error reading from storage"
+    )
+    with pytest.raises(
+        expected_exception=RuntimeError,
+        match=(
+            "Failed to read .snapshot_metadata. "
+            "Ensure path to snapshot is correct, "
+            "otherwise snapshot is likely incomplete or corrupted."
+        ),
+    ):
+        Snapshot._read_snapshot_metadata(mock_storage_plugin, mock_event_loop)
