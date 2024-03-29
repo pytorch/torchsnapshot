@@ -87,7 +87,8 @@ class ObjectBufferConsumer(BufferConsumer, Generic[T]):
     async def consume_buffer(
         self, buf: bytes, executor: Optional[Executor] = None
     ) -> None:
-        obj: T = torch.load(io.BytesIO(buf))
+        map_location = None if torch.cuda.is_available() else torch.device("cpu")
+        obj: T = torch.load(io.BytesIO(buf), map_location=map_location)
         self.fut.obj = obj
 
     def get_consuming_cost_bytes(self) -> int:
