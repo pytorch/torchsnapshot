@@ -165,8 +165,10 @@ def dtensor_test_cases(
     dsts = []
     for idx in range(NUM_TENSORS):
         mesh = (
+            # pyre-fixme[6]: For 2nd argument expected `Union[_SupportsArray[typing.A...
             DeviceMesh("cuda", mesh=[0])
             if use_gpu and idx % 2 == 0
+            # pyre-fixme[6]: For 2nd argument expected `Union[_SupportsArray[typing.A...
             else DeviceMesh("cpu", mesh=[0])
         )
         srcs.append(
