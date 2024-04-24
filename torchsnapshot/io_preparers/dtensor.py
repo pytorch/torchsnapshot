@@ -30,7 +30,20 @@ from torch.distributed._tensor import (
     Replicate,
     Shard as ShardPlacement,
 )
-from torch.distributed._tensor._utils import compute_local_shape_and_global_offset
+
+try:
+    from torch.distributed._tensor._utils import compute_local_shape_and_global_offset
+
+except ImportError:
+
+    def compute_local_shape_and_global_offset(
+        global_shape: ShapeType, mesh: DeviceMesh, placements: Sequence[Placement]
+    ) -> Tuple[Tuple[int, ...], Tuple[int, ...]]:
+        raise RuntimeError(
+            "Please use the latest nightly pytorch release to use this feature."
+        )
+
+
 from torchsnapshot.io_preparers.sharded_tensor import (
     _OverlappingRegion,
     ShardedTensorBufferConsumer,
