@@ -5,7 +5,7 @@ google-cloud-storage
 google-resumable-media
 numpy
 pre-commit
-pytest
+pytest==8.1.1
 pytest-asyncio
 pytest-cov
 pytest-timeout
