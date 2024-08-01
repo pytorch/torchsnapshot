@@ -2,7 +2,6 @@ PyYAML
 aiofiles
 aiohttp
 importlib-metadata
-nest_asyncio
 psutil
 pyre_extensions
 torch
