@@ -32,18 +32,15 @@ from torch.distributed._tensor import DTensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torchsnapshot.dtensor_utils import is_sharded
 
+from .asyncio_utils import maybe_nested_loop
 from .batcher import batch_read_requests, batch_write_requests
-
 from .dist_store import get_or_create_store, LinearBarrier
-
 from .event import Event
 from .event_handlers import log_event
-
 from .flatten import flatten, inflate
 from .io_preparer import prepare_read, prepare_write
 from .io_types import ReadIO, ReadReq, StoragePlugin, WriteIO, WriteReq
 from .knobs import is_batching_disabled
-
 from .manifest import Entry, Manifest, PrimitiveEntry, SnapshotMetadata
 from .manifest_ops import get_manifest_for_rank, handle_sharded_tensor_elasticity
 from .manifest_utils import is_container_entry
@@ -99,7 +96,7 @@ class Snapshot:
     @property
     def metadata(self) -> SnapshotMetadata:
         if self._metadata is None:
-            event_loop = asyncio.new_event_loop()
+            event_loop = maybe_nested_loop()
             storage = url_to_storage_plugin_in_event_loop(
                 url_path=self.path,
                 event_loop=event_loop,
@@ -169,7 +166,7 @@ class Snapshot:
         torch._C._log_api_usage_once("torchsnapshot.Snapshot.take")
         cls._validate_app_state(app_state)
 
-        event_loop = asyncio.new_event_loop()
+        event_loop = maybe_nested_loop()
         pg_wrapper = PGWrapper(pg=pg)
 
         unique_id = _generate_random_int64()
@@ -263,7 +260,7 @@ class Snapshot:
         torch._C._log_api_usage_once("torchsnapshot.Snapshot.async_take")
         cls._validate_app_state(app_state)
 
-        event_loop = asyncio.new_event_loop()
+        event_loop = maybe_nested_loop()
         pg_wrapper = PGWrapper(pg=pg)
 
         unique_id = _generate_random_int64()
@@ -336,7 +333,7 @@ class Snapshot:
         torch._C._log_api_usage_once("torchsnapshot.Snapshot.restore")
         self._validate_app_state(app_state)
 
-        event_loop = asyncio.new_event_loop()
+        event_loop = maybe_nested_loop()
         pg_wrapper = PGWrapper(self.pg)
 
         unique_id = _generate_random_int64()
@@ -459,7 +456,7 @@ class Snapshot:
                 "Its state won't be changed after load. The loaded object will be returned."
             )
 
-        event_loop = asyncio.new_event_loop()
+        event_loop = maybe_nested_loop()
         pg_wrapper = PGWrapper(self.pg)
         storage = url_to_storage_plugin_in_event_loop(
             url_path=self.path,
@@ -703,7 +700,7 @@ class Snapshot:
             snapshot = Snapshot.take(path=..., app_state={"stateful_key": module})
             module_state_dict = snapshot.get_state_dict_for_key("stateful_key")
         """
-        event_loop = asyncio.new_event_loop()
+        event_loop = maybe_nested_loop()
         pg = PGWrapper(self.pg)
 
         manifest, _ = get_manifest_for_rank(metadata=self.metadata, rank=pg.get_rank())

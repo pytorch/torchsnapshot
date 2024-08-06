@@ -14,6 +14,8 @@ from concurrent.futures import Executor
 from dataclasses import dataclass, field
 from typing import Generic, Optional, Tuple, TypeVar, Union
 
+from .asyncio_utils import maybe_nested_loop
+
 
 BufferType = Union[bytes, memoryview]
 
@@ -99,19 +101,19 @@ class StoragePlugin(abc.ABC):
         self, write_io: WriteIO, event_loop: Optional[asyncio.AbstractEventLoop] = None
     ) -> None:
         if event_loop is None:
-            event_loop = asyncio.new_event_loop()
+            event_loop = maybe_nested_loop()
         event_loop.run_until_complete(self.write(write_io=write_io))
 
     def sync_read(
         self, read_io: ReadIO, event_loop: Optional[asyncio.AbstractEventLoop] = None
     ) -> None:
         if event_loop is None:
-            event_loop = asyncio.new_event_loop()
+            event_loop = maybe_nested_loop()
         event_loop.run_until_complete(self.read(read_io=read_io))
 
     def sync_close(
         self, event_loop: Optional[asyncio.AbstractEventLoop] = None
     ) -> None:
         if event_loop is None:
-            event_loop = asyncio.new_event_loop()
+            event_loop = maybe_nested_loop()
         event_loop.run_until_complete(self.close())
