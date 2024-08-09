@@ -469,6 +469,7 @@ def batch_read_requests(read_reqs: List[ReadReq]) -> List[ReadReq]:
             path=location,
             buffer_consumer=BatchedBufferConsumer(
                 byte_range_to_buffer_consumer=byte_range_to_buffer_consumer,
+                # pyre-fixme[61]: `byte_range` is undefined, or not always defined.
                 buf_sz_bytes=byte_range[1] - byte_range[0],
             ),
             byte_range=location_to_byte_range[location],

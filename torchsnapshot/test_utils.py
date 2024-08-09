@@ -317,10 +317,6 @@ def _dtensor_test_case(
     replicated: bool,
 ) -> Tuple[DTensor, Entry, List[WriteReq]]:
     # WORLD_SIZE needs to be at least 4
-    # pyre-fixme[6]: For 2nd argument expected `Union[_SupportsArray[typing.Any],
-    #  _NestedSequence[Union[bool, bytes, complex, float, int, str]],
-    #  _NestedSequence[_SupportsArray[typing.Any]], bool, bytes, complex, float, int,
-    #  str, Tensor]` but got `List[List[int]]`.
     mesh = DeviceMesh("cuda", mesh=[[0, 1], [2, 3]])
     placements = [Replicate(), Shard(0)]
     local_tensor = rand_tensor(shape, dtype=dtype)

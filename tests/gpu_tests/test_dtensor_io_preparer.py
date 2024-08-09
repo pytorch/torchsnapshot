@@ -72,7 +72,6 @@ class TestDTensorIOPreparer(DTensorTestBase):
         """
         Verify the basic behavior of DTensorIOPreparer prepare_write.
         """
-        # pyre-fixme[6]: For 2nd argument expected `Union[_SupportsArray[typing.Any],...
         device_mesh = DeviceMesh("cuda", mesh=mesh)
 
         if len(placements) > device_mesh.ndim:

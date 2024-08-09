@@ -907,6 +907,7 @@ class Snapshot:
 
     @staticmethod
     def _coalesce_replicated(global_replicated: List[List[str]]) -> Set[str]:
+        # pyre-fixme[6]: For 1st argument expected `(_T1) -> _S` but got `Type[set]`.
         verified_replicated = set.intersection(*map(set, global_replicated))
         return verified_replicated
 

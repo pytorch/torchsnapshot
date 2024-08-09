@@ -31,7 +31,6 @@ class TestDTensorUtils(DTensorTestBase):
     @skip_if_lt_x_gpu(WORLD_SIZE)
     # pyre-fixme[3]: Return type must be annotated.
     def test_is_sharded_is_replicated(self):
-        # pyre-fixme[6]: For 2nd argument expected `Union[_SupportsArray[typing.Any],...
         mesh = DeviceMesh("cuda", mesh=[[0, 1], [2, 3]])
         placements = [Replicate(), Shard(0)]
         local_tensor = torch.rand((16, 16))

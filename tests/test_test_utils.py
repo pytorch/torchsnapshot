@@ -123,7 +123,6 @@ class TestUtilsTest(unittest.TestCase):
 
         local_tensor = torch.rand((dim_0, dim_1))
 
-        # pyre-fixme[6]: For 2nd argument expected `Union[_SupportsArray[typing.Any],...
         mesh = DeviceMesh("cpu", mesh=[[0, 1], [2, 3]])
         placements = [Replicate(), Shard(0)]
         dtensor = distribute_tensor(

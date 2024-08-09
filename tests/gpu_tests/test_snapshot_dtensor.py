@@ -81,10 +81,6 @@ class TestSnapshotWithDTensor(DTensorTestBase):
             inter_node_pg = mesh_2d.get_group(mesh_dim=0)
             model = FSDP(
                 DummyModel().cuda(),
-                # pyre-fixme[6]: For 2nd argument expected `Union[None,
-                #  Tuple[ProcessGroup, ProcessGroup], ProcessGroup]` but got
-                #  `Tuple[Union[List[ProcessGroup], ProcessGroup],
-                #  Union[List[ProcessGroup], ProcessGroup]]`.
                 process_group=(intra_node_pg, inter_node_pg),
                 sharding_strategy=ShardingStrategy.HYBRID_SHARD,
             )
