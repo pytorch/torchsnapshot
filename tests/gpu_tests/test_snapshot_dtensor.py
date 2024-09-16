@@ -13,8 +13,8 @@ from typing import Optional
 
 import torch
 from torch import distributed as dist, nn
+from torch.distributed import init_device_mesh
 from torch.distributed._tensor import DeviceMesh
-from torch.distributed._tensor.device_mesh import init_device_mesh
 from torch.distributed.fsdp import (
     FullyShardedDataParallel as FSDP,
     ShardingStrategy,

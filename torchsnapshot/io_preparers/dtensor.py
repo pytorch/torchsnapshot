@@ -32,7 +32,7 @@ from torch.distributed._tensor import (
 )
 
 try:
-    from torch.distributed._tensor._utils import compute_local_shape_and_global_offset
+    from torch.distributed.tensor._utils import compute_local_shape_and_global_offset
 
 except ImportError:
 
