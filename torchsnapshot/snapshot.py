@@ -681,7 +681,9 @@ class Snapshot:
 
     # pyre-fixme: inflate returns Dict[Any,Any]
     # Missing return annotation [3]: Return type must be specified as type that does not contain `Any`
-    def get_state_dict_for_key(self, key: str) -> Dict[Any, Any]:
+    def get_state_dict_for_key(
+        self, key: str, replicate_from_rank0: bool = False
+    ) -> Dict[Any, Any]:
         """
         Gets the state dict for a selected key in the snapshot.
         This is useful in case you want to get the state dict without loading it to the stateful.
@@ -689,6 +691,10 @@ class Snapshot:
         Args:
             key (str): The key to get the state dict for. Assumes the key was stored as a topline
                 key in the snapshot.
+
+            replicate_from_rank0 (bool): Whether to replicate the state dict from rank 0 to all ranks.
+                Useful when loading state dict from a checkpoint where world size was smaller, as this
+                function would return empty state dict for the new ranks.
 
         Returns:
             The state dict associated with the key.
@@ -702,8 +708,8 @@ class Snapshot:
         """
         event_loop = maybe_nested_loop()
         pg = PGWrapper(self.pg)
-
-        manifest, _ = get_manifest_for_rank(metadata=self.metadata, rank=pg.get_rank())
+        rank = pg.get_rank() if not replicate_from_rank0 else 0
+        manifest, _ = get_manifest_for_rank(metadata=self.metadata, rank=rank)
 
         # filter out irrelevant entries from the manifest
         manifest = {k: v for k, v in manifest.items() if k.split("/")[0] == key}
@@ -715,7 +721,7 @@ class Snapshot:
         )
 
         return self._get_state_dict_for_manifest(
-            key, manifest, {}, pg, storage, event_loop
+            key, manifest, {}, pg, storage, event_loop, replicate_from_rank0
         )
 
     def _load_stateful(  # noqa
@@ -781,6 +787,7 @@ class Snapshot:
         pg: PGWrapper,
         storage: StoragePlugin,
         event_loop: AbstractEventLoop,
+        replicate_from_rank0: bool = False,
     ) -> Dict[Any, Any]:
         container_entries = {}
         read_reqs: List[ReadReq] = []
@@ -809,7 +816,7 @@ class Snapshot:
             read_reqs=read_reqs,
             storage=storage,
             memory_budget_bytes=memory_budget_bytes,
-            rank=pg.get_rank(),
+            rank=0 if replicate_from_rank0 else pg.get_rank(),
             event_loop=event_loop,
         )
 
