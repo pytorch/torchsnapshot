@@ -13,6 +13,7 @@ import torch
 _UVM_TENSOR_AVAILABLE = False
 
 try:
+    # pyre-fixme[21]: Could not find module `fbgemm_gpu`.
     import fbgemm_gpu  # @manual  # noqa
 except Exception:
     pass

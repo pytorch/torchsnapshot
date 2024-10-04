@@ -226,7 +226,6 @@ def _tensor_as_memoryview_via_untyped_storage(tensor: torch.Tensor) -> memoryvie
     return memoryview(tensor.numpy()).cast("b")
 
 
-# pyre-ignore[11]
 def contiguous_view_as_untyped_storage(tensor: torch.Tensor) -> UntypedStorage:
     if not tensor.is_contiguous():
         raise AssertionError(
