@@ -13,10 +13,13 @@ from typing import Optional
 
 # pyre-fixme[13]: Attribute `write` is never initialized.
 class MemoryviewStream(io.IOBase):
+    # pyre-fixme[24]: Generic type `memoryview` expects 1 type parameter.
     def __init__(self, mv: memoryview) -> None:
+        # pyre-fixme[24]: Generic type `memoryview` expects 1 type parameter.
         self._mv: memoryview = mv.cast("b")
         self._pos = 0
 
+    # pyre-fixme[24]: Generic type `memoryview` expects 1 type parameter.
     def read(self, size: Optional[int] = -1) -> memoryview:
         if self.closed:
             raise ValueError("read from closed file")
@@ -38,6 +41,7 @@ class MemoryviewStream(io.IOBase):
         self._pos = newpos
         return b
 
+    # pyre-fixme[24]: Generic type `memoryview` expects 1 type parameter.
     def read1(self, size: int = -1) -> memoryview:
         """This is the same as read."""
         return self.read(size)
