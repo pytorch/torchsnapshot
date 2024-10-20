@@ -17,7 +17,6 @@ from torchsnapshot.memoryview_stream import MemoryviewStream
 class MemoryviewStreamTest(unittest.TestCase):
     def test_memoryview_stream(self) -> None:
         tensor = torch.rand(1000)
-        # pyre-fixme[6]: For 1st argument expected `Buffer` but got `ndarray[Any, Any]`.
         mv = memoryview(tensor.numpy()).cast("b")
         self.assertEqual(len(mv), 4000)
 

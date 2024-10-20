@@ -173,7 +173,6 @@ BUFFER_PROTOCOL_SUPPORTED_DTYPES: List[torch.dtype] = [
 ]
 
 
-# pyre-fixme[24]: Generic type `memoryview` expects 1 type parameter.
 def tensor_as_memoryview(tensor: torch.Tensor) -> memoryview:
     """
     Obtain the class::`memoryview` of a class::`torch.Tensor`.
@@ -200,11 +199,9 @@ def tensor_as_memoryview(tensor: torch.Tensor) -> memoryview:
         tensor = tensor.contiguous()
     if tensor.dtype == torch.bfloat16:
         return _tensor_as_memoryview_via_untyped_storage(tensor)
-    # pyre-fixme[6]: For 1st argument expected `Buffer` but got `ndarray[Any, Any]`.
     return memoryview(tensor.numpy()).cast("b")
 
 
-# pyre-fixme[24]: Generic type `memoryview` expects 1 type parameter.
 def _tensor_as_memoryview_via_untyped_storage(tensor: torch.Tensor) -> memoryview:
     """
     Obtain the class::`memoryview` of a class::`torch.Tensor` via untyped storage.
@@ -226,7 +223,6 @@ def _tensor_as_memoryview_via_untyped_storage(tensor: torch.Tensor) -> memoryvie
     untyped_storage = contiguous_view_as_untyped_storage(tensor)
     tensor = torch.empty((0))
     tensor.set_(untyped_storage)
-    # pyre-fixme[6]: For 1st argument expected `Buffer` but got `ndarray[Any, Any]`.
     return memoryview(tensor.numpy()).cast("b")
 
 
@@ -253,7 +249,6 @@ def contiguous_view_as_untyped_storage(tensor: torch.Tensor) -> UntypedStorage:
 
 
 def tensor_from_memoryview(
-    # pyre-fixme[24]: Generic type `memoryview` expects 1 type parameter.
     mv: memoryview,
     dtype: torch.dtype,
     shape: List[int],
