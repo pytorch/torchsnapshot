@@ -11,7 +11,6 @@ import io
 from typing import Optional
 
 
-# pyre-fixme[13]: Attribute `write` is never initialized.
 class MemoryviewStream(io.IOBase):
     # pyre-fixme[24]: Generic type `memoryview` expects 1 type parameter.
     def __init__(self, mv: memoryview) -> None:
