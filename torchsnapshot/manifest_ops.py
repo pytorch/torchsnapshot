@@ -109,7 +109,7 @@ def _get_rank_to_manifest(metadata: SnapshotMetadata) -> List[Dict[str, Entry]]:
 
 
 def _get_merged_sharded_tensor_entries(
-    rank_to_manifest: List[Dict[str, Entry]]
+    rank_to_manifest: List[Dict[str, Entry]],
 ) -> Dict[str, Entry]:
     groups = defaultdict(list)
     for manifest in rank_to_manifest:
@@ -130,7 +130,7 @@ def _get_merged_sharded_tensor_entries(
 
 
 def _get_merged_dtensor_entries(
-    rank_to_manifest: List[Dict[str, Entry]]
+    rank_to_manifest: List[Dict[str, Entry]],
 ) -> Dict[str, Entry]:
     """
     Merge all DTensor entries across ranks if sharded

@@ -245,8 +245,7 @@ def contiguous_view_as_untyped_storage(tensor: torch.Tensor) -> UntypedStorage:
     else:
         untyped_storage = tensor.storage().untyped()
     return untyped_storage[
-        tensor.storage_offset()
-        * tensor.element_size() : tensor.storage_offset()
+        tensor.storage_offset() * tensor.element_size() : tensor.storage_offset()
         * tensor.element_size()
         + tensor.nelement() * tensor.element_size()
     ]

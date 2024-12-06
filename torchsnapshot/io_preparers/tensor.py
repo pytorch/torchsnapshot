@@ -199,7 +199,7 @@ class TensorIOPreparer:
 
     @staticmethod
     def empty_tensor_from_entry(
-        entry: Union[TensorEntry, ChunkedTensorEntry]
+        entry: Union[TensorEntry, ChunkedTensorEntry],
     ) -> torch.Tensor:
         if entry.dtype in SUPPORTED_QUANTIZED_DTYPES:
             # TODO: we can't allocate empty quantized tensors because we don't
@@ -394,11 +394,15 @@ def tensor_copy(dst: torch.Tensor, src: torch.Tensor) -> None:
     # a region of the larger tensor's storage contain data that does not match
     # the larger tensor's qscheme.
 
-    if src.is_quantized and (
-        not dst.is_quantized  # Copying from quantized Tensor to non-quantized Tensor is not allowed
-        or dst.qscheme() != src.qscheme()  # Quantized copy only works with same qscheme
-        or dst.dtype != src.dtype  # Quantized copy requires matching dtypes
-        or (dst._is_view() and not _q_params_equal(dst, src))  # See the top comment
+    if (
+        src.is_quantized
+        and (
+            not dst.is_quantized  # Copying from quantized Tensor to non-quantized Tensor is not allowed
+            or dst.qscheme()
+            != src.qscheme()  # Quantized copy only works with same qscheme
+            or dst.dtype != src.dtype  # Quantized copy requires matching dtypes
+            or (dst._is_view() and not _q_params_equal(dst, src))  # See the top comment
+        )
     ):
         # TODO: tile the dequantize -> copy to reduce memory footprint
         src = _tensor_dequantize(src)

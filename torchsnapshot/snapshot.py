@@ -863,7 +863,6 @@ class Snapshot:
         app_state: AppState,
         replicated: List[str],
     ) -> Tuple[str, Set[str]]:
-
         rank = pg_wrapper.get_rank()
 
         # coalesce path

@@ -283,7 +283,7 @@ def partition_write_reqs(
 
 
 def _consolidate_replicated_chunked_tensor_entries(
-    rank_to_entries: List[Dict[str, Entry]]
+    rank_to_entries: List[Dict[str, Entry]],
 ) -> List[Dict[str, Entry]]:
     groups: Dict[str, List[ChunkedTensorEntry]] = defaultdict(list)
 

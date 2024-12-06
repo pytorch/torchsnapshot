@@ -47,7 +47,9 @@ def _patch_loop(loop: asyncio.AbstractEventLoop) -> None:
         timeout = (
             0
             if ready or self._stopping
-            else min(max(scheduled[0]._when - now, 0), 86400) if scheduled else None
+            else min(max(scheduled[0]._when - now, 0), 86400)
+            if scheduled
+            else None
         )
         event_list = self._selector.select(timeout)
         self._process_events(event_list)

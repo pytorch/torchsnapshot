@@ -725,7 +725,7 @@ def test_replicated_entries_only_on_rank_0(rank: int) -> None:
 
 
 def _update_local_manifest_with_merged_entries(
-    local_manifest: Dict[str, Entry]
+    local_manifest: Dict[str, Entry],
 ) -> None:
     """
     Update the expected local manifest with manually merged ShardedTensorEntries
