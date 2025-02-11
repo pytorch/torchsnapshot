@@ -1,6 +1,8 @@
 PyYAML
+aioboto3
 aiofiles
 aiohttp
+boto3
 importlib-metadata
 psutil
 pyre_extensions

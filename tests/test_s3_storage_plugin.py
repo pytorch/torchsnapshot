@@ -14,6 +14,7 @@ import logging
 import os
 import random
 import uuid
+import time
 
 import pytest
 
@@ -21,10 +22,14 @@ import torch
 import torchsnapshot
 from torchsnapshot.io_types import ReadIO, WriteIO
 from torchsnapshot.storage_plugins.s3 import S3StoragePlugin
+from torchsnapshot.storage_plugins.fs import FSStoragePlugin
+
+import boto3
 
 logger: logging.Logger = logging.getLogger(__name__)
 
-_TEST_BUCKET = "torchsnapshot-test"
+_TEST_BUCKET = "ml"
+_TEST_FOLDER = "torchsnapshot-patch-test"
 _TENSOR_SZ = int(1_000_000 / 4)
 
 
@@ -35,11 +40,9 @@ def s3_health_check() -> None:
     check passes.
     """
     try:
-        import boto3  # pyre-ignore  # @manual
-
         s3 = boto3.client("s3")
         data = b"hello"
-        key = str(uuid.uuid4())
+        key = f"{_TEST_FOLDER}/{str(uuid.uuid4())}"
         s3.upload_fileobj(io.BytesIO(data), _TEST_BUCKET, key)
         s3.download_fileobj(_TEST_BUCKET, key, io.BytesIO())
     except Exception as e:
@@ -51,7 +54,7 @@ def s3_health_check() -> None:
 @pytest.mark.skipif(os.environ.get("TORCHSNAPSHOT_ENABLE_AWS_TEST") is None, reason="")
 @pytest.mark.usefixtures("s3_health_check")
 def test_s3_read_write_via_snapshot() -> None:
-    path = f"s3://{_TEST_BUCKET}/{uuid.uuid4()}"
+    path = f"s3://{_TEST_BUCKET}/{_TEST_FOLDER}/{uuid.uuid4()}"
     logger.info(path)
 
     tensor = torch.rand((_TENSOR_SZ,))
@@ -70,7 +73,7 @@ def test_s3_read_write_via_snapshot() -> None:
 @pytest.mark.usefixtures("s3_health_check")
 @pytest.mark.asyncio
 async def test_s3_write_read_delete() -> None:
-    path = f"{_TEST_BUCKET}/{uuid.uuid4()}"
+    path = f"{_TEST_BUCKET}/{_TEST_FOLDER}/{uuid.uuid4()}"
     logger.info(path)
     plugin = S3StoragePlugin(root=path)
 
@@ -95,7 +98,7 @@ async def test_s3_write_read_delete() -> None:
 @pytest.mark.usefixtures("s3_health_check")
 @pytest.mark.asyncio
 async def test_s3_ranged_read() -> None:
-    path = f"{_TEST_BUCKET}/{uuid.uuid4()}"
+    path = f"{_TEST_BUCKET}/{_TEST_FOLDER}/{uuid.uuid4()}"
     logger.info(path)
     plugin = S3StoragePlugin(root=path)
 
@@ -109,4 +112,32 @@ async def test_s3_ranged_read() -> None:
     assert len(read_io.buf.getvalue()) == 100
     assert read_io.buf.getvalue(), buf[100:200]
 
+    await plugin.close()
+
+@pytest.mark.s3_integration_test
+@pytest.mark.skipif(os.environ.get("TORCHSNAPSHOT_ENABLE_AWS_TEST") is None, reason="")
+@pytest.mark.usefixtures("s3_health_check")
+@pytest.mark.asyncio
+async def test_s3_copy_large_file() -> None:
+    path = f"{_TEST_BUCKET}/test"
+    logger.info(path)
+    plugin = S3StoragePlugin(root=path)
+    read_plugin = FSStoragePlugin(root="/Users/gshao/Downloads")
+    read_io = ReadIO(path=f"5gb.mp4")
+    
+    start_time = time.time()
+    await read_plugin.read(read_io=read_io)
+    end_time = time.time()
+    read_duration = end_time - start_time
+    
+    logger.info(f"Reading took {read_duration:.2f} seconds")
+    write_io = WriteIO(path=f"5gb-copy.mp4", buf=read_io.buf.getbuffer())
+    
+    start_time = time.time()
+    await plugin.write(write_io=write_io)
+    end_time = time.time()
+    write_duration = end_time - start_time
+    
+    logger.info(f"Writing took {write_duration:.2f} seconds")
+    
     await plugin.close()

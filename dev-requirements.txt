@@ -1,4 +1,4 @@
-aiobotocore
+aioboto3
 boto3
 expecttest
 google-cloud-storage
