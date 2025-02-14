@@ -34,7 +34,7 @@ _TENSOR_SZ = int(1_000_000 / 4)
 
 
 @pytest.fixture
-def s3_health_check() -> None:
+async def s3_health_check() -> None:
     """
     S3 access can be flaky on Github Action. Only run the tests if the health
     check passes.
@@ -46,36 +46,33 @@ def s3_health_check() -> None:
         s3.upload_fileobj(io.BytesIO(data), _TEST_BUCKET, key)
         s3.download_fileobj(_TEST_BUCKET, key, io.BytesIO())
     except Exception as e:
-        # pyre-ignore[29]
         pytest.skip(f"Skipping the test because s3 health check failed: {e}")
-
 
 @pytest.mark.s3_integration_test
 @pytest.mark.skipif(os.environ.get("TORCHSNAPSHOT_ENABLE_AWS_TEST") is None, reason="")
 @pytest.mark.usefixtures("s3_health_check")
-def test_s3_read_write_via_snapshot() -> None:
+async def test_s3_read_write_via_snapshot() -> None:
     path = f"s3://{_TEST_BUCKET}/{_TEST_FOLDER}/{uuid.uuid4()}"
     logger.info(path)
 
     tensor = torch.rand((_TENSOR_SZ,))
     app_state = {"state": torchsnapshot.StateDict(tensor=tensor)}
-    snapshot = torchsnapshot.Snapshot.take(path=path, app_state=app_state)
+    snapshot = await torchsnapshot.Snapshot.take(path=path, app_state=app_state)
 
     app_state["state"]["tensor"] = torch.rand((_TENSOR_SZ,))
     assert not torch.allclose(tensor, app_state["state"]["tensor"])
 
-    snapshot.restore(app_state)
+    await snapshot.restore(app_state)
     assert torch.allclose(tensor, app_state["state"]["tensor"])
 
 
 @pytest.mark.s3_integration_test
 @pytest.mark.skipif(os.environ.get("TORCHSNAPSHOT_ENABLE_AWS_TEST") is None, reason="")
 @pytest.mark.usefixtures("s3_health_check")
-@pytest.mark.asyncio
 async def test_s3_write_read_delete() -> None:
     path = f"{_TEST_BUCKET}/{_TEST_FOLDER}/{uuid.uuid4()}"
     logger.info(path)
-    plugin = S3StoragePlugin(root=path)
+    plugin = await S3StoragePlugin.create(root=path)
 
     tensor = torch.rand((_TENSOR_SZ,))
     buf = io.BytesIO()
@@ -96,11 +93,10 @@ async def test_s3_write_read_delete() -> None:
 @pytest.mark.s3_integration_test
 @pytest.mark.skipif(os.environ.get("TORCHSNAPSHOT_ENABLE_AWS_TEST") is None, reason="")
 @pytest.mark.usefixtures("s3_health_check")
-@pytest.mark.asyncio
 async def test_s3_ranged_read() -> None:
     path = f"{_TEST_BUCKET}/{_TEST_FOLDER}/{uuid.uuid4()}"
     logger.info(path)
-    plugin = S3StoragePlugin(root=path)
+    plugin = await S3StoragePlugin.create(root=path)
 
     buf = bytes(random.getrandbits(8) for _ in range(2000))
     write_io = WriteIO(path="rand_bytes", buf=memoryview(buf))
@@ -110,20 +106,20 @@ async def test_s3_ranged_read() -> None:
     read_io = ReadIO(path="rand_bytes", byte_range=(100, 200))
     await plugin.read(read_io=read_io)
     assert len(read_io.buf.getvalue()) == 100
-    assert read_io.buf.getvalue(), buf[100:200]
+    assert read_io.buf.getvalue() == buf[100:200]
 
     await plugin.close()
+
 
 @pytest.mark.s3_integration_test
 @pytest.mark.skipif(os.environ.get("TORCHSNAPSHOT_ENABLE_AWS_TEST") is None, reason="")
 @pytest.mark.usefixtures("s3_health_check")
-@pytest.mark.asyncio
 async def test_s3_copy_large_file() -> None:
     path = f"{_TEST_BUCKET}/test"
     logger.info(path)
-    plugin = S3StoragePlugin(root=path)
+    plugin = await S3StoragePlugin.create(root=path)
     read_plugin = FSStoragePlugin(root="/Users/gshao/Downloads")
-    read_io = ReadIO(path=f"5gb.mp4")
+    read_io = ReadIO(path="5gb.mp4")
     
     start_time = time.time()
     await read_plugin.read(read_io=read_io)
@@ -131,7 +127,7 @@ async def test_s3_copy_large_file() -> None:
     read_duration = end_time - start_time
     
     logger.info(f"Reading took {read_duration:.2f} seconds")
-    write_io = WriteIO(path=f"5gb-copy.mp4", buf=read_io.buf.getbuffer())
+    write_io = WriteIO(path="5gb-copy.mp4", buf=read_io.buf.getbuffer())
     
     start_time = time.time()
     await plugin.write(write_io=write_io)

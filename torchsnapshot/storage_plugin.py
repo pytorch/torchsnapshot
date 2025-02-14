@@ -17,7 +17,7 @@ from .storage_plugins.fs import FSStoragePlugin
 from .storage_plugins.s3 import S3StoragePlugin
 
 
-def url_to_storage_plugin(
+async def url_to_storage_plugin(
     url_path: str, storage_options: Optional[Dict[str, Any]] = None
 ) -> StoragePlugin:
     """
@@ -46,7 +46,7 @@ def url_to_storage_plugin(
     if protocol == "fs":
         return FSStoragePlugin(root=path, storage_options=storage_options)
     elif protocol == "s3":
-        return S3StoragePlugin(root=path, storage_options=storage_options)
+        return await S3StoragePlugin.create(root=path, storage_options=storage_options)
     elif protocol == "gs":
         from torchsnapshot.storage_plugins.gcs import GCSStoragePlugin
 
@@ -75,6 +75,6 @@ def url_to_storage_plugin_in_event_loop(
     storage_options: Optional[Dict[str, Any]] = None,
 ) -> StoragePlugin:
     async def _url_to_storage_plugin() -> StoragePlugin:
-        return url_to_storage_plugin(url_path=url_path, storage_options=storage_options)
+        return await url_to_storage_plugin(url_path=url_path, storage_options=storage_options)
 
     return event_loop.run_until_complete(_url_to_storage_plugin())
